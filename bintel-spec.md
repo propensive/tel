@@ -10,6 +10,12 @@ encoding.
 BinTEL provides an unambiguous, compact serialization of the semantic model, suitable for hashing,
 transmission, and schema identification.
 
+A BinTEL document is defined here as a byte sequence. Where a text-oriented carrier is required —
+embedding in a TEL document, transmission over a textual channel, display, or copy-and-paste — a
+BinTEL byte sequence MAY be encoded as Unicode text using BASE-256 (see
+[BASE-256 Specification](base256-spec.md)). The textual form is character-for-byte with the byte
+sequence and is recovered losslessly by the BASE-256 decoder. See §9 for the conformance details.
+
 ## 1. Status
 
 This document is a draft specification of BinTEL.
@@ -68,7 +74,9 @@ its keyword index and its parent's type, BinTEL encodes no type tags.
 
 A BinTEL file consists of the following fields in order:
 
-1. **Magic number**: the 2 bytes `C0 D1`
+1. **Magic number**: the 2 bytes `C0 D1`. When the document is carried in BASE-256 textual form
+   (§9), these bytes appear as the two characters at positions `0xC0` and `0xD1` of the BASE-256
+   alphabet defined in the [BASE-256 Specification](base256-spec.md).
 2. **Schema signature**: the byte length of the signature (integer), followed by the signature
    bytes. The schema signature identifies the composed schema (base plus layers) used to type the
    document. Its construction is defined in §8.
@@ -150,3 +158,25 @@ decoding the document root.
 
 Schema compatibility is defined in §8.2 of the TEL Specification in terms of subsequence
 relationships between decoded signature hash sequences.
+
+## 9. Textual Encoding
+
+A BinTEL byte sequence MAY be represented as Unicode text by applying the BASE-256 encoding defined
+in the [BASE-256 Specification](base256-spec.md). The textual form has one Unicode character per
+input byte; the original bytes are recovered by the BASE-256 decoder, which computes the input
+byte as the Unicode code point of each character taken modulo 256.
+
+The choice of textual or byte form is purely a transport concern. No structural rule defined
+elsewhere in this specification is altered by the choice:
+
+- The value hash (§3) is computed over the BinTEL document root **as bytes**, not over its
+  BASE-256 textual form.
+- The schema signature (§8) is constructed and decoded over **bytes**, not over their BASE-256
+  textual form.
+- The magic number (§6), schema signature length, and all integer and node encodings (§4, §7) are
+  defined in terms of bytes and remain unchanged.
+
+A producer that emits BinTEL in textual form MUST apply BASE-256 to the complete byte sequence
+defined by §6, including the magic number and schema signature. A consumer that receives BinTEL in
+textual form MUST first decode the BASE-256 input back to bytes before applying any rule of this
+specification.
