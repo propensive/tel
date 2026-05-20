@@ -1393,6 +1393,11 @@ The binary encoding of the semantic model, BinTEL, is defined in the companion
 documents and defines the schema signature and value hash constructions used for schema
 identification (§8.1) and compatibility checking (§8.2).
 
+When a BinTEL document is to be carried in a text-oriented context, it MAY be encoded as Unicode
+text using [BASE-256](base256-spec.md), defined as a companion specification. The BASE-256 textual
+form is character-for-byte with the BinTEL byte sequence and is recovered losslessly by the
+BASE-256 decoder.
+
 ## 21. Validation
 
 Type assignment (§20.2) ascribes a `Type` to every node. For `Struct` and `Flag` types, the
