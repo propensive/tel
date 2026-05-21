@@ -33,8 +33,11 @@ the magic number and schema signature — that is, the hash is computed over onl
 encoding (as defined in the Node Encoding section). This is the general method for hashing any
 semantic TEL value, including schema documents (which are themselves TEL documents).
 
-When used in schema identifiers (see §8.1 of the TEL Specification), the hash is represented as a
-BASE64-URL-encoded (no padding) string of 43 characters.
+When used in a schema identifier (see §8.1 of the TEL Specification), one or more value hashes —
+one per component of the composed schema (the base plus each layer in order) — are combined into
+a **schema signature** per §8 below. The signature is hex-encoded in lowercase for textual
+representation. A schema with no layers has a single-component signature whose bytes are exactly
+the 32-byte value hash, encoded as 64 hex characters.
 
 ## 4. Integer Encoding
 
@@ -126,28 +129,44 @@ Specification) defines a base schema and zero or more layers. Each component's h
 hash (§3): the component is encoded as a BinTEL document root (§7) and the SHA-256 digest is taken
 over that root encoding alone, without the magic number or schema signature.
 
+The construction below is a **palimpsest** with byte cadence `k = 2`, as defined in the
+[Palimpsest Specification](palimpsest/spec.md). The palimpsest framework permits any byte cadence;
+this specification fixes `k = 2`, which is sufficient for schema libraries of up to 65 536
+distinct components without backtracking during decode, while keeping signature size growth to two
+bytes per layer.
+
 **Encoding.** Given an ordered sequence of n component hashes h₀, h₁, …, h_{n−1} (each 256 bits),
 the signature is computed as follows:
 
 1. Let S = 0 (a zero-valued integer of unbounded width).
-2. For each hash hᵢ, in order from i = 0 to i = n−1: a. Set S = (S << 8) XOR hᵢ.
-3. The result S has a width of 256 + (n−1)×8 bits, or equivalently 31 + n bytes.
+2. For each hash hᵢ, in order from i = 0 to i = n−1: set S = (S << 16) XOR hᵢ.
+3. The result S has a width of 256 + (n−1)×16 bits, or equivalently `30 + 2n` bytes.
 
-Emit the signature as `31 + n` bytes, most-significant byte first.
+Emit the signature as `30 + 2n` bytes, most-significant byte first. For n = 1 (no layers), the
+signature is exactly the 32-byte value hash of the base schema.
 
-**Correctness property.** Because each shift is only 8 bits wide but each hash is 256 bits wide, the
-lowest 8 bits of S are determined solely by the last hash h_{n−1}. After XORing h_{n−1} out of S
-and shifting right by 8 bits, the lowest 8 bits are determined solely by h_{n−2}. This property
-holds at every step, enabling unambiguous decoding.
+**Textual form.** When a schema signature appears in textual contexts — most notably the schema
+identifier of a TEL pragma (see §8.1 of the TEL Specification) — it is **hex-encoded** in lowercase
+ASCII, producing `60 + 4n` characters. Hex (rather than BASE64-URL) is chosen because it preserves
+byte-aligned structure: each component's contribution to the signature spans the same character
+boundaries, making the encoded form interpretable by inspection. Decoders MUST accept both
+lowercase and uppercase hex digits; encoders MUST emit lowercase.
+
+**Correctness property.** Because each shift is 16 bits wide but each hash is 256 bits wide, the
+lowest 16 bits of S are determined solely by the last hash h_{n−1}. After XORing h_{n−1} out of S
+and shifting right by 16 bits, the lowest 16 bits are determined solely by h_{n−2}. This property
+holds at every step, enabling unambiguous decoding so long as no two hashes in the candidate
+library share the same final 16 bits — see the palimpsest specification for the probabilistic
+analysis.
 
 **Decoding.** Given a signature S of known byte length L, and a set of candidate hashes H (the value
 hashes of all components defined in the schema file):
 
-1. Compute n = L − 31. This is the number of components.
+1. Compute n = (L − 30) / 2. This is the number of components. L MUST be even and at least 32.
 2. Let the output sequence be empty.
-3. Repeat n times: a. Let b = S & 0xFF (the lowest byte of S). b. Find all hashes in H whose lowest
-   byte equals b. c. For each candidate hash h: compute S′ = (S XOR h) >> 8. d. Recurse with S = S′
-   and the candidate h appended to the front of the output sequence.
+3. Repeat n times: a. Let b = S & 0xFFFF (the lowest two bytes of S). b. Find all hashes in H whose
+   lowest two bytes equal b. c. For each candidate hash h: compute S′ = (S XOR h) >> 16. d. Recurse
+   with S = S′ and the candidate h appended to the front of the output sequence.
 4. When n steps have been completed, S MUST be zero. If S ≠ 0, the candidate path is invalid;
    backtrack and try the next candidate.
 5. Exactly one valid sequence MUST exist. If no valid sequence is found, or if more than one is

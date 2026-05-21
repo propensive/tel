@@ -236,22 +236,32 @@ The default sigil is `#`, used unless the pragma or the document schema specifie
 
 The schema identifier, if present, MUST be one of:
 
-- an HTTP or HTTPS URL, optionally with a fragment (the `#` separator and everything after it) that
-  is the BASE64-URL-encoded (no padding) SHA-256 hash of the [BinTEL](bintel-spec.md) representation
-  of the schema
-- a bare BASE64-URL-encoded (no padding) SHA-256 hash of the [BinTEL](bintel-spec.md) representation
-  of the schema
+- an HTTP or HTTPS URL, optionally with a fragment (the `#` separator and everything after it)
+  that is the **hex-encoded schema signature** of the schema (as defined in §8 of the
+  [BinTEL Specification](bintel-spec.md))
+- a bare hex-encoded schema signature of the schema
 
 A schema identifier that does not match either of these forms is invalid (**E124**).
 
-The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §3.5). A bare hash is
-distinguished from a URL by the absence of a `://` substring. Because the BASE64-URL alphabet
-contains no space characters, a schema identifier always occupies a single phrase.
+The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §3.5). A bare
+signature is distinguished from a URL by the absence of a `://` substring. Hex digits (`0`–`9`,
+`a`–`f`) and ASCII letters contain no space characters, so a schema identifier always occupies a
+single phrase.
 
 A **schema signature** is a deterministic byte string derived from the SHA-256 hashes of the
-schema's components (base schema and any layers). It uniquely identifies a composed schema and
-enables verification of schema identity and compatibility. The full construction and decoding
-algorithm for schema signatures is defined in the [BinTEL Specification](bintel-spec.md).
+schema's components (base schema and any layers, in order). It is constructed as a **palimpsest**
+of those hashes at byte cadence `k = 2` (see §8 of the [BinTEL Specification](bintel-spec.md) and
+the [Palimpsest Specification](palimpsest/spec.md)). The palimpsest form is what the pragma
+carries: it not only identifies the fully composed schema but also encodes the **identities of
+the base and each layer in order**, so that a receiver holding a library of known schemas and
+layers can decode the signature to reconstruct the exact composition.
+
+For a non-layered schema (one component), the signature is 32 bytes (64 hex characters) — exactly
+the schema's value hash. For a schema with `n` total components, the signature is `30 + 2n` bytes
+(`60 + 4n` hex characters). A producer that wishes to extend a schema with additional layers
+publishes a new signature by appending each layer's hash to the palimpsest; a consumer that
+decodes the signature against its library reconstructs the same composition that the producer
+intended (§20.3 of this specification).
 
 ### 8.2 Schema Resolution
 
@@ -278,12 +288,12 @@ accessed through a dynamic or generic interface.
 
 Two schema identifiers **match** if:
 
-- both carry a hash, and the hashes are identical; or
-- neither carries a hash, and the URLs are identical
+- both carry a signature, and the signatures are identical; or
+- neither carries a signature, and the URLs are identical
 
-A schema identifier that carries a hash takes precedence for matching purposes: a URL-only
-identifier and a URL-with-hash identifier for the same URL do not automatically match (the hash is
-authoritative).
+A schema identifier that carries a signature takes precedence for matching purposes: a URL-only
+identifier and a URL-with-signature identifier for the same URL do not automatically match (the
+signature is authoritative).
 
 A schema with signature A is **compatible** with a schema with signature B if the decoded hash
 sequence of A is a subsequence of the decoded hash sequence of B. That is, A's components (base and

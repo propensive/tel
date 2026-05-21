@@ -1306,10 +1306,11 @@ impl ParserState {
 
     fn is_valid_schema_id(&self, s: &str) -> bool {
         if s.contains("://") { return true; }
-        // Bare base64url hash
-        !s.is_empty()
-            && s.len() >= 20
-            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        // Bare hex-encoded schema signature: at minimum 64 hex chars (single
+        // component) and always even-length (32 + 2k bytes → 64 + 4k chars).
+        // Accept both lowercase and uppercase hex per §8 of bintel-spec.md.
+        if s.is_empty() || s.len() < 64 || s.len() % 2 != 0 { return false; }
+        s.chars().all(|c| c.is_ascii_hexdigit())
     }
 
     // ── Tree builder ────────────────────────────────────────────────────────
