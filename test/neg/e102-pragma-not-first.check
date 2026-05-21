@@ -14,7 +14,7 @@ Document {
                     children: [],
                 },
                 Compound {
-                    keyword: "pragma",
+                    keyword: "tel",
                     atoms: [
                         Inline {
                             text: "1.0",
@@ -30,4 +30,4 @@ Document {
     ],
 }
 errors:
-  E102 [6,12): Pragma is not the first non-blank line
+  E102 [6,9): Pragma is not the first non-blank line

@@ -1,0 +1,122 @@
+tel 1.0
+
+# The TEL schema-for-schemas. Self-describing: parsing this document under the
+# schema it defines yields a valid semantic model. The vocabulary is specified
+# in §20.5 of the TEL Specification.
+
+name tel-schema
+
+# ---------------------------------------------------------------------------
+# Definitions. Each `define` is, in effect, a named Struct: it gives a
+# reusable name to a list of members so that recursive schemas may be
+# expressed in finite form. A definition has a `name` (inline atom) followed
+# directly by its members; no `struct` wrapper is required because the body
+# is always a list of Members.
+# ---------------------------------------------------------------------------
+
+# The body of a Layer (name, optional definitions, root struct).
+
+define layer-body
+  field name required
+    scalar identifier
+  field define repeatable
+    type define-body
+  field root required
+    type struct-body
+
+# The body of a definition (name + members).
+
+define define-body
+  field name required
+    scalar identifier
+  select repeatable
+    variant field
+      type field-body
+    variant select
+      type select-body
+
+# The body of a Struct (a list of Members; each Member is field or select).
+
+define struct-body
+  select repeatable
+    variant field
+      type field-body
+    variant select
+      type select-body
+
+# The body of a Field (keyword first, then optional flags, then type).
+# Keyword-first ordering lets a field be declared inline as
+# `field some-keyword required repeatable` without ambiguity.
+
+define field-body
+  field keyword required
+    scalar identifier
+  field required
+    flag
+  field repeatable
+    flag
+  select required
+    variant struct
+      type struct-body
+    variant scalar
+      type scalar-body
+    variant flag
+      flag
+    variant type
+      type reference-body
+
+# The body of a Select (required, repeatable, list of variants).
+
+define select-body
+  field required
+    flag
+  field repeatable
+    flag
+  field variant required repeatable
+    type variant-body
+
+# The body of a Variant (keyword + type).
+
+define variant-body
+  field keyword required
+    scalar identifier
+  select required
+    variant struct
+      type struct-body
+    variant scalar
+      type scalar-body
+    variant flag
+      flag
+    variant type
+      type reference-body
+
+# The body of a Scalar (validator + optional default).
+
+define scalar-body
+  field validator required
+    scalar identifier
+  field default
+    scalar string
+
+# The body of a Reference (a single name).
+
+define reference-body
+  field name required
+    scalar identifier
+
+# ---------------------------------------------------------------------------
+# The schema document struct. Describes the top-level members of every TEL
+# schema document, including this one.
+# ---------------------------------------------------------------------------
+
+document
+  field name required
+    scalar identifier
+  field sigil
+    scalar sigil
+  field define repeatable
+    type define-body
+  field document required
+    type struct-body
+  field layer repeatable
+    type layer-body

@@ -30,6 +30,6 @@ Document {
     ],
 }
 errors:
-  E125 [0,29): Pragma has extra atoms
-  E124 [0,29): Invalid schema identifier
-  E106 [0,29): Invalid sigil character
+  E125 [0,26): Pragma has extra atoms
+  E124 [0,26): Invalid schema identifier
+  E106 [0,26): Invalid sigil character

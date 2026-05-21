@@ -7,7 +7,7 @@ Document {
                 0,
             ),
             schema: Some(
-                "dGVzdGhhc2h2YWx1ZTEyMzQ1Njc4OTAxMjM0NTY3OA",
+                "deadbeefcafebabe0123456789abcdef0123456789abcdeffeedfacecafebabe",
             ),
             sigil: None,
         },
