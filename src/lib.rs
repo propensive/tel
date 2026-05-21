@@ -2049,11 +2049,26 @@ mod tests {
 
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => {
-                let has_errors = !result.errors.is_empty();
+                // If the pragma names tel-schema (via its placeholder URL),
+                // run type assignment against the built-in tel-schema and
+                // append the resulting errors. The placeholder URL is used
+                // because §8.1 requires schema identifiers to be a URL or a
+                // BASE64-URL hash; a stable hash for tel-schema is deferred
+                // until a BinTEL encoder exists.
+                let mut all_errors: Vec<TelError> = result.errors.clone();
+                if let Some(ref pr) = result.document.pragma {
+                    if pr.schema.as_deref() == Some("https://tel-lang.org/schema/tel-schema") {
+                        let schema = builtin_tel_schema();
+                        let ta = type_assign(&result.document, &schema, None);
+                        all_errors.extend(ta.errors);
+                    }
+                }
+
+                let has_errors = !all_errors.is_empty();
                 let mut output = format!("{}", result.document);
-                if !result.errors.is_empty() {
+                if !all_errors.is_empty() {
                     output.push_str("\nerrors:\n");
-                    for e in &result.errors {
+                    for e in &all_errors {
                         output.push_str(&format!("  {}\n", e));
                     }
                 }
