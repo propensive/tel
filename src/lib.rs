@@ -2313,6 +2313,26 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    /// Given a URL like `https://example.org/contact-schema`, return
+    /// `Some("contact-schema")` if the tail is a kebab-case identifier.
+    /// Returns `None` for URLs that don't end in a usable name component.
+    fn extract_url_tail(url: &str) -> Option<String> {
+        if !url.contains("://") { return None; }
+        // Strip any fragment
+        let url = url.split('#').next().unwrap_or(url);
+        // Strip any query string
+        let url = url.split('?').next().unwrap_or(url);
+        let tail = url.rsplit('/').next()?;
+        if tail.is_empty() { return None; }
+        if !tail.chars().next()?.is_ascii_lowercase() { return None; }
+        let ok = tail.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if ok && !tail.contains("--") && !tail.ends_with('-') {
+            Some(tail.to_string())
+        } else {
+            None
+        }
+    }
+
     fn run_test_with_timeout(path: &str, expect_errors: bool) -> (bool, String) {
         let input = match fs::read(path) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
@@ -2328,29 +2348,74 @@ mod tests {
 
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => {
-                // If the pragma names tel-schema (via its placeholder URL),
-                // run the full schema pipeline: type-assign against the
-                // built-in tel-schema (E3xx), then if that passes, construct
-                // a Schema from the document and validate it (E2xx). The
-                // placeholder URL is used pending a stable signature for
-                // tel-schema (deferred until a BinTEL encoder exists).
+                // Schema processing pipeline. Two test conventions:
+                //
+                // (1) Pragma names tel-schema (via its placeholder URL):
+                //     type-assign against the built-in tel-schema, and if
+                //     that passes, construct a Schema and validate it.
+                //
+                // (2) Pragma URL ends with `/<NAME>` where <NAME> matches
+                //     a sibling `<NAME>.tel` file in the same directory as
+                //     this test: parse that file as a schema document
+                //     (type-checked against tel-schema), construct the
+                //     user schema, and type-check the current document
+                //     against it. This is how user-document tests
+                //     reference their schema.
                 let mut all_errors: Vec<TelError> = result.errors.clone();
                 if let Some(ref pr) = result.document.pragma {
-                    if pr.schema.as_deref() == Some("https://tel-lang.org/schema/tel-schema") {
-                        let builtin = builtin_tel_schema();
-                        let ta = type_assign(&result.document, &builtin, None);
-                        let had_ta_errors = !ta.errors.is_empty();
-                        all_errors.extend(ta.errors);
-                        // Only attempt schema construction if type assignment
-                        // passed — otherwise the document doesn't conform to
-                        // tel-schema's grammar and the constructed Schema
-                        // would be meaningless.
-                        if !had_ta_errors {
-                            let constructed = construct_schema(&result.document);
-                            for serr in validate_schema(&constructed) {
-                                all_errors.push(TelError::with_detail(
-                                    serr.code, 0, 0, serr.detail,
-                                ));
+                    if let Some(schema_url) = pr.schema.as_deref() {
+                        if schema_url == "https://tel-lang.org/schema/tel-schema" {
+                            let builtin = builtin_tel_schema();
+                            let ta = type_assign(&result.document, &builtin, None);
+                            let had_ta_errors = !ta.errors.is_empty();
+                            all_errors.extend(ta.errors);
+                            if !had_ta_errors {
+                                let constructed = construct_schema(&result.document);
+                                for serr in validate_schema(&constructed) {
+                                    all_errors.push(TelError::with_detail(
+                                        serr.code, 0, 0, serr.detail,
+                                    ));
+                                }
+                            }
+                        } else if let Some(name) = extract_url_tail(schema_url) {
+                            // Look for a sibling `<name>.tel` first, then
+                            // `_<name>.tel` (the underscore convention for
+                            // auxiliary fixtures that aren't tests themselves).
+                            let test_dir = std::path::Path::new(path).parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| std::path::PathBuf::from("."));
+                            let primary = test_dir.join(format!("{}.tel", name));
+                            let underscore = test_dir.join(format!("_{}.tel", name));
+                            let schema_src_result = fs::read_to_string(&primary)
+                                .or_else(|_| fs::read_to_string(&underscore));
+                            if let Ok(schema_src) = schema_src_result {
+                                // Parse the schema document and build a Schema
+                                let schema_parsed = parse(&schema_src);
+                                let builtin = builtin_tel_schema();
+                                let schema_ta = type_assign(
+                                    &schema_parsed.document, &builtin, None,
+                                );
+                                if schema_ta.errors.is_empty() {
+                                    let user_schema = construct_schema(&schema_parsed.document);
+                                    // Validate the constructed user schema first;
+                                    // surface any of its own E2xx errors so the test
+                                    // author sees them.
+                                    for serr in validate_schema(&user_schema) {
+                                        all_errors.push(TelError::with_detail(
+                                            serr.code, 0, 0,
+                                            format!("[schema `{}`] {}", name, serr.detail),
+                                        ));
+                                    }
+                                    // Then type-check the test document against it.
+                                    let doc_ta = type_assign(
+                                        &result.document, &user_schema, None,
+                                    );
+                                    all_errors.extend(doc_ta.errors);
+                                }
+                                // If the schema document itself doesn't parse
+                                // against tel-schema, we don't surface those
+                                // errors here — that's the schema's own bug,
+                                // not the test document's.
                             }
                         }
                     }
@@ -2380,6 +2445,10 @@ mod tests {
         let mut entries: Vec<_> = fs::read_dir(dir).unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map(|x| x == "tel").unwrap_or(false))
+            // Files whose name begins with `_` are auxiliary fixtures
+            // (typically schemas referenced by sibling tests), not tests
+            // themselves.
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('_'))
             .collect();
         entries.sort_by_key(|e| e.file_name());
 

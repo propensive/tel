@@ -1,0 +1,13 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A minimal contact schema, used as the schema for sibling
+# contact-document-* tests in this directory. Only the bits needed for
+# the negative tests are included.
+
+name contact-schema
+
+document
+  field name required
+    scalar string
+  field email
+    scalar string
