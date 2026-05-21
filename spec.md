@@ -237,16 +237,18 @@ The default sigil is `#`, used unless the pragma or the document schema specifie
 The schema identifier, if present, MUST be one of:
 
 - an HTTP or HTTPS URL, optionally with a fragment (the `#` separator and everything after it)
-  that is the **hex-encoded schema signature** of the schema (as defined in §8 of the
+  that is the **BASE-256-encoded schema signature** of the schema (as defined in §8 of the
   [BinTEL Specification](bintel-spec.md))
-- a bare hex-encoded schema signature of the schema
+- a bare BASE-256-encoded schema signature of the schema
 
 A schema identifier that does not match either of these forms is invalid (**E124**).
 
 The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §3.5). A bare
-signature is distinguished from a URL by the absence of a `://` substring. Hex digits (`0`–`9`,
-`a`–`f`) and ASCII letters contain no space characters, so a schema identifier always occupies a
-single phrase.
+signature is distinguished from a URL by the absence of a `://` substring. The BASE-256 alphabet
+(see the [BASE-256 Specification](base256-spec.md) §4) consists entirely of Unicode letters and
+ASCII digits — no whitespace or punctuation — so a schema identifier always occupies a single
+phrase and is selected as a single word by a double-click in any conforming text-handling
+environment.
 
 A **schema signature** is a deterministic byte string derived from the SHA-256 hashes of the
 schema's components (base schema and any layers, in order). It is constructed as a **palimpsest**
@@ -256,12 +258,12 @@ carries: it not only identifies the fully composed schema but also encodes the *
 the base and each layer in order**, so that a receiver holding a library of known schemas and
 layers can decode the signature to reconstruct the exact composition.
 
-For a non-layered schema (one component), the signature is 32 bytes (64 hex characters) — exactly
-the schema's value hash. For a schema with `n` total components, the signature is `30 + 2n` bytes
-(`60 + 4n` hex characters). A producer that wishes to extend a schema with additional layers
-publishes a new signature by appending each layer's hash to the palimpsest; a consumer that
-decodes the signature against its library reconstructs the same composition that the producer
-intended (§20.3 of this specification).
+For a non-layered schema (one component), the signature is 32 bytes (32 BASE-256 characters) —
+exactly the schema's value hash. For a schema with `n` total components, the signature is
+`30 + 2n` bytes (`30 + 2n` BASE-256 characters). A producer that wishes to extend a schema with
+additional layers publishes a new signature by appending each layer's hash to the palimpsest; a
+consumer that decodes the signature against its library reconstructs the same composition that
+the producer intended (§20.3 of this specification).
 
 ### 8.2 Schema Resolution
 

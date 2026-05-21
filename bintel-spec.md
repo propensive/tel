@@ -35,9 +35,9 @@ semantic TEL value, including schema documents (which are themselves TEL documen
 
 When used in a schema identifier (see §8.1 of the TEL Specification), one or more value hashes —
 one per component of the composed schema (the base plus each layer in order) — are combined into
-a **schema signature** per §8 below. The signature is hex-encoded in lowercase for textual
-representation. A schema with no layers has a single-component signature whose bytes are exactly
-the 32-byte value hash, encoded as 64 hex characters.
+a **schema signature** per §8 below. The signature is encoded as [BASE-256](base256-spec.md) for
+textual representation. A schema with no layers has a single-component signature whose bytes are
+exactly the 32-byte value hash, encoded as 32 BASE-256 characters.
 
 ## 4. Integer Encoding
 
@@ -146,11 +146,14 @@ Emit the signature as `30 + 2n` bytes, most-significant byte first. For n = 1 (n
 signature is exactly the 32-byte value hash of the base schema.
 
 **Textual form.** When a schema signature appears in textual contexts — most notably the schema
-identifier of a TEL pragma (see §8.1 of the TEL Specification) — it is **hex-encoded** in lowercase
-ASCII, producing `60 + 4n` characters. Hex (rather than BASE64-URL) is chosen because it preserves
-byte-aligned structure: each component's contribution to the signature spans the same character
-boundaries, making the encoded form interpretable by inspection. Decoders MUST accept both
-lowercase and uppercase hex digits; encoders MUST emit lowercase.
+identifier of a TEL pragma (see §8.1 of the TEL Specification) — it is encoded with
+[BASE-256](base256-spec.md), producing one Unicode character per signature byte (`30 + 2n`
+characters total). BASE-256 is chosen over BASE64-URL or hex because (a) it is the most compact
+character-per-byte encoding available — half the length of hex; (b) every character is a Unicode
+letter or digit, so the encoded signature is a single word for double-click selection (per Unicode
+Annex #29); and (c) the alphabet contains no whitespace or punctuation, so the signature always
+occupies a single phrase on the pragma line. Encoders and decoders use the alphabet defined in §4
+of the BASE-256 Specification.
 
 **Correctness property.** Because each shift is 16 bits wide but each hash is 256 bits wide, the
 lowest 16 bits of S are determined solely by the last hash h_{n−1}. After XORing h_{n−1} out of S
