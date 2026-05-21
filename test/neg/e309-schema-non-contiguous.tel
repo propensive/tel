@@ -1,0 +1,15 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+name example
+
+define first-type
+  field x required
+    scalar string
+
+document
+  field name required
+    scalar string
+
+define second-type
+  field y required
+    scalar string
