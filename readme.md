@@ -20,40 +20,63 @@ while `#` is the only other meaningful character, for starting a comment.
 - Allows comments, which may be attached to data, or not
 - Both data and schemas are composable
 
-Here is an example of TEL being used to describe a project and modules:
+Here is an example of TEL being used to describe a contact:
 
 ```tel
-import parent
-project main
-  module alpha
-    name         Alpha
-    description  This is a description
+name Alice Anderson
+email alice@example.org
 
-  # Todo: tidy up this section
+phone
+  country-code 44
+  number 020-7946-0100
 
-  # Previously called "beta"
-  module gamma
-    name Gamma
-    description
-        This is a longer description which flows onto
-        more than one line.
+home
+  street 221B Baker Street
+  city London
+  country UK
+
+active
 ```
 
-In this example, the keywords `import`, `project` or `name` are not part of `TEL`, but may be part
-of a schema that defines the data's structure, such as:
+The keywords here — `name`, `email`, `phone`, `home`, `active`, etc. — are not part of TEL itself
+but are defined by a *schema*. Schemas are themselves TEL documents, written in the schema language
+defined in §20 of the [TEL Specification](spec.md). A small schema for the document above might
+look like:
 
-```tel-schema
-import  ref!
-project id!
-  module id!
-    name value
-    description? value&
-    links? link+
+```tel
+tel 1.0
+
+name contact-schema
+
+document
+  field name required
+    scalar string
+  field email
+    scalar string
+  field phone repeatable
+    struct
+      field country-code required
+        scalar string
+      field number required
+        scalar string
+  field home
+    struct
+      field street required
+        scalar string
+      field city required
+        scalar string
+      field country required
+        scalar string
+  select required
+    variant active
+      flag
+    variant archived
+      flag
 ```
 
-Each line defines a keyword, and gives names (e.g. `ref` or `value`) to its parameters, indicating
-where it may appear in the document with indentation. The symbols `!`, `?` and `&` define the
-multiplicity of a keyword; details like whether it is required, unique or may be repeated.
+The full worked example, with separate definitions for `address` and `phone-number` reused via
+`type` references, is in [`examples/contact-schema.tel`](examples/contact-schema.tel) and
+[`examples/contact-document.tel`](examples/contact-document.tel).
 
 ## Writing TEL
 
@@ -81,7 +104,8 @@ interpreted but they are part of the TEL metamodel, and can only appear in certa
 document.
 
 Comments always begin with a `#` character. The `#` must either start a line or be preceded by at
-least one space, and must always be followed by one or more spaces.
+least one space, and must be followed by exactly one space (a "soft space") and then the comment
+text.
 
 For example, the line,
 
@@ -274,64 +298,30 @@ is itself a valid TEL document.
 
 ## Binary form (BinTEL)
 
-TEL can provide a convenient way of storing or transmitting tree-structured data. But for fast
-serialization and deserialization, a binary form exists, as a direct translation of the same data
-model, which can be written and read faster, and which uses less memory. This is called BinTEL.
+TEL can be serialised to a compact binary form for fast reading and writing. This is called BinTEL
+and is defined in the [BinTEL Specification](bintel-spec.md). BinTEL is a byte sequence beginning
+with the magic number `C0 D1`, followed by a schema signature identifying the document's schema,
+followed by the encoded document.
 
-Although BinTEL is a _binary_ format, in the sense that it is not primarily for human consumption,
-it contains only valid printable UTF-8 characters, making it seamless to copy/paste or to embed
-within other textual data formats, such as XML or JSON.
-
-should use the custom Media Type `application/x-bintel`. BinTEL data always begins with the byte
-sequence, `b1` `c0` `d1`, which looks like `±ÀÑ` when interpreted as `UTF-8`.
+BinTEL can be carried over text-oriented channels (embedded in another TEL document, displayed in
+a terminal, copy-pasted between applications) by encoding it as Unicode text using
+[BASE-256](base256-spec.md) — a one-character-per-byte encoding whose alphabet is chosen so that
+the result is a single word for the purposes of double-click word selection.
 
 ## Schemas
 
-A TEL schema is an untyped TEL document which may be used to verify other TEL documents. Its
-structure should mirror that of the documents it verifies: each line begins with, and defines, a
-keyword which may appear at that position in the tree. The words that follow are the names of the
-parameters to that keyword.
+A TEL schema is itself a TEL document, conforming to the *tel-schema* (the schema-for-schemas).
+Schemas use a small vocabulary — `define`, `field`, `select`, `variant`, `struct`, `scalar`,
+`flag`, `type` — and describe the structure that conforming documents must match. The full
+vocabulary and validation rules are in [§20 of the TEL Specification](spec.md). A worked example
+is in [`examples/`](examples/).
 
-Additionally, each keyword or paramater may be suffixed (without space) by a qualifying symbol.
+## Status
 
-### Qualifiers
+This is a specification draft. Three reference implementations live in this repo:
 
-- `?`: parameter or keyword is optional; may appear zero or once
-- `+`: parameter or keyword is required and may appear once or many times
-- `*`: parameter or keyword may appear zero, once or many times
-- `!`: parameter is required and must be unique
-- `&`: parameter is the concatenation of remaining words, including spaces and terminated by a
-  newline
-- `~`: keyword may also appear zero, once or many times in this section or any descendant
-
-For example,
-
-```tel-schema
-child? arg
-```
-
-specifies the keyword `child` which may optionally appear once, with a required argument called
-`arg`. This schema would validate the document,
-
-```tel
-child alpha
-```
-
-Or, for example,
-
-```tel-schema
-employee+ id! name&
-```
-
-specifies the `employee` keyword which must appear at least once, but may be repeated, with an `id`
-parameter that must be unique, and a `name` parameter, which is the concatenation of the rest of the
-line. Such a schema would verify, for example,
-
-```tel
-employee sgs Simon G. Smith
-employee rp  Richard Price
-```
-
-### Verification
-
-_Todo_
+- `src/lib.rs` — TEL parser, schema model, validity checker, type-assignment algorithm, and
+  built-in tel-schema. Used by the `cargo test` suite (300+ `.tel`-based tests plus unit tests
+  for the schema layer).
+- `src/base256.rs` — BASE-256 codec.
+- `palimpsest/src/lib.rs` — Palimpsest codec (used for schema signatures in BinTEL).
