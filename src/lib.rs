@@ -1081,7 +1081,87 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         check_members_recursive(&l.root.members, &def_names, &mut errors);
     }
 
+    // E208/E209: layer-merge constraints (§20.3).
+    // Run a simulation of the Merge algorithm to detect keyword overlaps that
+    // violate the layer extension rules.
+    let mut composed_keywords: std::collections::HashMap<String, MergeKind> =
+        std::collections::HashMap::new();
+    for m in &s.document.members {
+        match m {
+            Member::Field(f) => {
+                composed_keywords.insert(f.keyword.clone(),
+                    MergeKind::Field(is_struct_type(&f.r#type)));
+            }
+            Member::Select(sel) => {
+                for v in &sel.variants {
+                    composed_keywords.insert(v.keyword.clone(), MergeKind::Variant);
+                }
+            }
+        }
+    }
+    for layer in &s.layers {
+        for m in &layer.root.members {
+            match m {
+                Member::Field(f) => {
+                    if let Some(existing) = composed_keywords.get(&f.keyword) {
+                        // E209: existing must be a Field whose type is Struct,
+                        // and the layer's type must also be Struct.
+                        match existing {
+                            MergeKind::Field(base_is_struct) => {
+                                let layer_is_struct = is_struct_type(&f.r#type);
+                                if !base_is_struct || !layer_is_struct {
+                                    errors.push(SchemaError {
+                                        code: ErrorCode::E209,
+                                        detail: format!(
+                                            "layer `{}` overrides keyword `{}` but Field merge requires both base and layer types to be Struct",
+                                            layer.name, f.keyword,
+                                        ),
+                                    });
+                                }
+                            }
+                            MergeKind::Variant => {
+                                errors.push(SchemaError {
+                                    code: ErrorCode::E209,
+                                    detail: format!(
+                                        "layer `{}` adds Field `{}` but base member with that keyword is a Select variant, not a Field",
+                                        layer.name, f.keyword,
+                                    ),
+                                });
+                            }
+                        }
+                    } else {
+                        composed_keywords.insert(f.keyword.clone(),
+                            MergeKind::Field(is_struct_type(&f.r#type)));
+                    }
+                }
+                Member::Select(sel) => {
+                    for v in &sel.variants {
+                        if composed_keywords.contains_key(&v.keyword) {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E208,
+                                detail: format!(
+                                    "layer `{}` adds Select variant `{}` which collides with an existing keyword in the composed schema",
+                                    layer.name, v.keyword,
+                                ),
+                            });
+                        } else {
+                            composed_keywords.insert(v.keyword.clone(), MergeKind::Variant);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     errors
+}
+
+/// Helper enum for tracking the kind of merged keyword during layer composition.
+enum MergeKind { Field(bool /* type is Struct */), Variant }
+
+fn is_struct_type(t: &Type) -> bool {
+    matches!(t, Type::Struct(_) | Type::Reference(_))
+    // A Reference to a Definition always resolves to a Struct (per §20).
 }
 
 /// Return all `Type`s reachable directly inside a Member (one per Field, or
