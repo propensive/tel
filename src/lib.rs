@@ -1,5 +1,7 @@
 /// TEL presentation model and parser.
 
+pub mod base256;
+
 use std::fmt;
 
 // ── Error types ──────────────────────────────────────────────────────────────
