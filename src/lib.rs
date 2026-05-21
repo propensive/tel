@@ -821,6 +821,204 @@ impl fmt::Display for SchemaError {
 
 /// Check a `Schema` for validity per §20.1 and §20.3. Returns the full list
 /// of E2xx errors (no recovery; every constraint violation is reported).
+// ── Schema construction from semantic model (§20.6) ────────────────────────
+
+/// Walk a parsed `Document` (which is presumed to be a schema document, i.e.
+/// already type-checked against the built-in tel-schema) and build a `Schema`
+/// value. The construction is deterministic per §20.6; source order is
+/// preserved in all `Vec`s.
+///
+/// This function does NOT re-check tel-schema conformance — call `type_assign`
+/// against `builtin_tel_schema()` first if you need that.
+pub fn construct_schema(doc: &Document) -> Schema {
+    let mut name = String::new();
+    let mut sigil: Option<char> = None;
+    let mut types: Vec<Definition> = Vec::new();
+    let mut layers: Vec<Layer> = Vec::new();
+    let mut document = Struct { members: Vec::new() };
+
+    for block in &doc.children {
+        for c in &block.compounds {
+            match c.keyword.as_str() {
+                "name" => name = scalar_value_text(c),
+                "sigil" => sigil = scalar_value_text(c).chars().next(),
+                "define" => types.push(construct_definition(c)),
+                "document" => document = Struct {
+                    members: construct_members(&c.children),
+                },
+                "layer" => layers.push(construct_layer(c)),
+                _ => { /* unknown — type-assignment would have caught it */ }
+            }
+        }
+    }
+
+    Schema { name, document, layers, sigil, types }
+}
+
+fn construct_definition(c: &Compound) -> Definition {
+    // The `define` compound's first inline atom is the name.
+    let name = scalar_value_text(c);
+    let members = construct_members(&c.children);
+    Definition { name, members }
+}
+
+fn construct_layer(c: &Compound) -> Layer {
+    let mut name = String::new();
+    let mut root = Struct { members: Vec::new() };
+    let mut types: Vec<Definition> = Vec::new();
+    // First inline atom (if present) is the layer name.
+    if let Some(atom) = c.atoms.first() {
+        name = atom_text(atom);
+    }
+    // Children: `name` / `root` / `define` (per layer-body schema).
+    for block in &c.children {
+        for child in &block.compounds {
+            match child.keyword.as_str() {
+                "name" => name = scalar_value_text(child),
+                "root" => root = Struct {
+                    members: construct_members(&child.children),
+                },
+                "define" => types.push(construct_definition(child)),
+                _ => {}
+            }
+        }
+    }
+    Layer { name, root, types }
+}
+
+/// Walk the children of a Struct-shaped compound and collect Members.
+fn construct_members(blocks: &[Block]) -> Vec<Member> {
+    let mut out = Vec::new();
+    for block in blocks {
+        for c in &block.compounds {
+            match c.keyword.as_str() {
+                "field" => out.push(Member::Field(construct_field(c))),
+                "select" => out.push(Member::Select(construct_select(c))),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn construct_field(c: &Compound) -> Field {
+    // Atom phase against field-body's member order:
+    //   keyword (Scalar id, required), required (Flag), repeatable (Flag), type (Sum)
+    let mut required = false;
+    let mut repeatable = false;
+    let mut keyword = String::new();
+    let mut iter = c.atoms.iter();
+    if let Some(a) = iter.next() {
+        // First atom is always the keyword (Scalar at position 0).
+        keyword = atom_text(a);
+    }
+    // Remaining atoms match required / repeatable Flag keywords in order.
+    for a in iter {
+        let t = atom_text(a);
+        if t == "required" { required = true; }
+        else if t == "repeatable" { repeatable = true; }
+    }
+    // Child compounds: `keyword` (Scalar), `required`/`repeatable` (Flag), and
+    // one of `struct`/`scalar`/`flag`/`type` for the type Sum.
+    let mut r#type: Type = Type::Flag; // overwritten below
+    let mut type_set = false;
+    for block in &c.children {
+        for child in &block.compounds {
+            match child.keyword.as_str() {
+                "keyword" => keyword = scalar_value_text(child),
+                "required" => required = true,
+                "repeatable" => repeatable = true,
+                "struct" | "scalar" | "flag" | "type" => {
+                    r#type = construct_type(child);
+                    type_set = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    let _ = type_set;
+    Field { required, repeatable, keyword, r#type }
+}
+
+fn construct_select(c: &Compound) -> Select {
+    let mut required = false;
+    let mut repeatable = false;
+    for a in &c.atoms {
+        let t = atom_text(a);
+        if t == "required" { required = true; }
+        else if t == "repeatable" { repeatable = true; }
+    }
+    let mut variants: Vec<Variant> = Vec::new();
+    for block in &c.children {
+        for child in &block.compounds {
+            match child.keyword.as_str() {
+                "required" => required = true,
+                "repeatable" => repeatable = true,
+                "variant" => variants.push(construct_variant(child)),
+                _ => {}
+            }
+        }
+    }
+    Select { required, repeatable, variants }
+}
+
+fn construct_variant(c: &Compound) -> Variant {
+    let mut keyword = String::new();
+    if let Some(a) = c.atoms.first() { keyword = atom_text(a); }
+    let mut r#type: Type = Type::Flag;
+    for block in &c.children {
+        for child in &block.compounds {
+            match child.keyword.as_str() {
+                "keyword" => keyword = scalar_value_text(child),
+                "struct" | "scalar" | "flag" | "type" => {
+                    r#type = construct_type(child);
+                }
+                _ => {}
+            }
+        }
+    }
+    Variant { keyword, r#type }
+}
+
+/// Build a `Type` from a type-variant child compound (`struct`, `scalar`,
+/// `flag`, or `type`).
+fn construct_type(c: &Compound) -> Type {
+    match c.keyword.as_str() {
+        "struct" => Type::Struct(Struct { members: construct_members(&c.children) }),
+        "scalar" => {
+            let mut validator = String::new();
+            let mut default: Option<String> = None;
+            // Inline atoms: validator first, then optional default
+            let mut iter = c.atoms.iter();
+            if let Some(a) = iter.next() { validator = atom_text(a); }
+            if let Some(a) = iter.next() { default = Some(atom_text(a)); }
+            for block in &c.children {
+                for child in &block.compounds {
+                    match child.keyword.as_str() {
+                        "validator" => validator = scalar_value_text(child),
+                        "default" => default = Some(scalar_value_text(child)),
+                        _ => {}
+                    }
+                }
+            }
+            Type::Scalar(Scalar { validator, default })
+        }
+        "flag" => Type::Flag,
+        "type" => {
+            // The Reference's name is the inline atom (or a child `name` compound).
+            let mut name = String::new();
+            if let Some(a) = c.atoms.first() { name = atom_text(a); }
+            for block in &c.children {
+                for child in &block.compounds {
+                    if child.keyword == "name" { name = scalar_value_text(child); }
+                }
+            }
+            Type::Reference(name)
+        }
+        _ => Type::Flag, // unknown — should be caught by type assignment
+    }
+}
+
 pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     let mut errors = Vec::new();
 
@@ -2551,6 +2749,78 @@ mod tests {
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E304),
                 "expected E304, got: {:?}", ta.errors);
+    }
+
+    /// THE bootstrap closure: parsing tel-schema.tel, constructing a Schema
+    /// from the result, and confirming it equals the hardcoded built-in.
+    #[test]
+    fn tel_schema_self_bootstrap_closure() {
+        let source = fs::read_to_string("tel-schema.tel")
+            .expect("tel-schema.tel must exist at the project root");
+        let parsed = parse(&source);
+        assert!(parsed.errors.is_empty(),
+                "parsing tel-schema.tel produced errors: {:?}", parsed.errors);
+        // Type-check against the built-in tel-schema.
+        let builtin = builtin_tel_schema();
+        let ta = type_assign(&parsed.document, &builtin, None);
+        assert!(ta.errors.is_empty(),
+                "type assignment errors against built-in: {:?}", ta.errors);
+        // Construct a Schema from the parsed document.
+        let constructed = construct_schema(&parsed.document);
+        // The constructed schema MUST equal the built-in. This is the
+        // self-describing closure property of §20.5.
+        assert_eq!(constructed.name, builtin.name);
+        assert_eq!(constructed.document, builtin.document,
+                   "constructed.document differs from built-in.document");
+        assert_eq!(constructed.types, builtin.types,
+                   "constructed.types differs from built-in.types");
+        assert_eq!(constructed.layers, builtin.layers);
+        assert_eq!(constructed.sigil, builtin.sigil);
+        // Lastly: a constructed schema should itself be valid.
+        let errs = validate_schema(&constructed);
+        assert!(errs.is_empty(),
+                "constructed tel-schema reports validity errors: {:?}", errs);
+    }
+
+    #[test]
+    fn construct_schema_round_trips_minimal_schema() {
+        // Hand-built schema → write a TEL source → re-parse → re-construct.
+        // The constructed schema MUST equal the original.
+        let original = Schema {
+            name: "round-trip".to_string(),
+            document: Struct {
+                members: vec![
+                    Member::Field(Field {
+                        required: true, repeatable: false,
+                        keyword: "name".to_string(),
+                        r#type: Type::Scalar(Scalar {
+                            validator: "string".to_string(),
+                            default: None,
+                        }),
+                    }),
+                    Member::Field(Field {
+                        required: false, repeatable: false,
+                        keyword: "active".to_string(),
+                        r#type: Type::Flag,
+                    }),
+                ],
+            },
+            layers: vec![],
+            sigil: None,
+            types: vec![],
+        };
+        // The TEL source corresponding to `original`.
+        let source = "tel 1.0\n\n\
+                      name round-trip\n\n\
+                      document\n  \
+                      field name required\n    \
+                      scalar string\n  \
+                      field active\n    \
+                      flag\n";
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let constructed = construct_schema(&parsed.document);
+        assert_eq!(constructed, original);
     }
 
     #[test]
