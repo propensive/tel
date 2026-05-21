@@ -23,7 +23,7 @@ while `#` is the only other meaningful character, for starting a comment.
 Here is an example of TEL being used to describe a contact:
 
 ```tel
-name Alice Anderson
+name  Alice Anderson
 email alice@example.org
 
 phone
@@ -31,12 +31,18 @@ phone
   number 020-7946-0100
 
 home
-  street 221B Baker Street
+  street  221B Baker Street
   city London
   country UK
 
 active
 ```
+
+Note the two spaces after `name` and `street`: this is a *hard space*, which puts the rest of the
+line into hard-space mode so that subsequent single spaces become part of the value rather than
+separating atoms. Without it, `name Alice Anderson` would be three separate atoms (and would
+violate a schema that expects a single string value); with it, the whole tail of the line is one
+value.
 
 The keywords here — `name`, `email`, `phone`, `home`, `active`, etc. — are not part of TEL itself
 but are defined by a *schema*. Schemas are themselves TEL documents, written in the schema language
