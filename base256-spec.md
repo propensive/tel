@@ -7,10 +7,13 @@ Unicode character drawn from a fixed 256-character alphabet. The alphabet is
 constructed such that decoding requires no lookup table: the original byte value
 of a character is its Unicode code point taken modulo 256. Every character in
 the alphabet has the Unicode General Category `Lu`, `Ll`, or `Lt` — uppercase,
-lowercase, or titlecase letter — drawn from blocks used by European alphabets.
-Consequently, a contiguous run of BASE-256 characters forms a single word under
-the Unicode default word-segmentation algorithm, so it may be selected as a unit
-by a double-click in any conforming text-handling environment.
+lowercase, or titlecase letter — drawn from blocks used by European alphabets,
+with the exception of the ten ASCII digits at positions `0x30`–`0x39`, which are
+the digits themselves. Consequently, a contiguous run of BASE-256 characters
+forms a single word under the Unicode default word-segmentation algorithm
+(letters via rule WB5, digits via WB8, and the two joined by WB9/WB10), so it
+may be selected as a unit by a double-click in any conforming text-handling
+environment.
 
 BASE-256 expands input by a factor of approximately 1.5× when measured in UTF-8
 bytes (since most of its characters are encoded in 2 or 3 UTF-8 bytes), but the
@@ -46,7 +49,7 @@ The alphabet is the following sequence of 256 Unicode characters, indexed from
 0:
 
 ```
-ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠḡḢḣḤĥȦȧШḩЪЫЬЭĮį0123456789ĺĻļĽľĿŀABCDEFGHIJKLMNOPQRSTUVWXYZṛќѝŞşŠabcdefghijklmnopqrstuvwxyzŻżṽžſẀẁẂẃẄẅẆẇẈẉΊẋẌẍΎƏҐґƒẓΔƕƖẗẘẙҚқƜƝΞƟƠơҢңƤƥΦƧƨΩΪΫάέήίưᾱβγδεζҷᾸικλμẽξοπӁӂÃτÅÆÇψωϊϋỌύώϏÐǑǒǓÔϕӖϗῘÙῚӛӜӝÞӟàῡǢǣӤåæçǨῩӪӫìíӮӯðñỲỳôỵǶỷӸùῺΏǼǽþǿ
+ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠḡḢḣḤĥȦȧШḩЪЫЬЭĮį0123456789ĺĻļĽľĿŀABCDEFGHIJKLMNOPQRSTUVWXYZṛќѝŞşŠabcdefghijklmnopqrstuvwxyzŻżṽžſẀẁẂẃẄẅẆẇẈẉΊẋẌẍΎƏҐґƒẓΔƕƖẗẘẙҚқƜƝΞƟƠơҢңƤƥΦƧƨΩΪΫάέήίưᾱβγδεζҷᾸικλμẽξοπӁӂÃτÅÆÇψωϊϋỌύώϏÐǑǒǓÔϕӖϗῘÙῚӛӜӝÞӟàῡǢǣӤåæçǨῩӪӫìíӮӯðñỲỳôỵǶỷӸùῺûǼǽþǿ
 ```
 
 The alphabet has the following defining property:
@@ -74,8 +77,9 @@ from the following Unicode blocks:
 - Greek Extended (`U+1F00`–`U+1FFF`)
 
 Every code point in the alphabet has the Unicode General Category `Lu`
-(Uppercase Letter), `Ll` (Lowercase Letter), or `Lt` (Titlecase Letter). This is
-the property exploited by §7.
+(Uppercase Letter), `Ll` (Lowercase Letter), `Lt` (Titlecase Letter), or `Nd`
+(Decimal Digit — only at positions `0x30`–`0x39`, which encode to the ASCII
+digits themselves). This is the property exploited by §7.
 
 ## 5. Encoding
 
@@ -129,15 +133,17 @@ into a sequence of code points and then apply the per-character rule above.
 
 The Unicode default word-segmentation algorithm (Unicode Standard Annex #29)
 divides a stream of Unicode characters into words by applying a set of
-word-boundary rules. Rule WB5 in particular specifies that no boundary is
-introduced between two characters that both have the derived `Word_Break`
-property `ALetter`. The `ALetter` property is assigned, among other things, to
-every character whose General Category is `Lu`, `Ll`, or `Lt`, with a small
-number of explicit exclusions that do not intersect the alphabet of §4.
+word-boundary rules. Rule WB5 specifies that no boundary is introduced between
+two characters that both have the derived `Word_Break` property `ALetter`
+(assigned, among other things, to every character whose General Category is
+`Lu`, `Ll`, or `Lt`). Rule WB8 does the same for two characters with property
+`Numeric` (decimal digits). Rules WB9 and WB10 bridge the two classes so that
+a letter is not separated from an adjacent digit.
 
-Because every character in the BASE-256 alphabet has General Category `Lu`,
-`Ll`, or `Lt`, every adjacent pair of BASE-256 characters falls within rule
-WB5 and is therefore joined into a single word by the algorithm.
+Every character in the BASE-256 alphabet is either an `ALetter` (the 246
+non-digit positions) or a `Numeric` (the ten ASCII digits at positions
+`0x30`–`0x39`). Adjacent BASE-256 characters therefore always fall within one
+of WB5, WB8, WB9, or WB10 and are joined into a single word by the algorithm.
 
 Most operating systems, terminals, web browsers, and editor components
 implement word selection on double-click using either the Unicode default word
