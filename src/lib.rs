@@ -2249,17 +2249,30 @@ mod tests {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => {
                 // If the pragma names tel-schema (via its placeholder URL),
-                // run type assignment against the built-in tel-schema and
-                // append the resulting errors. The placeholder URL is used
-                // because §8.1 requires schema identifiers to be a URL or a
-                // BASE64-URL hash; a stable hash for tel-schema is deferred
-                // until a BinTEL encoder exists.
+                // run the full schema pipeline: type-assign against the
+                // built-in tel-schema (E3xx), then if that passes, construct
+                // a Schema from the document and validate it (E2xx). The
+                // placeholder URL is used pending a stable signature for
+                // tel-schema (deferred until a BinTEL encoder exists).
                 let mut all_errors: Vec<TelError> = result.errors.clone();
                 if let Some(ref pr) = result.document.pragma {
                     if pr.schema.as_deref() == Some("https://tel-lang.org/schema/tel-schema") {
-                        let schema = builtin_tel_schema();
-                        let ta = type_assign(&result.document, &schema, None);
+                        let builtin = builtin_tel_schema();
+                        let ta = type_assign(&result.document, &builtin, None);
+                        let had_ta_errors = !ta.errors.is_empty();
                         all_errors.extend(ta.errors);
+                        // Only attempt schema construction if type assignment
+                        // passed — otherwise the document doesn't conform to
+                        // tel-schema's grammar and the constructed Schema
+                        // would be meaningless.
+                        if !had_ta_errors {
+                            let constructed = construct_schema(&result.document);
+                            for serr in validate_schema(&constructed) {
+                                all_errors.push(TelError::with_detail(
+                                    serr.code, 0, 0, serr.detail,
+                                ));
+                            }
+                        }
                     }
                 }
 
