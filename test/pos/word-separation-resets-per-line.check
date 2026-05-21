@@ -17,29 +17,29 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
-                                    keyword: "child1",
+                                    keyword: "one",
                                     atoms: [
                                         Inline {
-                                            text: "a",
+                                            text: "two",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "b",
-                                            preceding_spaces: 1,
+                                            text: "three",
+                                            preceding_spaces: 2,
                                         },
                                     ],
                                     remark: None,
                                     children: [],
                                 },
                                 Compound {
-                                    keyword: "child2",
+                                    keyword: "four",
                                     atoms: [
                                         Inline {
-                                            text: "x",
+                                            text: "five",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "y",
+                                            text: "six",
                                             preceding_spaces: 1,
                                         },
                                     ],

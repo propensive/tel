@@ -32,4 +32,4 @@ Document {
     ],
 }
 errors:
-  E125 [0,51): Pragma has extra atoms
+  E125 [0,48): Pragma has extra atoms

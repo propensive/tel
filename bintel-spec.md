@@ -30,8 +30,8 @@ described in RFC 2119 and RFC 8174 when, and only when, they appear in all capit
 
 The **value hash** of a TEL document is the SHA-256 digest of its BinTEL representation excluding
 the magic number and schema signature — that is, the hash is computed over only the document root
-encoding (§7). This is the general method for hashing any semantic TEL value, including schema
-documents (which are themselves TEL documents, as defined in §20 of the TEL Specification).
+encoding (as defined in the Node Encoding section). This is the general method for hashing any
+semantic TEL value, including schema documents (which are themselves TEL documents).
 
 When used in schema identifiers (see §8.1 of the TEL Specification), the hash is represented as a
 BASE64-URL-encoded (no padding) string of 43 characters.
@@ -78,9 +78,10 @@ A BinTEL file consists of the following fields in order:
    (§9), these bytes appear as the two characters at positions `0xC0` and `0xD1` of the BASE-256
    alphabet defined in the [BASE-256 Specification](base256-spec.md).
 2. **Schema signature**: the byte length of the signature (integer), followed by the signature
-   bytes. The schema signature identifies the composed schema (base plus layers) used to type the
-   document. Its construction is defined in §8.
-3. **Document root**: encoded as described in §7 (root form).
+   bytes. The schema signature (whose construction is defined in the Schema Signature section below)
+   identifies the composed schema (base plus layers) used to type the document.
+3. **Document root**: encoded using the node encoding described in the Node Encoding section below
+   (root form).
 
 ## 7. Node Encoding
 
@@ -95,7 +96,7 @@ A BinTEL file consists of the following fields in order:
 2. The number of child nodes (integer).
 3. Each child node in order, recursively.
 
-**Primitive node** (schema type is `Primitive`):
+**Scalar node** (schema type is `Scalar`):
 
 1. The keyword index of this node (integer).
 2. The byte length of the UTF-8 encoding of the value string (integer).
@@ -105,7 +106,7 @@ A BinTEL file consists of the following fields in order:
 
 1. The keyword index of this node (integer).
 
-**Default values.** BinTEL encodes the semantic model, in which a required `Primitive` member with a
+**Default values.** BinTEL encodes the semantic model, in which a required `Scalar` member with a
 non-null default is semantically present even when it was absent from the source document.
 Therefore, when encoding a document to BinTEL, a missing required primitive whose default is used
 MUST be encoded as a primitive node with the default value string. This ensures that the BinTEL

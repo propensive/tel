@@ -28,4 +28,4 @@ Document {
     ],
 }
 errors:
-  E104 [7,8): Invalid pragma version: 1
+  E104 [4,5): Invalid pragma version: 1

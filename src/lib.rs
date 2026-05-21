@@ -209,7 +209,7 @@ impl ParserState {
         if let Some(fi) = first_nb {
             let text = raw_lines[fi].text();
             let trimmed = text.trim_start();
-            if trimmed == "pragma" || trimmed.starts_with("pragma ") {
+            if trimmed == "tel" || trimmed.starts_with("tel ") {
                 // Check E103
                 let byte_end: usize = self.all_chars[..raw_lines[fi].start + raw_lines[fi].chars.len()]
                     .iter().collect::<String>().len();
@@ -224,7 +224,7 @@ impl ParserState {
                 // There shouldn't be non-blank lines between line_idx and fi
                 if raw_lines[line_idx..fi].iter().any(|l| !l.is_blank()) {
                     self.errors.push(TelError::new(
-                        ErrorCode::E102, raw_lines[fi].start, raw_lines[fi].start + 6,
+                        ErrorCode::E102, raw_lines[fi].start, raw_lines[fi].start + 3,
                     ));
                 }
                 pragma = Some(self.parse_pragma(trimmed, raw_lines[fi].start));
@@ -241,8 +241,8 @@ impl ParserState {
                 if rl.is_blank() { continue; }
                 let t = rl.text();
                 let tr = t.trim_start();
-                if tr == "pragma" || tr.starts_with("pragma ") {
-                    self.errors.push(TelError::new(ErrorCode::E102, rl.start, rl.start + 6));
+                if tr == "tel" || tr.starts_with("tel ") {
+                    self.errors.push(TelError::new(ErrorCode::E102, rl.start, rl.start + 3));
                     break;
                 }
             }
@@ -387,7 +387,7 @@ impl ParserState {
     }
 
     fn parse_pragma(&mut self, trimmed: &str, line_start: usize) -> Pragma {
-        let after = if trimmed.len() > 7 { trimmed[7..].trim_start() } else { "" };
+        let after = if trimmed.len() > 4 { trimmed[4..].trim_start() } else { "" };
         let atoms: Vec<&str> = if after.is_empty() {
             vec![]
         } else {
@@ -400,9 +400,9 @@ impl ParserState {
         }
 
         let version = if !atoms.is_empty() {
-            self.parse_version(atoms[0], line_start + 7)
+            self.parse_version(atoms[0], line_start + 4)
         } else {
-            self.errors.push(TelError::new(ErrorCode::E104, line_start, line_start + 6));
+            self.errors.push(TelError::new(ErrorCode::E104, line_start, line_start + 3));
             (1, 0)
         };
 

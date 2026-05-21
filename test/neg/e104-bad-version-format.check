@@ -28,4 +28,4 @@ Document {
     ],
 }
 errors:
-  E104 [7,10): Invalid pragma version: abc
+  E104 [4,7): Invalid pragma version: abc

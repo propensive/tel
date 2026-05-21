@@ -30,4 +30,4 @@ Document {
     ],
 }
 errors:
-  E106 [0,39): Invalid sigil character
+  E106 [0,36): Invalid sigil character
