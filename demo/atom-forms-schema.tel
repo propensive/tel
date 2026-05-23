@@ -1,0 +1,22 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A small schema demonstrating that scalar values can be carried in
+# any of the three atom forms (inline, source, literal) depending on
+# their content. See §14–§15 of the TEL Specification for the parsing
+# rules and §22.2 atom-form escalation for the deterministic rule a
+# canonicaliser uses to pick a form.
+#
+# The schema itself is trivial — every Field has type `scalar string`,
+# which accepts any text. The interesting part is the conforming
+# document: `demo/atom-forms-document.tel` shows the same data
+# carried in each form depending on what the value looks like.
+
+name documents-by-form
+
+document
+  field inline-value
+    scalar string
+  field source-value
+    scalar string
+  field literal-value
+    scalar string

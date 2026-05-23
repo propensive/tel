@@ -1,0 +1,136 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A contact schema with six layers, demonstrating §20.3 of the TEL
+# Specification (Schema Layering under Subtyping).
+#
+# Each layer applies one or more subtype-preserving operations to the
+# composition so far. Per §20.3, the permitted operations are:
+#
+#   1. Add a Field or Select member to a Struct.
+#   2. Add a new Definition to the type namespace.
+#   3. Merge a Field+Struct into an existing same-keyword Field+Struct
+#      (recursive Struct subtyping).
+#   4. Merge a Definition into an existing same-name Definition.
+#   5. Exclude a variant from an existing Select (subtype of a sum: fewer
+#      cases).
+#
+# In Syntax 1, a layer body looks like a schema body: name + define* +
+# root. Same-name `define`s merge implicitly; same-keyword Field+Struct
+# fields merge implicitly. The only explicit verb is `exclude`, which
+# takes a single inline atom — the keyword of the variant to exclude.
+# Selects have no name, but variant keywords are unique within a Struct
+# per E201, so the variant keyword unambiguously identifies the owning
+# Select.
+#
+# Composed-schema identity (per §20.3) is the base name plus the
+# ordered sequence of layer names:
+#
+#   contact + with-address + extended-address + with-phone
+#           + with-status + with-business + read-only-status
+
+name contact
+
+document
+  field name
+    scalar string
+  field email optional
+    scalar string
+
+
+# ── Layer 1: with-address ─────────────────────────────────────────────────
+# Introduces a Definition `address-body` and a Field `address` whose
+# type references it. Two additive operations: add a new Definition,
+# add a new Field. Neither operation collides with anything in the base.
+
+layer
+  name with-address
+  define address-body
+    field street
+      scalar string
+    field city
+      scalar string
+    field country
+      scalar string
+  root
+    field address optional
+      type address-body
+
+
+# ── Layer 2: extended-address ─────────────────────────────────────────────
+# Adds a `postcode` Field to the existing `address-body` Definition by
+# implicit merge: the `define address-body` block here has the same
+# name as the one introduced by Layer 1, so its members are merged
+# into the existing Definition. After this layer, `address-body` has
+# four Fields: street, city, country, postcode.
+#
+# Implicit Definition merge is the operation that makes layered Struct
+# extension natural: a later layer reaches a previously-defined Struct
+# by name, and its declared members are appended to that Struct.
+
+layer
+  name extended-address
+  define address-body
+    field postcode optional
+      scalar string
+
+
+# ── Layer 3: with-phone ───────────────────────────────────────────────────
+# Introduces a Definition `phone-number` and a repeatable Field `phone`
+# whose type references it. Same shape as `with-address`.
+
+layer
+  name with-phone
+  define phone-number
+    field country-code
+      scalar string
+    field number
+      scalar string
+  root
+    field phone optional repeatable
+      type phone-number
+
+
+# ── Layer 4: with-status ──────────────────────────────────────────────────
+# Adds a Select member with two Flag variants (`active`, `archived`).
+# Adding a fresh Select is permitted — its variant keywords must not
+# overlap any existing keyword in the composed Struct (E206-style
+# check); since neither name appears earlier, the add succeeds.
+
+layer
+  name with-status
+  root
+    select
+      variant active
+        flag
+      variant archived
+        flag
+
+
+# ── Layer 5: with-business ────────────────────────────────────────────────
+# A second independent layer that introduces a Definition and a Field
+# referencing it. Demonstrates that multiple layers can each contribute
+# Definitions to the composed namespace.
+
+layer
+  name with-business
+  define organization
+    field name
+      scalar string
+    field role optional
+      scalar string
+  root
+    field business optional
+      type organization
+
+
+# ── Layer 6: read-only-status ─────────────────────────────────────────────
+# Excludes the `archived` variant from the Select introduced by Layer 4.
+# This is the sum-type subtyping operation: the composed Select now
+# permits only `active`. Per §20.3, the variant keyword `archived`
+# uniquely identifies its owning Select (variant keywords are unique
+# within a Struct per E201), so no Select-level addressing is needed.
+
+layer
+  name read-only-status
+  root
+    exclude archived

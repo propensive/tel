@@ -3,6 +3,13 @@ tel 1.0
 # The TEL schema-for-schemas. Self-describing: parsing this document under the
 # schema it defines yields a valid semantic model. The vocabulary is specified
 # in §20.5 of the TEL Specification.
+#
+# Polarity convention (§20):
+#   - The default for every Field and Select is REQUIRED and IRREPEATABLE.
+#   - `optional` (Flag) loosens to optional; `required` (Flag, layer-only)
+#     re-tightens.
+#   - `repeatable` (Flag) loosens to repeatable; `irrepeatable` (Flag,
+#     layer-only) re-tightens.
 
 name tel-schema
 
@@ -14,48 +21,79 @@ name tel-schema
 # is always a list of Members.
 # ---------------------------------------------------------------------------
 
-# The body of a Layer (name, optional definitions, root struct).
+# The body of a Layer (name, optional definitions, optional root struct).
+# `root` is optional so that a layer may extend Definitions without
+# modifying the document root.
 
 define layer-body
-  field name required
+  field name
     scalar identifier
-  field define repeatable
+  field define optional repeatable
     type define-body
-  field root required
+  field root optional
     type struct-body
 
-# The body of a definition (name + members).
+# The body of a definition: name + members + optional struct-level
+# validators (§21.6).
 
 define define-body
-  field name required
+  field name
     scalar identifier
-  select repeatable
+  select optional repeatable
     variant field
       type field-body
     variant select
       type select-body
+    variant validate
+      scalar identifier
 
-# The body of a Struct (a list of Members; each Member is field or select).
+# The body of a Struct (a list of Members; each Member is field or
+# select). When the Struct appears inside a Layer, an `exclude`
+# operation is also permitted (§20.3): an `exclude K` line whose value
+# K names the variant keyword to exclude from whichever Select in the
+# merged Struct owns it. The `exclude` variant has no effect in the
+# base schema; it exists for layers to perform sum-type subtyping. The
+# `exclude` variant's type is `scalar identifier`, so its appearance is
+# a single atom on the `exclude` line, no nested compound required.
+#
+# A Struct also accepts zero or more `validate K` lines naming
+# struct-level validators (§21.6). Each validator inspects the entire
+# struct element and reports a `Diagnostic::Struct` on failure.
 
 define struct-body
-  select repeatable
+  select optional repeatable
     variant field
       type field-body
     variant select
       type select-body
+    variant exclude
+      scalar identifier
+    variant validate
+      scalar identifier
 
-# The body of a Field (keyword first, then optional flags, then type).
-# Keyword-first ordering lets a field be declared inline as
-# `field some-keyword required repeatable` without ambiguity.
+# The body of a Field (keyword first, then loosen / tighten flags, then
+# type). Keyword-first ordering lets a field be declared inline as
+# `field some-keyword optional repeatable` without ambiguity.
+#
+# The four Flag fields are named for the act they perform on the
+# default (required, irrepeatable):
+#   - `optional` (Flag): loosen — field MAY be absent.
+#   - `required` (Flag, layer-only override of `optional`): re-tighten.
+#   - `repeatable` (Flag): loosen — field MAY repeat.
+#   - `irrepeatable` (Flag, layer-only override of `repeatable`): re-tighten.
 
 define field-body
-  field keyword required
+  field keyword
     scalar identifier
-  field required
+  field optional optional
     flag
-  field repeatable
+  field required optional
     flag
-  select required
+  field repeatable optional
+    flag
+  field irrepeatable optional
+    flag
+  select
     variant struct
       type struct-body
     variant scalar
@@ -65,22 +103,26 @@ define field-body
     variant type
       type reference-body
 
-# The body of a Select (required, repeatable, list of variants).
+# The body of a Select (loosen / tighten flags, list of variants).
 
 define select-body
-  field required
+  field optional optional
     flag
-  field repeatable
+  field required optional
     flag
-  field variant required repeatable
+  field repeatable optional
+    flag
+  field irrepeatable optional
+    flag
+  field variant repeatable
     type variant-body
 
 # The body of a Variant (keyword + type).
 
 define variant-body
-  field keyword required
+  field keyword
     scalar identifier
-  select required
+  select
     variant struct
       type struct-body
     variant scalar
@@ -90,18 +132,22 @@ define variant-body
     variant type
       type reference-body
 
-# The body of a Scalar (validator + optional default).
+# The body of a Scalar (one or more validators + optional default).
+# `validate` is required and repeatable: every scalar declares at least
+# one validator, and MAY declare more (they apply in AND-conjunction;
+# see §21.1). For an unconstrained scalar value, use the predefined
+# `string` validator.
 
 define scalar-body
-  field validator required
+  field validate repeatable
     scalar identifier
-  field default
+  field default optional
     scalar string
 
 # The body of a Reference (a single name).
 
 define reference-body
-  field name required
+  field name
     scalar identifier
 
 # ---------------------------------------------------------------------------
@@ -110,13 +156,13 @@ define reference-body
 # ---------------------------------------------------------------------------
 
 document
-  field name required
+  field name
     scalar identifier
-  field sigil
+  field sigil optional
     scalar sigil
-  field define repeatable
+  field define optional repeatable
     type define-body
-  field document required
+  field document
     type struct-body
-  field layer repeatable
+  field layer optional repeatable
     type layer-body

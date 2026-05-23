@@ -1,0 +1,36 @@
+tel 1.0 https://example.org/contact-layered
+
+# A document conforming to the composed schema defined in
+# `contact-layered-schema.tel` (or equivalently `contact-layered-composed.tel`).
+#
+# Demonstrates content drawn from every layer:
+#
+#   - name, email                  → base
+#   - address {street/city/country/postcode}
+#                                  → with-address + extended-address
+#   - phone (repeated, Struct)     → with-phone
+#   - business (Struct)            → with-business
+#   - active (Flag variant)        → with-status, narrowed by read-only-status
+
+name  Alice Anderson
+email alice@example.org
+
+address
+  street    221B Baker Street
+  city      London
+  country   UK
+  postcode  NW1 6XE
+
+phone
+  country-code 44
+  number       020-7946-0100
+
+phone
+  country-code 1
+  number       415-555-0123
+
+business
+  name  Anderson & Co.
+  role  Director
+
+active

@@ -1,0 +1,15 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+name e213-test
+
+define dup-name
+  field x
+    scalar string
+
+define dup-name
+  field y
+    scalar string
+
+document
+  field foo
+    type dup-name

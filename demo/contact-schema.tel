@@ -1,0 +1,50 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A worked example of a TEL schema: a "contact" record type.
+#
+# Demonstrates the constructs an everyday schema author will reach for:
+#
+#   - required and optional `field`s with `scalar` types
+#   - a `repeatable` field (`phone`)
+#   - a named `define`d struct (`phone-number`, `address`) referenced from
+#     multiple positions via `type`
+#   - a `select` member with all-`flag` variants for an enumerated status,
+#     which can be set inline as an atom on the parent compound
+#   - a `default` value on a required scalar
+#
+# To see what a document conforming to this schema looks like, see the
+# accompanying `contact-document.tel`. This schema document is itself
+# validated against the tel-schema (the schema-for-schemas) at parse time.
+
+name contact
+
+define phone-number
+  field country-code
+    scalar string
+  field number
+    scalar string
+
+define address
+  field street
+    scalar string
+  field city
+    scalar string
+  field country
+    scalar string unknown
+
+document
+  field name
+    scalar string
+  field email optional
+    scalar string
+  field phone optional repeatable
+    type phone-number
+  field home optional
+    type address
+  field work optional
+    type address
+  select
+    variant active
+      flag
+    variant archived
+      flag

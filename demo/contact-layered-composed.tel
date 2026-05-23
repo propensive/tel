@@ -1,0 +1,60 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# This file shows the *composed* schema that results from applying every
+# layer in `contact-layered-schema.tel`, in the declared layer order, per
+# the merge algorithm of §20.3 of the TEL Specification.
+#
+# It is functionally equivalent to the layered version: parsed under
+# tel-schema, normalised, and emitted with no `layer` compounds. The
+# composed schema's identity, however, is distinct — its single
+# component is the value hash of THIS document, whereas the layered
+# version's identity is the (n+1)-component signature comprising the
+# base hash followed by each layer hash in declared order.
+#
+# Concretely: this file's signature is `30 + 2*1 = 32` bytes (a single
+# value hash). The layered version's signature is `30 + 2*7 = 44` bytes
+# (base + 6 layers). The two signatures are not byte-equal even though
+# the schemas describe the same document shape.
+#
+# Note: the `status` Select only contains `active` — the `archived`
+# variant was excluded by the `read-only-status` layer (sum-type
+# subtyping per §20.3).
+
+name contact-composed
+
+define phone-number
+  field country-code
+    scalar string
+  field number
+    scalar string
+
+define organization
+  field name
+    scalar string
+  field role optional
+    scalar string
+
+define address-body
+  field street
+    scalar string
+  field city
+    scalar string
+  field country
+    scalar string
+  field postcode optional
+    scalar string
+
+document
+  field name
+    scalar string
+  field email optional
+    scalar string
+  field address optional
+    type address-body
+  field phone optional repeatable
+    type phone-number
+  field business optional
+    type organization
+  select
+    variant active
+      flag

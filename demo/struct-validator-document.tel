@@ -1,0 +1,21 @@
+tel 1.0 https://example.org/event-log
+
+# A document conforming to `demo/struct-validator-schema.tel`.
+#
+# The first event is well-formed (start-date ≤ end-date in ISO 8601
+# lexicographic order). The second event triggers the
+# `start-precedes-end` struct validator: its end-date is BEFORE its
+# start-date. When parsed by a TEL implementation that has registered
+# the `start-precedes-end` validator, the second event produces an
+# E310 diagnostic against the struct, with a nested per-field
+# diagnostic pinpointing `end-date`.
+
+event
+  title       Q1 review
+  start-date  2026-01-15
+  end-date    2026-03-31
+
+event
+  title       Off-by-one
+  start-date  2026-05-10
+  end-date    2026-04-30
