@@ -1,0 +1,165 @@
+Document {
+    interpreter_directive: None,
+    pragma: Some(
+        Pragma {
+            version: (
+                1,
+                0,
+            ),
+            schema: Some(
+                "https://tel-lang.org/schema/tel-schema",
+            ),
+            sigil: None,
+        },
+    ),
+    line_endings: LF,
+    children: [
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "name",
+                    atoms: [
+                        Inline {
+                            text: "e209-test",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "document",
+                    atoms: [],
+                    remark: None,
+                    children: [
+                        Block {
+                            comments: [],
+                            tabulation: None,
+                            compounds: [
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "foo",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [
+                                        Block {
+                                            comments: [],
+                                            tabulation: None,
+                                            compounds: [
+                                                Compound {
+                                                    keyword: "scalar",
+                                                    atoms: [
+                                                        Inline {
+                                                            text: "string",
+                                                            preceding_spaces: 1,
+                                                        },
+                                                    ],
+                                                    remark: None,
+                                                    children: [],
+                                                },
+                                            ],
+                                            trailing_blank_lines: 0,
+                                        },
+                                    ],
+                                },
+                            ],
+                            trailing_blank_lines: 0,
+                        },
+                    ],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "layer",
+                    atoms: [],
+                    remark: None,
+                    children: [
+                        Block {
+                            comments: [],
+                            tabulation: None,
+                            compounds: [
+                                Compound {
+                                    keyword: "name",
+                                    atoms: [
+                                        Inline {
+                                            text: "extension",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "root",
+                                    atoms: [],
+                                    remark: None,
+                                    children: [
+                                        Block {
+                                            comments: [],
+                                            tabulation: None,
+                                            compounds: [
+                                                Compound {
+                                                    keyword: "field",
+                                                    atoms: [
+                                                        Inline {
+                                                            text: "foo",
+                                                            preceding_spaces: 1,
+                                                        },
+                                                    ],
+                                                    remark: None,
+                                                    children: [
+                                                        Block {
+                                                            comments: [],
+                                                            tabulation: None,
+                                                            compounds: [
+                                                                Compound {
+                                                                    keyword: "scalar",
+                                                                    atoms: [
+                                                                        Inline {
+                                                                            text: "string",
+                                                                            preceding_spaces: 1,
+                                                                        },
+                                                                    ],
+                                                                    remark: None,
+                                                                    children: [],
+                                                                },
+                                                            ],
+                                                            trailing_blank_lines: 1,
+                                                        },
+                                                    ],
+                                                },
+                                            ],
+                                            trailing_blank_lines: 0,
+                                        },
+                                    ],
+                                },
+                            ],
+                            trailing_blank_lines: 0,
+                        },
+                    ],
+                },
+            ],
+            trailing_blank_lines: 0,
+        },
+    ],
+}
+errors:
+  E207 [0,0): Layer Field merge requires both base and layer types to be Struct: layer `extension` overrides keyword `foo` but Field merge requires both base and layer types to be Struct

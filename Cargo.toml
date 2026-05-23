@@ -1,7 +1,3 @@
-[package]
-name = "tel"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-palimpsest = { path = "palimpsest" }
+[workspace]
+members = ["ref/tel", "ref/base256", "ref/palimpsest"]
+resolver = "2"

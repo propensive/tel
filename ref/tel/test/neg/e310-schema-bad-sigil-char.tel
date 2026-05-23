@@ -1,0 +1,8 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+name e210-test
+sigil A
+
+document
+  field foo
+    scalar string

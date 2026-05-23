@@ -1,0 +1,40 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A small schema demonstrating struct validators (§21.6 of the TEL
+# Specification). The `event` definition carries a struct-level
+# validator `start-precedes-end` that examines the `start-date` and
+# `end-date` fields together — a cross-field rule that no scalar
+# validator could express alone.
+#
+# A parser configured with this schema MUST be supplied (via the
+# validator callback) with an implementation of `start-precedes-end`
+# that:
+#
+#   - receives a `ValidationRequest::Struct` with `method =
+#     "start-precedes-end"` and an `element: StructView` whose
+#     `compound` is the `event` body;
+#   - reads `start-date` and `end-date` as scalar children;
+#   - returns `Valid` if start-date ≤ end-date in lexicographic order
+#     (ISO 8601 dates compare correctly this way), or
+#   - returns `Invalid(Diagnostic::Struct { message, fields })` where
+#     `fields` may contain a nested `Diagnostic::Scalar` pinpointing
+#     `end-date` as the offending field.
+#
+# See `demo/struct-validator-document.tel` for a document that
+# triggers the failure path, and `tests::struct_validator_worked_example`
+# in `src/lib.rs` for a runnable example.
+
+name event-log
+
+define event
+  field title
+    scalar string
+  field start-date
+    scalar string
+  field end-date
+    scalar string
+  validate start-precedes-end
+
+document
+  field event optional repeatable
+    type event

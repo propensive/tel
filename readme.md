@@ -2,336 +2,185 @@
 
 # TEL, the Typed Element Language
 
-TEL is a format for representing tree-structured data, designed for documents that may be edited by
-both humans and computers. TEL keeps markup to a minimum: spaces and newlines define structure,
-while `#` is the only other meaningful character, for starting a comment.
+TEL is a tree-structured data format designed to be edited by humans, agents, and processors
+alike. Structure is carried by indentation and a single sigil character (`#` by default);
+everything else is content. The result is a notation that reads like the data it represents,
+with no escaping rules to learn and no punctuation to balance.
+
+```tel
+tel 1.0
+
+project alpha
+  description    Demo of TEL features
+  contributor    Alice
+  contributor    Bob   # was Robert
+```
 
 ## Features
 
-- Models tree-structured data
-- Symbolic markup is minimal, making it more enjoyable to write
-- Automatic modifications don't reformat a document
-- Documents may be untyped or typed
-- Allows embedded textual content (such as XML or JSON) without escaping
-- Lightweight data schemas with simple syntax
-- User-extensible data verification
-- Fast and lightweight binary format (BinTEL)
-- Safe schema evolution with compatibility checking
-- Allows comments, which may be attached to data, or not
-- Both data and schemas are composable
+- **Minimal markup.** Indentation and a configurable sigil are all that distinguish structure
+  from content; everything else is data.
+- **Hosts other languages without escaping.** A scalar value may be carried as an indented
+  block (a *source atom*) or as a delimited payload (a *literal atom*) — JSON, XML, Markdown,
+  shell scripts, and the like embed verbatim.
+- **Schemas and types.** A schema names fields, sums, references, and validators. Documents
+  are checked against their schema during parsing.
+- **User-extensible validation.** A schema attaches named validators to scalars and structs;
+  the parser calls back to the application to run them.
+- **Layered schemas with safe evolution.** A base schema may be refined by ordered layers;
+  every permitted layer operation produces a *subtype* of the base, so older readers can
+  still consume newer documents.
+- **Concise binary wire format.** Every TEL document has an unambiguous **BinTEL** encoding
+  (typically ~2× smaller than the text) for hashing, transmission, or storage.
+- **BASE-256 textual carrier.** When the wire format must travel in a text channel, BASE-256
+  encodes one byte as one Unicode letter — half the length of hex, copy-paste-safe, no
+  escaping required.
+- **Faithful round-trips.** Programmatic edits preserve comments, blank lines, atom form,
+  and tabulation alignment wherever they aren't directly changed.
 
-Here is an example of TEL being used to describe a project and modules:
+## Quick tour
 
-```tel
-import parent
-project main
-  module alpha
-    name         Alpha
-    description  This is a description
+### Pragma
 
-  # Todo: tidy up this section
-
-  # Previously called "beta"
-  module gamma
-    name Gamma
-    description
-        This is a longer description which flows onto
-        more than one line.
-```
-
-In this example, the keywords `import`, `project` or `name` are not part of `TEL`, but may be part
-of a schema that defines the data's structure, such as:
-
-```tel-schema
-import  ref!
-project id!
-  module id!
-    name value
-    description? value&
-    links? link+
-```
-
-Each line defines a keyword, and gives names (e.g. `ref` or `value`) to its parameters, indicating
-where it may appear in the document with indentation. The symbols `!`, `?` and `&` define the
-multiplicity of a keyword; details like whether it is required, unique or may be repeated.
-
-## Writing TEL
-
-Writing TEL is easy. Each line contains some words, or data, which represent a node in the tree.
-Each line is indented by a number of spaces. If the indentation is the same as the previous line,
-then the node is a sibling or peer—it shares the same parent node. If it is indented two spaces more
-than the previous line, then it is a child.
-
-If the line has less indentation than the previous line, then it is the child of an earlier node:
-the last one with two fewer spaces of indentation—exactly as the visual appearance implies.
-
-Any other indentation, including having an odd number of spaces, is considered an error. There is
-one exception to this for supporting multiline strings, which is explained below.
-
-Each data line contains one or more words (or character sequences), separated by spaces. Any number
-of spaces may appear between words without any semantic significance,
-
-Blank lines may appear anywhere. This format has no significant punctuation other than whitespace,
-and it should seem very natural to a human reader.
-
-### Comments
-
-A TEL document may contain human-readable comments. They contain no data, and their contents is not
-interpreted but they are part of the TEL metamodel, and can only appear in certain places in a
-document.
-
-Comments always begin with a `#` character. The `#` must either start a line or be preceded by at
-least one space, and must always be followed by one or more spaces.
-
-For example, the line,
+Every TEL document begins with a pragma identifying the version, optional schema, and
+optional sigil:
 
 ```tel
-    email user@example.com     # The user's email address
+tel 1.0
+tel 1.0 https://example.org/schema/contact#sigḅHrïЖqẍḱăL
+tel 1.0 contact %
 ```
 
-would contain the data, `email user@example.com`, and the comment, `The user's email address`, but
-the line,
+The schema identifier is either a URL, a URL with a BASE-256 signature fragment, or a bare
+signature. The sigil overrides the default `#`.
+
+### Compounds and atoms
+
+A non-blank line is a **compound**: a keyword followed by zero or more inline atoms, and
+optionally child blocks at one greater indent.
 
 ```tel
-    url https://example.com/page#ref
+contact alice
+  email          alice@example.org
+  phone   work   +44 20 7946 0958
+  phone   home   +44 117 496 0123
 ```
 
-and,
+### Hosting other languages
+
+A *source atom* is an indented block whose payload is captured verbatim. A *literal atom*
+uses an arbitrary delimiter line and preserves every byte of its payload — including
+trailing spaces, leading whitespace, and the sigil character.
 
 ```tel
-  reference #foo
-```
-
-would not contain any comments.
-
-A comment may also appear alone on a line, but the whitespace around it is significant: it must
-exist at a valid indentation level, that is, preceded by an even number of spaces, and up to one
-level higher than the previous line.
-
-For example, like this,
-
-```tel
-usr
-  local
-    bin
-
-      # This is a valid comment
-```
-
-or this,
-
-```tel
-usr
-  local
-    bin
-
-  # This is a valid comment
-```
-
-but not this,
-
-```tel
-usr
-  local
-    bin
-
-          # This is a valid comment
-```
-
-or this:
-
-```tel
-usr
-  local
-    bin
-
- # This is a valid comment
-```
-
-Comments are _attached_ to data nodes, and their attachment is determined by the whitespace around
-them. Comments will attach to a data node if they appear on the line immediately preceding the data,
-at the same level of indentation. If that node is deleted by a computer editor, the comment will be
-deleted too.
-
-Standalone comments may also be followed by blank line, in which case their are attached to the
-parent node. Such comments will be retained even when data nodes around them are modified, but will
-be removed if the parent node is deleted.
-
-An uninterrupted sequence of comment lines at the same indentation level is treated as a single
-comment.
-
-There are two special rules relating to comments on the first line of a TEL document: if the first
-line is a comment (one or more lines long), then it _must_ be followed by a blank line; and the
-requirement that the `#` be followed by a space is relaxed _only_ for a comment on the first line of
-the document.
-
-These two exceptions facilitate the inclusion of a shebang line at the start of a document, such as,
-
-```tel
-#!/usr/bin/env processor
-
-model
-  data
-```
-
-### Multiline values
-
-Sometimes it is necessary to write a value containing more than one line of text, or which contains
-spaces, or the character sequence ` #`, without being considered a comment. This is possible using a
-_double indent_: instead of writing a key and its value on the same line, such as,
-
-```tel
-dog
-  name        Fido
-  description furry
-```
-
-we can write:
-
-```tel
-dog
-  name Fido
+fixture sample-payload
   description
-      Furry, brown and cuddly.
+      A JSON document carried inside TEL,
+      with no escaping or fence wrapping.
+  json
+      { "name": "Fido", "kind": "dog" }
+
+  shell
+        ---
+        #!/usr/bin/env bash
+        echo "Greetings from $(hostname)"
+        ---
 ```
 
-A double-indented value continues so long as its indentation level is maintained. Thus, in,
+### Schemas
+
+A schema is itself a TEL document describing the shape of conforming documents. Cardinality
+defaults to "exactly one"; `optional` loosens to "zero or one", `repeatable` loosens to "zero
+or more". Layers may *tighten* these defaults in later versions but never loosen them.
 
 ```tel
-dog
-  name Fido
-  description
-      Furry, brown
-      and cuddly.
+tel 1.0
+
+name contact
+
+define phone-number
+  field country-code
+    scalar string
+  field number
+    scalar string
+
+document
+  field name
+    scalar string
+  field email optional
+    scalar string
+  field phone optional repeatable
+    type phone-number
+  select
+    variant active
+      flag
+    variant archived
+      flag
 ```
 
-the value of `description` would be, `Furry, brown\nand cuddly`: the newline character (`\n`) is
-part of the value, but the six spaces of indentation are not. Nevertheless, additional spaces may be
-included:
+A document under this schema:
 
 ```tel
-  description
-      Furry, brown
-       and cuddly
+tel 1.0 contact
+
+contact alice
+  email alice@example.org
+  phone
+    country-code 44
+    number       2079460958
+  active
 ```
 
-would be interpreted as a `Furry, brown\n and cuddly`, but any subsequent line with less indentation
-would terminate the multiline value, and be interpreted as new data.
+### Validators
 
-This is particularly useful for embedding other languages in TEL. For example,
+Each `scalar` may declare one or more named **validators** (applied in AND-conjunction). A
+struct may carry its own validators for cross-field constraints. Validator names live in a
+single shared namespace and are resolved at parse time by a host-language callback. Three
+built-in validators (`identifier`, `sigil`, `string`) are guaranteed by every conforming
+parser.
 
 ```tel
-data
-  representations
-    json
-        { "name": "Fido", "description": "furry" }
+field hostname
+  scalar
+    validate non-empty
+    validate dns-label
 
-    xml
-        <dog>
-          <name>Fido</name>
-          <description>furry</description>
-        </dog>
-
-    markdown
-        # Dog
-
-        *Fido* is a furry dog.
+define event
+  field start-date
+    scalar string
+  field end-date
+    scalar string
+  validate start-precedes-end
 ```
-
-Note, in particular, that since the markdown value, `markdown`, is indented as a multiline value,
-`# Dog` is not interpreted as a comment.
-
-### Embedded form
-
-When embedding TEL data in a host language, we often want to add additional indentation so that the
-embedded TEL aligns with the surrounding code. When a TEL document is parsed, the indentation of the
-first line containing data is noted, and subtracted from all subsequent lines.
-
-For example, in Scala we might write,
-
-```scala
-object Data:
-  val animal: String = """
-    Animal dog
-      name Fido
-      legs 4
-      tail yes
-  """
-```
-
-It is therefore also possible to interpret any contiguous fragment of a TEL document provided no
-line contains less indentation than the first line of data.
-
-From the example at the top of the page, the fragment,
-
-```tel
-  module alpha
-    name         Alpha
-    description  This is a description
-```
-
-is itself a valid TEL document.
 
 ## Binary form (BinTEL)
 
-TEL can provide a convenient way of storing or transmitting tree-structured data. But for fast
-serialization and deserialization, a binary form exists, as a direct translation of the same data
-model, which can be written and read faster, and which uses less memory. This is called BinTEL.
+Every well-typed TEL document has a deterministic **BinTEL** encoding (see
+[`spec/bintel.md`](spec/bintel.md)). BinTEL is type-tag-free — the schema supplies all
+typing, so the byte stream encodes only keyword indices and scalar values. A BinTEL stream
+begins with the four bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in
+BASE-256 textual form.
 
-Although BinTEL is a _binary_ format, in the sense that it is not primarily for human consumption,
-it contains only valid printable UTF-8 characters, making it seamless to copy/paste or to embed
-within other textual data formats, such as XML or JSON.
+The SHA-256 hash of a BinTEL document root is the document's **value hash**: a stable,
+schema-aware identifier suitable for content addressing. Composed schemas (base + layers)
+are identified by a **palimpsest** of component hashes, encoded as a single BASE-256 token
+on the pragma line.
 
-should use the custom Media Type `application/x-bintel`. BinTEL data always begins with the byte
-sequence, `b1` `c0` `d1`, which looks like `±ÀÑ` when interpreted as `UTF-8`.
+## BASE-256
 
-## Schemas
+[`spec/base256.md`](spec/base256.md) describes a binary-to-text encoding that maps every
+byte to one Unicode letter (or ASCII digit) drawn from a fixed 256-character alphabet. A
+BASE-256-encoded string is one word under Unicode word-segmentation (double-click selects
+the whole token), contains no whitespace or punctuation, and decodes losslessly via a
+single modulo operation.
 
-A TEL schema is an untyped TEL document which may be used to verify other TEL documents. Its
-structure should mirror that of the documents it verifies: each line begins with, and defines, a
-keyword which may appear at that position in the tree. The words that follow are the names of the
-parameters to that keyword.
+## Where to go next
 
-Additionally, each keyword or paramater may be suffixed (without space) by a qualifying symbol.
-
-### Qualifiers
-
-- `?`: parameter or keyword is optional; may appear zero or once
-- `+`: parameter or keyword is required and may appear once or many times
-- `*`: parameter or keyword may appear zero, once or many times
-- `!`: parameter is required and must be unique
-- `&`: parameter is the concatenation of remaining words, including spaces and terminated by a
-  newline
-- `~`: keyword may also appear zero, once or many times in this section or any descendant
-
-For example,
-
-```tel-schema
-child? arg
-```
-
-specifies the keyword `child` which may optionally appear once, with a required argument called
-`arg`. This schema would validate the document,
-
-```tel
-child alpha
-```
-
-Or, for example,
-
-```tel-schema
-employee+ id! name&
-```
-
-specifies the `employee` keyword which must appear at least once, but may be repeated, with an `id`
-parameter that must be unique, and a `name` parameter, which is the concatenation of the rest of the
-line. Such a schema would verify, for example,
-
-```tel
-employee sgs Simon G. Smith
-employee rp  Richard Price
-```
-
-### Verification
-
-_Todo_
+- [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system,
+  error taxonomy, machine operations, round-trip properties).
+- [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format.
+- [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed
+  schema signatures.
+- [`spec/base256.md`](spec/base256.md) — the BASE-256 textual encoding.
+- [`demo/`](demo/) — worked schemas and documents covering inline/source/literal
+  atoms, layered schemas, struct validators, and the canonical `tel-schema` self-bootstrap.
