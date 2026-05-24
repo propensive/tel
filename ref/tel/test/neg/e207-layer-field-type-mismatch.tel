@@ -1,13 +1,11 @@
 tel 1.0 https://tel-lang.org/schema/tel-schema
 
-name e209-test
+name e207-test
 
 document
-  field foo
-    scalar string
+  field foo string
 
 layer
   name extension
-  root
-    field foo
-      scalar string
+  overlay
+    field foo identifier

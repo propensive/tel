@@ -232,13 +232,11 @@ fn enumerate_children<'a>(
         if !had_filling {
             if let Member::Field(f) = m {
                 if f.required {
-                    if let Type::Scalar(sc) = &f.r#type {
-                        if let Some(def) = &sc.default {
-                            out.push(Element::DefaultScalar {
-                                keyword: &f.keyword,
-                                value: def,
-                            });
-                        }
+                    if let Some(def) = &f.default {
+                        out.push(Element::DefaultScalar {
+                            keyword: &f.keyword,
+                            value: def,
+                        });
                     }
                 }
             }
@@ -706,12 +704,11 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field {
                     required: true, repeatable: false,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()], default: None,
-                    }),
+                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         // Document containing `name Alice`.
         let doc = crate::Document {
@@ -740,19 +737,19 @@ mod tests {
 
     #[test]
     fn encode_root_with_default_substitution() {
-        // Schema: required scalar `name` with default "anon".
+        // Schema: required scalar `name` with default "anon" (Field.default).
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
                     required: true, repeatable: false,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()], default: Some("anon".to_string()),
-                    }),
+                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()] }),
+                    default: Some("anon".to_string()),
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         // Document with no children (name absent — default applies).
         let doc = crate::Document {
@@ -772,12 +769,11 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field {
                     required: true, repeatable: false,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()], default: None,
-                    }),
+                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -812,10 +808,10 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field {
                     required: false, repeatable: false,
                     keyword: "ok".to_string(),
-                    r#type: crate::Type::Flag,
+                    r#type: crate::Type::Flag, default: None,
                 })], validators: Vec::new(),
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -848,22 +844,20 @@ mod tests {
                             crate::Member::Field(crate::Field {
                                 required: true, repeatable: false,
                                 keyword: "first".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()], default: None,
-                                }),
+                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                             }),
                             crate::Member::Field(crate::Field {
                                 required: true, repeatable: false,
                                 keyword: "last".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()], default: None,
-                                }),
+                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                             }),
                         ],
                         validators: vec![],
-                    }),
+                    }), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -930,12 +924,11 @@ mod tests {
                     required: true, repeatable: false,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar {
-                        validators: vec!["string".to_string()], default: None,
-                    }),
+                        validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         }
     }
 
@@ -1066,11 +1059,11 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field {
                     required: true, repeatable: false,
                     keyword: "child".to_string(),
-                    r#type: crate::Type::Reference("missing-definition".to_string()),
+                    r#type: crate::Type::Reference("missing-definition".to_string()), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(),
+            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
         };
         // Encode (against a different schema; the decoder will reach the
         // dangling Reference). Simpler: hand-craft a minimal stream that

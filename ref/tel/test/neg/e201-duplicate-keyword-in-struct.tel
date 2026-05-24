@@ -3,7 +3,5 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name e202-test
 
 document
-  field foo
-    scalar string
-  field foo
-    scalar string
+  field foo string
+  field foo string

@@ -371,7 +371,7 @@ fn compute_layer_hash(layer_compound: &Compound) -> [u8; 32] {
         },
         layers: Vec::new(),
         sigil: tel.sigil,
-        types: tel.types.clone(),
+        types: tel.types.clone(), scalars: Vec::new(),
     };
     bintel::value_hash(&layer_doc, &synth_schema)
 }
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn resolver_library_lookup_after_add_to_library() {
         // Schema with no layers: signature is exactly the base hash (32 bytes).
-        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x\n    scalar string\n";
+        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x string\n";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(src).expect("add_to_library should succeed");
         assert_eq!(sig.len(), 32, "no-layer signature is 32 bytes");
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn resolver_fetches_url_when_signature_absent() {
-        let body = "name greeting\n\ndocument\n  field x\n    scalar string\n";
+        let body = "name greeting\n\ndocument\n  field x string\n";
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/x", body);
         let mut r = Resolver::with_fetcher(fetcher);
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn resolver_signature_mismatch_is_reported() {
-        let body = "name greeting\n\ndocument\n  field x\n    scalar string\n";
+        let body = "name greeting\n\ndocument\n  field x string\n";
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/x", body);
         let mut r = Resolver::with_fetcher(fetcher);
@@ -503,13 +503,12 @@ tel 1.0
 name layered-demo
 
 document
-  field x
-    scalar string
+  field x string
 
-layer extra
-  root
-    field y
-      scalar string
+layer
+  name extra
+  overlay
+    field y string
 ";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(layered_src).expect("add_to_library succeeds");
@@ -538,13 +537,12 @@ tel 1.0
 name url-layered
 
 document
-  field x
-    scalar string
+  field x string
 
-layer extra
-  root
-    field y optional
-      scalar string
+layer
+  name extra
+  overlay
+    field y optional string
 ";
         // First compute the expected signature using add_to_library; this
         // doesn't add the schema to the library — we discard the resolver
@@ -576,13 +574,12 @@ tel 1.0
 name with-layer
 
 document
-  field x
-    scalar string
+  field x string
 
-layer extra
-  root
-    field y
-      scalar string
+layer
+  name extra
+  overlay
+    field y string
 ";
         let sig = r.add_to_library(src).unwrap();
         // Now drop the layer from the library and re-attempt resolution.

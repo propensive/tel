@@ -22,7 +22,7 @@ Document {
                     keyword: "name",
                     atoms: [
                         Inline {
-                            text: "e209-test",
+                            text: "e207-test",
                             preceding_spaces: 1,
                         },
                     ],
@@ -52,28 +52,13 @@ Document {
                                             text: "foo",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -108,7 +93,7 @@ Document {
                                     children: [],
                                 },
                                 Compound {
-                                    keyword: "root",
+                                    keyword: "overlay",
                                     atoms: [],
                                     remark: None,
                                     children: [
@@ -123,31 +108,16 @@ Document {
                                                             text: "foo",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "scalar",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "string",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 1,
+                                                        Inline {
+                                                            text: "identifier",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
-                                            trailing_blank_lines: 0,
+                                            trailing_blank_lines: 1,
                                         },
                                     ],
                                 },
@@ -162,4 +132,4 @@ Document {
     ],
 }
 errors:
-  E207 [0,0): Layer Field merge requires both base and layer types to be Struct: layer `extension` overrides keyword `foo` but Field merge requires both base and layer types to be Struct
+  E207 [0,0): Layer Field merge requires both base and layer types to be Struct: layer `extension` field `foo` in overlay: type mismatch (base and layer must declare the same type, or both be Struct)

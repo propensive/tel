@@ -4,13 +4,17 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 #
 # Demonstrates the constructs an everyday schema author will reach for:
 #
-#   - required and optional `field`s with `scalar` types
+#   - required and optional `field`s of named scalar types (`string`)
 #   - a `repeatable` field (`phone`)
-#   - a named `define`d struct (`phone-number`, `address`) referenced from
-#     multiple positions via `type`
+#   - named `record`s (`phone-number`, `address`) referenced from
+#     multiple positions
 #   - a `select` member with all-`flag` variants for an enumerated status,
 #     which can be set inline as an atom on the parent compound
-#   - a `default` value on a required scalar
+#   - a per-field `default` value (`country`)
+#
+# Every `field` and `variant` carries its type as an inline atom after
+# any flags; types are named with `record`/`scalar` or one of the
+# predefined names `flag`, `string`, `identifier`, `sigil`.
 #
 # To see what a document conforming to this schema looks like, see the
 # accompanying `contact-document.tel`. This schema document is itself
@@ -18,33 +22,21 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name contact
 
-define phone-number
-  field country-code
-    scalar string
-  field number
-    scalar string
+record phone-number
+  field country-code string
+  field number string
 
-define address
-  field street
-    scalar string
-  field city
-    scalar string
-  field country
-    scalar string unknown
+record address
+  field street string
+  field city string
+  field country string unknown
 
 document
-  field name
-    scalar string
-  field email optional
-    scalar string
-  field phone optional repeatable
-    type phone-number
-  field home optional
-    type address
-  field work optional
-    type address
+  field name string
+  field email optional string
+  field phone optional repeatable phone-number
+  field home optional address
+  field work optional address
   select
-    variant active
-      flag
-    variant archived
-      flag
+    variant active flag
+    variant archived flag

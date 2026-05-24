@@ -37,7 +37,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "address",
@@ -57,28 +57,13 @@ Document {
                                             text: "street",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -87,28 +72,13 @@ Document {
                                             text: "city",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -138,28 +108,13 @@ Document {
                                             text: "home",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "address",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "address",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -168,31 +123,16 @@ Document {
                                             text: "work",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "address",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
+                                        Inline {
+                                            text: "address",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },

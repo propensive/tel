@@ -37,7 +37,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "dup-name",
@@ -57,28 +57,13 @@ Document {
                                             text: "x",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -93,7 +78,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "dup-name",
@@ -113,28 +98,13 @@ Document {
                                             text: "y",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -164,31 +134,16 @@ Document {
                                             text: "foo",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "dup-name",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
+                                        Inline {
+                                            text: "dup-name",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },
@@ -198,4 +153,4 @@ Document {
     ],
 }
 errors:
-  E211 [0,0): Two or more Definitions share the same name: duplicate Definition name `dup-name` in base schema
+  E211 [0,0): Two or more Definitions share the same name: duplicate definition name `dup-name` in base schema

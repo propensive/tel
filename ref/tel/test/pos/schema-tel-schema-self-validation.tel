@@ -16,93 +16,67 @@ name tel-schema
 
 # The body of a Layer (name, optional definitions, root struct).
 
-define layer-body
-  field name
-    scalar identifier
-  field define repeatable
-    type define-body
-  field root
-    type struct-body
+record layer-body
+  field name identifier
+  field define repeatable define-body
+  field root struct-body
 
 # The body of a definition (name + members).
 
-define define-body
-  field name
-    scalar identifier
+record define-body
+  field name identifier
   select repeatable
-    variant field
-      type field-body
-    variant select
-      type select-body
+    variant field field-body
+    variant select select-body
 
 # The body of a Struct (a list of Members; each Member is field or select).
 
-define struct-body
+record struct-body
   select repeatable
-    variant field
-      type field-body
-    variant select
-      type select-body
+    variant field field-body
+    variant select select-body
 
 # The body of a Field (keyword first, then optional flags, then type).
 # Keyword-first ordering lets a field be declared inline as
 # `field some-keyword repeatable` without ambiguity.
 
-define field-body
-  field keyword
-    scalar identifier
-  field required
-    flag
-  field repeatable
-    flag
+record field-body
+  field keyword identifier
+  field required flag
+  field repeatable flag
   select required
-    variant struct
-      type struct-body
-    variant scalar
-      type scalar-body
-    variant flag
-      flag
-    variant type
-      type reference-body
+    variant struct struct-body
+    variant scalar scalar-body
+    variant flag flag
+    variant type reference-body
 
 # The body of a Select (required, repeatable, list of variants).
 
-define select-body
-  field required
-    flag
-  field repeatable
-    flag
-  field variant repeatable
-    type variant-body
+record select-body
+  field required flag
+  field repeatable flag
+  field variant repeatable variant-body
 
 # The body of a Variant (keyword + type).
 
-define variant-body
-  field keyword
-    scalar identifier
+record variant-body
+  field keyword identifier
   select required
-    variant struct
-      type struct-body
-    variant scalar
-      type scalar-body
-    variant flag
-      flag
-    variant type
-      type reference-body
+    variant struct struct-body
+    variant scalar scalar-body
+    variant flag flag
+    variant type reference-body
 
 # The body of a Scalar (validator + optional default).
 
-define scalar-body
-  field validator
-    scalar identifier
-  field default
-    scalar string
+record scalar-body
+  field validator identifier
+  field default string
 
 # The body of a Reference (a single name).
 
-define reference-body
-  field name
-    scalar identifier
+record reference-body
+  field name identifier
 
 # ---------------------------------------------------------------------------
 # The schema document struct. Describes the top-level members of every TEL
@@ -110,13 +84,8 @@ define reference-body
 # ---------------------------------------------------------------------------
 
 document
-  field name
-    scalar identifier
-  field sigil
-    scalar sigil
-  field define repeatable
-    type define-body
-  field document
-    type struct-body
-  field layer repeatable
-    type layer-body
+  field name identifier
+  field sigil sigil
+  field define repeatable define-body
+  field document struct-body
+  field layer repeatable layer-body

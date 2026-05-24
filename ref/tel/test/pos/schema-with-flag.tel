@@ -3,7 +3,5 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name flag-example
 
 document
-  field active
-    flag
-  field name
-    scalar string
+  field active flag
+  field name string

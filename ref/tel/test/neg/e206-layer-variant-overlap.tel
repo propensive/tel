@@ -3,14 +3,11 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name e208-test
 
 document
-  field name
-    scalar string
+  field name string
 
 layer
   name extension
-  root
+  overlay
     select
-      variant name
-        flag
-      variant other
-        flag
+      variant name flag
+      variant other flag

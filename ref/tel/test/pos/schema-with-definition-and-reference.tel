@@ -2,14 +2,10 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name address-schema
 
-define address
-  field street
-    scalar string
-  field city
-    scalar string
+record address
+  field street string
+  field city string
 
 document
-  field home
-    type address
-  field work
-    type address
+  field home address
+  field work address

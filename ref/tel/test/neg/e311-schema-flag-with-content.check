@@ -86,4 +86,5 @@ Document {
     ],
 }
 errors:
-  E311 [0,0): Flag-typed compound has atoms or compound children: Flag compound `flag` has atoms or children
+  E306 [0,0): Compound keyword is not recognized for its parent type: unrecognized keyword `flag` in `field`
+  E307 [0,0): Required member absent and no default available: required member `type` is absent and has no default

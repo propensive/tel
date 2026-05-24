@@ -3,17 +3,14 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name e207-test
 
 document
-  field foo
-    scalar string
+  field foo string
 
 layer
   name same-name
-  root
-    field a
-      scalar string
+  overlay
+    field a string
 
 layer
   name same-name
-  root
-    field b
-      scalar string
+  overlay
+    field b string

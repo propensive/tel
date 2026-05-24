@@ -18,33 +18,21 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name contact
 
-define phone-number
-  field country-code
-    scalar string
-  field number
-    scalar string
+record phone-number
+  field country-code string
+  field number string
 
-define address
-  field street
-    scalar string
-  field city
-    scalar string
-  field country
-    scalar string unknown
+record address
+  field street string
+  field city string
+  field country string unknown
 
 document
-  field name
-    scalar string
-  field email
-    scalar string
-  field phone repeatable
-    type phone-number
-  field home
-    type address
-  field work
-    type address
+  field name string
+  field email string
+  field phone repeatable phone-number
+  field home address
+  field work address
   select required
-    variant active
-      flag
-    variant archived
-      flag
+    variant active flag
+    variant archived flag

@@ -52,35 +52,20 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "my-default-name",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "my-default-name",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },

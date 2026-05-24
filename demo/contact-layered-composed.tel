@@ -22,39 +22,25 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name contact-composed
 
-define phone-number
-  field country-code
-    scalar string
-  field number
-    scalar string
+record phone-number
+  field country-code string
+  field number string
 
-define organization
-  field name
-    scalar string
-  field role optional
-    scalar string
+record organization
+  field name string
+  field role optional string
 
-define address-body
-  field street
-    scalar string
-  field city
-    scalar string
-  field country
-    scalar string
-  field postcode optional
-    scalar string
+record address-body
+  field street string
+  field city string
+  field country string
+  field postcode optional string
 
 document
-  field name
-    scalar string
-  field email optional
-    scalar string
-  field address optional
-    type address-body
-  field phone optional repeatable
-    type phone-number
-  field business optional
-    type organization
+  field name string
+  field email optional string
+  field address optional address-body
+  field phone optional repeatable phone-number
+  field business optional organization
   select
-    variant active
-      flag
+    variant active flag

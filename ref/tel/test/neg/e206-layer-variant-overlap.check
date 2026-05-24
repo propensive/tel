@@ -52,28 +52,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -108,7 +93,7 @@ Document {
                                     children: [],
                                 },
                                 Compound {
-                                    keyword: "root",
+                                    keyword: "overlay",
                                     atoms: [],
                                     remark: None,
                                     children: [
@@ -132,23 +117,13 @@ Document {
                                                                             text: "name",
                                                                             preceding_spaces: 1,
                                                                         },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [
-                                                                        Block {
-                                                                            comments: [],
-                                                                            tabulation: None,
-                                                                            compounds: [
-                                                                                Compound {
-                                                                                    keyword: "flag",
-                                                                                    atoms: [],
-                                                                                    remark: None,
-                                                                                    children: [],
-                                                                                },
-                                                                            ],
-                                                                            trailing_blank_lines: 0,
+                                                                        Inline {
+                                                                            text: "flag",
+                                                                            preceding_spaces: 1,
                                                                         },
                                                                     ],
+                                                                    remark: None,
+                                                                    children: [],
                                                                 },
                                                                 Compound {
                                                                     keyword: "variant",
@@ -157,26 +132,16 @@ Document {
                                                                             text: "other",
                                                                             preceding_spaces: 1,
                                                                         },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [
-                                                                        Block {
-                                                                            comments: [],
-                                                                            tabulation: None,
-                                                                            compounds: [
-                                                                                Compound {
-                                                                                    keyword: "flag",
-                                                                                    atoms: [],
-                                                                                    remark: None,
-                                                                                    children: [],
-                                                                                },
-                                                                            ],
-                                                                            trailing_blank_lines: 1,
+                                                                        Inline {
+                                                                            text: "flag",
+                                                                            preceding_spaces: 1,
                                                                         },
                                                                     ],
+                                                                    remark: None,
+                                                                    children: [],
                                                                 },
                                                             ],
-                                                            trailing_blank_lines: 0,
+                                                            trailing_blank_lines: 1,
                                                         },
                                                     ],
                                                 },
@@ -197,3 +162,4 @@ Document {
 }
 errors:
   E206 [0,0): Layer Select variant keyword overlaps existing keyword in base Struct: layer `extension` adds Select variant `name` which collides with an existing keyword in the composed schema
+  E206 [0,0): Layer Select variant keyword overlaps existing keyword in base Struct: layer `extension` Select variant `name` in overlay collides with an existing Field keyword

@@ -3,5 +3,4 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name example
 unknown-top-level-thing
 document
-  field name
-    scalar string
+  field name string

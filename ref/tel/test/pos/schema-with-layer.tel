@@ -3,13 +3,10 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name base-schema-with-layer
 
 document
-  field name
-    scalar string
+  field name string
 
 layer
   name extension-v1
-  root
-    field email
-      scalar string
-    field active
-      flag
+  overlay
+    field email string
+    field active flag

@@ -115,4 +115,5 @@ Document {
     ],
 }
 errors:
-  E204 [0,0): Scalar has non-null default but member is not required: Scalar with non-null default `default-val` appears in a non-required member
+  E306 [0,0): Compound keyword is not recognized for its parent type: unrecognized keyword `scalar` in `field`
+  E307 [0,0): Required member absent and no default available: required member `type` is absent and has no default

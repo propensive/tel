@@ -2,14 +2,11 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name example
 
-define first-type
-  field x
-    scalar string
+record first-type
+  field x string
 
 document
-  field name
-    scalar string
+  field name string
 
-define second-type
-  field y
-    scalar string
+record second-type
+  field y string

@@ -37,7 +37,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "first-type",
@@ -57,28 +57,13 @@ Document {
                                             text: "x",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -108,28 +93,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -144,7 +114,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "second-type",
@@ -164,31 +134,16 @@ Document {
                                             text: "y",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },
@@ -198,4 +153,4 @@ Document {
     ],
 }
 errors:
-  E309 [0,0): Compound children of the same member are not contiguous: children for member `define` are not contiguous
+  E309 [0,0): Compound children of the same member are not contiguous: children for member `record` are not contiguous

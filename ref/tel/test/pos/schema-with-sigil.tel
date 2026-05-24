@@ -4,5 +4,4 @@ name custom-sigil-schema
 sigil @
 
 document
-  field name
-    scalar string
+  field name string

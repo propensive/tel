@@ -2,12 +2,9 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name tree-schema
 
-define node
-  field value
-    scalar string
-  field child
-    type node
+record node
+  field value string
+  field child node
 
 document
-  field root
-    type node
+  field root node

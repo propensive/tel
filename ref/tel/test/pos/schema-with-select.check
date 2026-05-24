@@ -52,28 +52,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "select",
@@ -96,23 +81,13 @@ Document {
                                                             text: "active",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "flag",
-                                                                    atoms: [],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "flag",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -121,23 +96,13 @@ Document {
                                                             text: "inactive",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "flag",
-                                                                    atoms: [],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "flag",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -146,26 +111,16 @@ Document {
                                                             text: "unknown",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "flag",
-                                                                    atoms: [],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 1,
+                                                        Inline {
+                                                            text: "flag",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
-                                            trailing_blank_lines: 0,
+                                            trailing_blank_lines: 1,
                                         },
                                     ],
                                 },

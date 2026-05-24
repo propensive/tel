@@ -79,7 +79,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "layer-body",
@@ -99,28 +99,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -133,28 +118,13 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "define-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "define-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -163,28 +133,13 @@ Document {
                                             text: "root",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "struct-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "struct-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -203,7 +158,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "define-body",
@@ -223,28 +178,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "select",
@@ -267,28 +207,13 @@ Document {
                                                             text: "field",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "field-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "field-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -297,28 +222,13 @@ Document {
                                                             text: "select",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "select-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "select-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
                                             trailing_blank_lines: 0,
@@ -342,7 +252,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "struct-body",
@@ -376,28 +286,13 @@ Document {
                                                             text: "field",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "field-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "field-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -406,28 +301,13 @@ Document {
                                                             text: "select",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "select-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "select-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
                                             trailing_blank_lines: 0,
@@ -457,7 +337,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "field-body",
@@ -477,28 +357,13 @@ Document {
                                             text: "keyword",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -507,23 +372,13 @@ Document {
                                             text: "required",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "flag",
-                                                    atoms: [],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "flag",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -532,23 +387,13 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "flag",
-                                                    atoms: [],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "flag",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "select",
@@ -571,28 +416,13 @@ Document {
                                                             text: "struct",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "struct-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "struct-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -601,28 +431,13 @@ Document {
                                                             text: "scalar",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "scalar-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "scalar-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -631,23 +446,13 @@ Document {
                                                             text: "flag",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "flag",
-                                                                    atoms: [],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "flag",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -656,28 +461,13 @@ Document {
                                                             text: "type",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "reference-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "reference-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
                                             trailing_blank_lines: 0,
@@ -701,7 +491,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "select-body",
@@ -721,23 +511,13 @@ Document {
                                             text: "required",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "flag",
-                                                    atoms: [],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "flag",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -746,23 +526,13 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "flag",
-                                                    atoms: [],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "flag",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -775,28 +545,13 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "variant-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "variant-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -815,7 +570,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "variant-body",
@@ -835,28 +590,13 @@ Document {
                                             text: "keyword",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "select",
@@ -879,28 +619,13 @@ Document {
                                                             text: "struct",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "struct-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "struct-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -909,28 +634,13 @@ Document {
                                                             text: "scalar",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "scalar-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "scalar-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -939,23 +649,13 @@ Document {
                                                             text: "flag",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "flag",
-                                                                    atoms: [],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "flag",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                                 Compound {
                                                     keyword: "variant",
@@ -964,28 +664,13 @@ Document {
                                                             text: "type",
                                                             preceding_spaces: 1,
                                                         },
-                                                    ],
-                                                    remark: None,
-                                                    children: [
-                                                        Block {
-                                                            comments: [],
-                                                            tabulation: None,
-                                                            compounds: [
-                                                                Compound {
-                                                                    keyword: "type",
-                                                                    atoms: [
-                                                                        Inline {
-                                                                            text: "reference-body",
-                                                                            preceding_spaces: 1,
-                                                                        },
-                                                                    ],
-                                                                    remark: None,
-                                                                    children: [],
-                                                                },
-                                                            ],
-                                                            trailing_blank_lines: 0,
+                                                        Inline {
+                                                            text: "reference-body",
+                                                            preceding_spaces: 1,
                                                         },
                                                     ],
+                                                    remark: None,
+                                                    children: [],
                                                 },
                                             ],
                                             trailing_blank_lines: 0,
@@ -1009,7 +694,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "scalar-body",
@@ -1029,28 +714,13 @@ Document {
                                             text: "validator",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -1059,28 +729,13 @@ Document {
                                             text: "default",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "string",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "string",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -1099,7 +754,7 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "define",
+                    keyword: "record",
                     atoms: [
                         Inline {
                             text: "reference-body",
@@ -1119,28 +774,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
                             trailing_blank_lines: 0,
@@ -1183,28 +823,13 @@ Document {
                                             text: "name",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "identifier",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "identifier",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -1213,28 +838,13 @@ Document {
                                             text: "sigil",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "scalar",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "sigil",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "sigil",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -1247,28 +857,13 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "define-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "define-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -1277,28 +872,13 @@ Document {
                                             text: "document",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "struct-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 0,
+                                        Inline {
+                                            text: "struct-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                                 Compound {
                                     keyword: "field",
@@ -1311,31 +891,16 @@ Document {
                                             text: "repeatable",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "type",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "layer-body",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
+                                        Inline {
+                                            text: "layer-body",
+                                            preceding_spaces: 1,
                                         },
                                     ],
+                                    remark: None,
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },

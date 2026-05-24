@@ -4,5 +4,4 @@ name e210-test
 sigil A
 
 document
-  field foo
-    scalar string
+  field foo string

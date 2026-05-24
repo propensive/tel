@@ -1,5 +1,4 @@
 tel 1.0 https://tel-lang.org/schema/tel-schema
 
 document
-  field foo
-    scalar string
+  field foo string

@@ -1196,18 +1196,27 @@ interface Schema {
   document: Struct;
   layers: Layer[];
   sigil: Sigil | null;
-  types: Definition[];
+  types: RecordDefinition[];
+  scalars: ScalarDefinition[];
 }
 
 interface Layer {
   name: string;
-  root: Struct;
-  types: Definition[];
+  overlay: Struct;
+  types: RecordDefinition[];
+  scalars: ScalarDefinition[];
 }
 
-interface Definition {
+type Definition = RecordDefinition | ScalarDefinition;
+
+interface RecordDefinition {
   name: string;
   members: Member[];
+  validators: string[];
+}
+
+interface ScalarDefinition {
+  name: string;
   validators: string[];
 }
 
@@ -1220,7 +1229,6 @@ interface Struct {
 
 interface Scalar {
   validators: string[];
-  default: string | null;
 }
 
 interface Flag {}
@@ -1236,6 +1244,7 @@ interface Field {
   repeatable: boolean;
   keyword: string;
   type: Type;
+  default: string | null;
 }
 
 interface Select {
@@ -1262,7 +1271,7 @@ to identify the schema in source form; it is **not** the same as the schema iden
 a document's pragma (§8.1), which is either a URL or a SHA-256 content hash of the schema's BinTEL.
 
 `Schema.document` is the root `Struct` that defines the type of the document root compound. It
-is `Struct`-typed directly (not `Type`-typed) by analogy with `Layer.root`: every schema must
+is `Struct`-typed directly (not `Type`-typed) by analogy with `Layer.overlay`: every schema must
 define a root struct, and no other `Type` variant is meaningful at the document root.
 
 `Schema.layers` is an ordered list of `Layer` values defining optional schema extensions. The empty
@@ -1283,7 +1292,7 @@ any schema whose data has cyclical structure. The empty list is the normal case 
 schemas.
 
 A `Layer`'s `name` is a kebab-case identifier (§20.7) labelling the layer. It MUST be unique
-across all layers of a schema (**E205**). `Layer.root` is a `Struct` whose members are merged into
+across all layers of a schema (**E205**). `Layer.overlay` is a `Struct` whose members are merged into
 the composed schema's root struct by the algorithm in §20.3. `Layer.types` is an ordered list of
 `Definition`s introduced by the layer; these merge with the base schema's `Schema.types` and any
 preceding layers' `types` to form a single namespace of definitions visible to all references in
@@ -1684,10 +1693,10 @@ namespace.
 
 #### Layer Body
 
-A `Layer` value has `name`, `types`, and `root` fields (see §20). In TEL source, a layer's
-`root` is OPTIONAL — a layer that introduces only `Definition`s without modifying the document
-root MAY omit `root` entirely. When `root` is absent it is treated as an empty `Struct` (no
-members).
+A `Layer` value has `name`, `types`, `scalars`, and `overlay` fields (see §20). In TEL source,
+a layer's `overlay` is OPTIONAL — a layer that introduces only definitions without modifying the
+document root MAY omit `overlay` entirely. When `overlay` is absent it is treated as an empty
+`Struct` (no members).
 
 #### Merge Algorithm
 
@@ -1780,65 +1789,63 @@ one-to-one to a field or interface in the §20 type model:
 
 | TEL keyword     | §20 construct                                  |
 | --------------- | ---------------------------------------------- |
-| `name`          | `Schema.name`, `Layer.name`, `Definition.name`, `Reference.name` (the parent compound's context determines which) |
+| `name`          | `Schema.name`, `Layer.name`, `RecordDefinition.name`, `ScalarDefinition.name` (parent context determines which) |
 | `document`      | `Schema.document`                              |
 | `layer`         | `Schema.layers[i]`                             |
 | `sigil`         | `Schema.sigil`                                 |
-| `define`        | `Schema.types[i]` (at schema root) or `Layer.types[i]` (inside a `layer` compound) |
-| `root`          | `Layer.root`                                   |
-| `field`        | `Member` variant: `Field` (also fills `Definition.members[i]`, `Struct.members[i]`, and `Layer.root`/`Schema.document` members) |
-| `select`        | `Member` variant: `Select` (same positions as `field`) |
+| `record`        | A named struct definition: `Schema.types[i]` at schema root, or `Layer.types[i]` inside a `layer` compound. The first inline atom is the record's name. |
+| `scalar`        | A named scalar definition: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the name; the body is one or more `validate <name>` lines. |
+| `overlay`       | `Layer.overlay` — the struct whose members are merged into the composed document root by the algorithm in §20.3. |
+| `field`         | `Member` variant: `Field`. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
+| `select`        | `Member` variant: `Select` (same positions as `field`). |
 | `optional`      | Loosens to `Field.required = false` / `Select.required = false` (Flag, base-side). |
 | `required`      | Tightens to `Field.required = true` / `Select.required = true` (Flag, layer-side override of `optional`). Redundant in a base since `required: true` is the default. |
 | `repeatable`    | Loosens to `Field.repeatable = true` / `Select.repeatable = true` (Flag, base-side). |
 | `irrepeatable`  | Tightens to `Field.repeatable = false` / `Select.repeatable = false` (Flag, layer-side override of `repeatable`). Redundant in a base since `repeatable: false` is the default. |
-| `keyword`       | `Field.keyword`, `Variant.keyword`           |
+| `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). |
 | `variant`       | `Select.variants[i]`                          |
-| `struct`        | `Type` variant: `Struct`                      |
-| `scalar`        | `Type` variant: `Scalar`                   |
-| `flag`          | `Type` variant: `Flag`                        |
-| `type`          | Names a `define`d struct via `Reference`. Used as one of the four variants in the type position of a `Field` or `Variant`. |
-| `validate`      | A repeatable Field naming a validator. In a `scalar`'s body, contributes to `Scalar.validators`. In a `define`d Struct's body (or in `document` / `root`), contributes to that Struct's `validators` list. The shared-namespace rule of §21.1 means the same name MAY be used in both contexts. |
-| `default`       | `Scalar.default`                            |
-| `exclude`       | A layer-only operation (§20.3) that excludes a `Select` variant from the merged Struct. Its inline atom is the keyword K of the variant to exclude. |
+| `type`          | The type-name field of `field-body` / `variant-body`. The value is a kebab-case identifier resolving (via §20.2 reference resolution) to either a user-declared `record` or `scalar`, or a built-in type (`flag`, `string`, `identifier`, `sigil`). |
+| `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, `document`, or `overlay`, names a struct-level validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in both contexts. |
+| `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E204 otherwise). |
+| `exclude`       | A layer-only operation (§20.3) that excludes a `Select` variant from the merged Struct. Its inline atom is the keyword K of the variant to exclude. Permitted only inside `overlay`. |
+
+**Predefined type names.** The names `flag`, `string`, `identifier`, and
+`sigil` are predefined and resolve to the built-in `Flag` type and the three
+built-in scalar validators (§21.5). User schemas MAY NOT `record` or `scalar`
+any of these names (collision is **E211**).
 
 **Reserved keywords.** Only `tel` is universally reserved across all TEL documents (**E209**, §8).
 The other keywords listed above are part of the tel-schema vocabulary and have meaning only when a
 TEL document is being parsed as a *schema document* — i.e. when its schema is the tel-schema. They
 do not constrain user-defined schemas: a user schema may freely define `Field.keyword` or
-`Variant.keyword` values such as `name`, `document`, `layer`, `define`, `struct`, etc., because the
+`Variant.keyword` values such as `name`, `document`, `layer`, `record`, `scalar`, etc., because the
 validity check applied to a user document is against the user schema's keyword set, not against
 the schema-language vocabulary.
 
-**Member ordering.** Within each Struct that the tel-schema describes, members are ordered per the
-recommendation in §20: required Scalars first, optional Scalars next, then any all-Flag Select
-or single repeatable Scalar member, and finally the structurally typed members. The `keyword`
-Scalar in particular always comes first within `Field`-body and `Variant`-body so that a field
-or variant may be declared with the keyword as the first inline atom, immediately followed by any
-Flag atoms. For example, a `field` compound may be written:
+**Member ordering and inline syntax.** Member order in `field-body` is
+`keyword`, the four loosen/tighten flags (`optional`, `required`,
+`repeatable`, `irrepeatable`), then `type` (required Scalar), then `default`
+(optional Scalar). The atom-phase rules of §20.2 / §20.8 let a typical
+field declaration fit a single line: the keyword is the first inline atom,
+each matching flag atom toggles its flag, the next non-flag atom fills
+`type`, and any remaining atom fills `default`. For example,
 
 ```tel
-field foo repeatable
-  scalar identifier
+field country optional string unknown
 ```
 
-— with `foo` assigned to the `keyword` Scalar and `repeatable` matched against the `repeatable`
-Flag member; the field is required by default. The type Select variant (`scalar`, carrying its own
-inline `validator` atom) follows as a child compound. No ambiguity arises because the keyword
-position is fixed by member order; placing flag atoms before the keyword is invalid (E303).
+declares an optional `country` field of type `string` (the built-in scalar)
+with default value `unknown`. Variants follow the same pattern but carry only
+`keyword` and `type`, e.g. `variant active flag`. There are no marker
+keywords: position determines meaning.
 
-**References.** Where the type of a `Field` or `Variant` is itself a `Reference`, the `type`
-variant of the type Select is written directly as a child compound, with the referenced name as a
-single inline atom:
-
-```tel
-field foo
-  type address
-```
-
-— where `address` is a `define` defined elsewhere in the same schema (or its base/layers). The
-reference is resolved during type assignment per §20.2. References may form cycles via Structs in
-their resolved bodies (the natural case for recursive data).
+**References.** A `Field` or `Variant` type-name resolves through the
+composed namespace described above. If the name is `flag`, `string`,
+`identifier`, or `sigil` it short-circuits to the built-in. Otherwise it
+must match a `record` or `scalar` declared somewhere in the composed schema
+(base or any layer); failing that, the schema is invalid with **E210**.
+References may form cycles via `record` definitions in their resolved
+bodies — the natural case for recursive data.
 
 **Self-describing closure.** [`tel-schema.tel`](tel-schema.tel) MUST be a valid TEL document when
 parsed under the schema it itself defines. Implementations MUST produce a byte-identical BinTEL
@@ -1851,10 +1858,10 @@ The pinned value, computed against the canonical
 
 | Form     | Value                                                                |
 | -------- | -------------------------------------------------------------------- |
-| SHA-256  | `df50abce267dc79106d4320f0879fb054236e8dce9efa04872fb5e2a6560fc52`   |
+| SHA-256  | `55d061b2ced2bcf3d79edfa825aaddf906fd3eca24da7c9b5237ae83782432aa`   |
 | BASE-256 | `ӟPΫώȦṽÇґĆÔ2ďȈyûąB6ǨӜῩӯƠHrûŞЪeŠǼR`                                   |
 
-The BinTEL document root encoding of `tel-schema.tel` is 980 bytes; the raw bytes are recorded in
+The BinTEL document root encoding of `tel-schema.tel` is 970 bytes; the raw bytes are recorded in
 [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex).
 
 **Bootstrap requirement.** A schema document cannot itself be parsed without a schema, and the
@@ -1898,33 +1905,32 @@ fields of the `Schema` model:
    - `keyword` child → `Field.keyword`.
    - The four loosen/tighten Flag children compute `Field.required` and `Field.repeatable` per
      the rules above.
-   - One of `struct`, `scalar`, `flag`, `type` children → `Field.type`, constructed per step 5.
+   - The `type` Scalar child or atom → `Field.type` as a `Reference` (per step 5).
+   - The optional `default` Scalar child or atom → `Field.default` (a string), or `null` if absent.
 
    Within a `Select`:
    - The four loosen/tighten Flag children compute `Select.required` and `Select.repeatable`
      by the same rules.
    - Each `variant` child → an entry in `Select.variants`, in source order. A `Variant` has a
-     `keyword` child for `Variant.keyword`, and a `struct`/`scalar`/`flag`/`type` child for
-     `Variant.type`.
+     `keyword` child or first inline atom for `Variant.keyword`, and a `type` child or second
+     inline atom for `Variant.type` (a `Reference`).
 4. **`Layer` construction.** From a `layer` element: take the `name` child as `Layer.name`; build
-   `Layer.root` from the `root` element's children per step 6 (treating an absent `root` as an
-   empty Struct); construct `Layer.types` from each `define` child within the layer, **in source
-   order**, so that `Layer.types[0]` is the first definition declared inside the layer.
-5. **`Type` construction.** From the chosen type-Select variant:
-   - `struct` element → the `Struct` built from the element's children per step 6.
-   - `scalar` element → `Scalar` whose `validators` list collects each `validate` child in source
-     order, and whose `default` is the text of the optional `default` child (or `null`).
-   - `flag` element → `Flag` (no fields).
-   - `type` element → `Reference` with `name` from its inline atom.
+   `Layer.overlay` from the `overlay` element's children per step 6 (treating an absent `overlay`
+   as an empty Struct); construct `Layer.types` from each `record` child within the layer, in
+   source order; construct `Layer.scalars` from each `scalar` child within the layer, in source
+   order.
+5. **`Type` construction.** Every `Field.type` and `Variant.type` is a `Reference` whose `name` is
+   the inline-atom (or `type` child-compound) text. Resolution of a `Reference` happens at type
+   assignment time (§20.2) and selects either a record's `Struct`, a scalar definition's `Scalar`,
+   or one of the four built-in types (`flag`, `string`, `identifier`, `sigil`).
 6. **`Struct` construction.** Given the children of a Struct-shaped compound (the `document`
-   element, a `layer` element's `root`, a `define` element's body, or a `struct` Type element),
-   produce a `Struct` (or, for `define`, a `Definition` whose members and validators are taken
-   from this step):
+   element, a `layer` element's `overlay`, or a `record` element's body), produce a `Struct`
+   (or, for `record`, a `RecordDefinition` whose members and validators are taken from this step):
    - Each `field` child contributes one `Member::Field` constructed per step 3.
    - Each `select` child contributes one `Member::Select` constructed per step 3.
    - Each `validate` child contributes its inline-atom text to the resulting `validators` list, in
      source order.
-   - Each `exclude` child (permitted only inside a `layer.root` per §20.3) contributes one
+   - Each `exclude` child (permitted only inside an `overlay` per §20.3) contributes one
      `Member::Exclude(K)`, where K is the child's inline-atom text.
 
 Schema construction MUST be deterministic: two implementations applied to the same input MUST

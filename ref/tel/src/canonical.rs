@@ -249,12 +249,11 @@ mod tests {
                     required, repeatable: false,
                     keyword: keyword.to_string(),
                     r#type: Type::Scalar(Scalar {
-                        validators: vec!["string".to_string()], default: None,
-                    }),
+                        validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![],
+            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
         }
     }
 
@@ -331,20 +330,18 @@ mod tests {
                         required: true, repeatable: false,
                         keyword: "a".to_string(),
                         r#type: Type::Scalar(Scalar {
-                            validators: vec!["string".to_string()], default: None,
-                        }),
+                            validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field {
                         required: true, repeatable: false,
                         keyword: "b".to_string(),
                         r#type: Type::Scalar(Scalar {
-                            validators: vec!["string".to_string()], default: None,
-                        }),
+                            validators: vec!["string".to_string()]}), default: None,
                     }),
                 ],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![],
+            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
         };
         // Two source orderings.
         let d1 = parse("tel 1.0\n\na 1\nb 2\n").document;

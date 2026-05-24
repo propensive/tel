@@ -3,5 +3,4 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name with-default
 
 document
-  field name
-    scalar identifier my-default-name
+  field name identifier my-default-name
