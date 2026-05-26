@@ -23,8 +23,9 @@ project alpha
 - **Hosts other languages without escaping.** A scalar value may be carried as an indented
   block (a *source atom*) or as a delimited payload (a *literal atom*) — JSON, XML, Markdown,
   shell scripts, and the like embed verbatim.
-- **Schemas and types.** A schema names fields, sums, references, and validators. Documents
-  are checked against their schema during parsing.
+- **Schemas and types.** A schema names records, sums, scalars, and validators. Definition
+  names are PascalCase (`Contact`, `PhoneNumber`); field and variant keywords are kebab-case.
+  Documents are checked against their schema during parsing.
 - **User-extensible validation.** A schema attaches named validators to scalars and structs;
   the parser calls back to the application to run them.
 - **Layered schemas with safe evolution.** A base schema may be refined by ordered layers;
@@ -89,33 +90,32 @@ fixture sample-payload
 
 ### Schemas
 
-A schema is itself a TEL document describing the shape of conforming documents. Cardinality
-defaults to "exactly one"; `optional` loosens to "zero or one", `repeatable` loosens to "zero
-or more". Layers may *tighten* these defaults in later versions but never loosen them.
+A schema is itself a TEL document describing the shape of conforming documents. Three kinds
+of named Definition coexist in one namespace: `record` (a product type), `scalar` (a leaf
+value with validators), and `select` (a sum type — a named alternation of variants). At a
+member position, `field` declares a single-keyword slot and `select` references a named
+sum. Cardinality defaults to "exactly one"; `optional` loosens to "zero or one",
+`repeatable` loosens to "zero or more". Layers may *tighten* these defaults in later
+versions but never loosen them.
 
 ```tel
 tel 1.0
 
 name contact
 
-define phone-number
-  field country-code
-    scalar string
-  field number
-    scalar string
+record PhoneNumber
+  field country-code String
+  field number String
+
+select Status
+  variant active Flag
+  variant archived Flag
 
 document
-  field name
-    scalar string
-  field email optional
-    scalar string
-  field phone optional repeatable
-    type phone-number
-  select
-    variant active
-      flag
-    variant archived
-      flag
+  field name String
+  field email String optional
+  field phone PhoneNumber optional repeatable
+  select Status optional
 ```
 
 A document under this schema:
@@ -123,33 +123,31 @@ A document under this schema:
 ```tel
 tel 1.0 contact
 
-contact alice
-  email alice@example.org
-  phone
-    country-code 44
-    number       2079460958
-  active
+name alice
+email alice@example.org
+phone
+  country-code 44
+  number       2079460958
+active
 ```
 
 ### Validators
 
-Each `scalar` may declare one or more named **validators** (applied in AND-conjunction). A
-struct may carry its own validators for cross-field constraints. Validator names live in a
-single shared namespace and are resolved at parse time by a host-language callback. Three
-built-in validators (`identifier`, `sigil`, `string`) are guaranteed by every conforming
-parser.
+Each scalar may declare one or more named **validators** (applied in AND-conjunction). A
+record or sum may carry its own validators for cross-field or cross-variant constraints.
+Validator names live in a single shared namespace and are resolved at parse time by a
+host-language callback. Four built-in validators are guaranteed by every conforming parser:
+`identifier` (kebab-case), `type-name` (PascalCase), `sigil` (a single sigil character),
+and `string` (unconstrained).
 
 ```tel
-field hostname
-  scalar
-    validate non-empty
-    validate dns-label
+scalar Hostname
+  validate non-empty
+  validate dns-label
 
-define event
-  field start-date
-    scalar string
-  field end-date
-    scalar string
+record Event
+  field start-date String
+  field end-date String
   validate start-precedes-end
 ```
 
