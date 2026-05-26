@@ -260,11 +260,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "repeatable",
+                                            text: "phone-number",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "phone-number",
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],

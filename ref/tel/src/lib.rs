@@ -622,19 +622,19 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![document_member_select()], validators: Vec::new(),
     };
 
-    // Field-body: keyword, four loosen/tighten flags, then the required
-    // `type` Scalar and the optional `default` Scalar. This ordering lets
-    // a Field declare itself as a one-liner — `field foo optional string
-    // unknown`.
+    // Field-body: keyword, then `type` (required), then the four
+    // loosen/tighten flags, then `default` (optional). This ordering keeps
+    // the type adjacent to the field-name and lets a Field declare itself
+    // as a one-liner — `field foo string optional unknown`.
     let field_body = Definition {
         name: "field-body".to_string(),
         members: vec![
             field(true, false, "keyword", scalar_id()),
+            field(true, false, "type", scalar_id()),
             field(false, false, "optional", Type::Reference("flag".to_string())),
             field(false, false, "required", Type::Reference("flag".to_string())),
             field(false, false, "repeatable", Type::Reference("flag".to_string())),
             field(false, false, "irrepeatable", Type::Reference("flag".to_string())),
-            field(true, false, "type", scalar_id()),
             field(false, false, "default", scalar_str()),
         ], validators: Vec::new(),
     };
@@ -1328,8 +1328,9 @@ fn construct_members_and_validators(blocks: &[Block]) -> (Vec<Member>, Vec<Strin
 
 fn construct_field(c: &Compound) -> Field {
     // Atom phase against field-body's member order (§20.5):
-    //   keyword (Scalar id), optional/required/repeatable/irrepeatable
-    //   (Flags), type (Scalar id), default (Scalar string).
+    //   keyword (req Scalar), type (req Scalar),
+    //   optional/required/repeatable/irrepeatable (opt Flags),
+    //   default (opt Scalar).
     //
     // Per §20.6, the four loosen/tighten flags combine into the internal
     // (required, repeatable) booleans per the rules:
@@ -1343,13 +1344,17 @@ fn construct_field(c: &Compound) -> Field {
     let mut keyword = String::new();
     let mut type_name = String::new();
     let mut default: Option<String> = None;
-    // First atom = keyword.
     let mut iter = c.atoms.iter();
+    // First atom = keyword (required).
     if let Some(a) = iter.next() {
         keyword = atom_text(a);
     }
-    // Remaining atoms: flags first (matched by keyword), then type-name
-    // (first non-flag atom), then optional default (next atom).
+    // Second atom = type-name (required).
+    if let Some(a) = iter.next() {
+        type_name = atom_text(a);
+    }
+    // Remaining atoms: flag-matching atoms set their flag; any non-flag
+    // atom fills `default`.
     for a in iter {
         let t = atom_text(a);
         match t.as_str() {
@@ -1358,9 +1363,7 @@ fn construct_field(c: &Compound) -> Field {
             "repeatable" => repeatable_flag = true,
             "irrepeatable" => irrepeatable_flag = true,
             _ => {
-                if type_name.is_empty() {
-                    type_name = t;
-                } else if default.is_none() {
+                if default.is_none() {
                     default = Some(t);
                 }
             }
@@ -4318,8 +4321,8 @@ mod tests {
 
     #[test]
     fn construct_field_with_optional_keyword_yields_required_false() {
-        // `field foo optional scalar string` → required=false.
-        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo optional\n    scalar string\n";
+        // `field foo string optional` → required=false.
+        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo string optional\n";
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
@@ -4333,8 +4336,8 @@ mod tests {
 
     #[test]
     fn construct_field_without_flags_yields_required_true_irrepeatable_true() {
-        // `field foo scalar string` (no flags) → required=true, repeatable=false.
-        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo\n    scalar string\n";
+        // `field foo string` (no flags) → required=true, repeatable=false.
+        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo string\n";
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
@@ -4350,7 +4353,7 @@ mod tests {
     fn construct_field_with_required_and_optional_required_wins() {
         // Both `required` and `optional` flags present: `required` wins
         // (tightening direction), required=true.
-        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo optional required\n    scalar string\n";
+        let source = "tel 1.0\n\nname x\n\ndocument\n  field foo string optional required\n";
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
@@ -4427,7 +4430,7 @@ mod tests {
                       name round-trip\n\n\
                       document\n  \
                       field name string\n  \
-                      field active optional flag\n";
+                      field active flag optional\n";
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let constructed = construct_schema(&parsed.document);
@@ -4467,7 +4470,7 @@ mod tests {
     /// Specification. Two conforming implementations MUST agree on this
     /// value.
     pub const TEL_SCHEMA_VALUE_HASH_HEX: &str =
-        "55d061b2ced2bcf3d79edfa825aaddf906fd3eca24da7c9b5237ae83782432aa";
+        "15075381a17c781436717e2ff12ca75e4ba6503b8c47b6f6b26fa8fb0e831866";
 
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2)

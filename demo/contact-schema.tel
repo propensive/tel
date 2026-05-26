@@ -33,10 +33,10 @@ record address
 
 document
   field name string
-  field email optional string
-  field phone optional repeatable phone-number
-  field home optional address
-  field work optional address
+  field email string optional
+  field phone phone-number optional repeatable
+  field home address optional
+  field work address optional
   select
     variant active flag
     variant archived flag

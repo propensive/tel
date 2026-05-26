@@ -33,4 +33,4 @@ record event
   validate start-precedes-end
 
 document
-  field event optional repeatable event
+  field entry event optional repeatable

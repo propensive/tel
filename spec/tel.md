@@ -1823,19 +1823,22 @@ validity check applied to a user document is against the user schema's keyword s
 the schema-language vocabulary.
 
 **Member ordering and inline syntax.** Member order in `field-body` is
-`keyword`, the four loosen/tighten flags (`optional`, `required`,
-`repeatable`, `irrepeatable`), then `type` (required Scalar), then `default`
-(optional Scalar). The atom-phase rules of §20.2 / §20.8 let a typical
-field declaration fit a single line: the keyword is the first inline atom,
-each matching flag atom toggles its flag, the next non-flag atom fills
-`type`, and any remaining atom fills `default`. For example,
+`keyword`, `type` (both required Scalars), then the four loosen/tighten
+flags (`optional`, `required`, `repeatable`, `irrepeatable`), then
+`default` (optional Scalar). The atom-phase rules of §20.2 / §20.8 let a
+typical field declaration fit a single line: the first atom is the
+keyword, the second atom is the type-name, each subsequent flag-matching
+atom toggles its flag, and any remaining non-flag atom fills `default`.
+For example,
 
 ```tel
-field country optional string unknown
+field country string optional unknown
 ```
 
 declares an optional `country` field of type `string` (the built-in scalar)
-with default value `unknown`. Variants follow the same pattern but carry only
+with default value `unknown`. The convention is **flags before default**:
+`default` is the last optional Scalar and so consumes the first non-flag
+atom after the type-name. Variants follow the same pattern but carry only
 `keyword` and `type`, e.g. `variant active flag`. There are no marker
 keywords: position determines meaning.
 
@@ -1858,8 +1861,8 @@ The pinned value, computed against the canonical
 
 | Form     | Value                                                                |
 | -------- | -------------------------------------------------------------------- |
-| SHA-256  | `55d061b2ced2bcf3d79edfa825aaddf906fd3eca24da7c9b5237ae83782432aa`   |
-| BASE-256 | `ӟPΫώȦṽÇґĆÔ2ďȈyûąB6ǨӜῩӯƠHrûŞЪeŠǼR`                                   |
+| SHA-256  | `15075381a17c781436717e2ff12ca75e4ba6503b8c47b6f6b26fa8fb0e831866`   |
+| BASE-256 | `ȕćSẁơżxД6qžįñЬƧŞKΦPĻẌGζǶβoƨûĎẃĘf`                                   |
 
 The BinTEL document root encoding of `tel-schema.tel` is 970 bytes; the raw bytes are recorded in
 [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex).

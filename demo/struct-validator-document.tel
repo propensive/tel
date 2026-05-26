@@ -10,12 +10,12 @@ tel 1.0 https://example.org/event-log
 # E310 diagnostic against the struct, with a nested per-field
 # diagnostic pinpointing `end-date`.
 
-event
+entry
   title       Q1 review
   start-date  2026-01-15
   end-date    2026-03-31
 
-event
+entry
   title       Off-by-one
   start-date  2026-05-10
   end-date    2026-04-30

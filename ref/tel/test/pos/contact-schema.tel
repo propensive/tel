@@ -30,7 +30,7 @@ record address
 document
   field name string
   field email string
-  field phone repeatable phone-number
+  field phone phone-number repeatable
   field home address
   field work address
   select required

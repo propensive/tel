@@ -29,9 +29,9 @@ name tel-schema
 
 record layer-body
   field name identifier
-  field record optional repeatable record-body
-  field scalar optional repeatable scalar-body
-  field overlay optional overlay-body
+  field record record-body optional repeatable
+  field scalar scalar-body optional repeatable
+  field overlay overlay-body optional
 
 # The body of a record definition: name + members + optional struct-level
 # validators (§21.6).
@@ -47,7 +47,7 @@ record record-body
 
 record scalar-body
   field name identifier
-  field validate repeatable identifier
+  field validate identifier repeatable
 
 # The body of an overlay (members merged into the composed document root
 # per §20.3). Permits the layer-only `exclude K` operation as well as
@@ -68,35 +68,36 @@ record document-body
     variant select select-body
     variant validate identifier
 
-# The body of a Field. Member ordering — keyword, then the four
-# loosen/tighten flags, then `type` (required), then `default` (optional) —
-# is chosen so that the atom-phase rules of §20.2 / §20.8 let a typical
-# declaration fit one line. For example,
+# The body of a Field. Member ordering — keyword, then `type` (required),
+# then the four loosen/tighten flags, then `default` (optional) — is chosen
+# so that the atom-phase rules of §20.2 / §20.8 let a typical declaration
+# fit one line, with the type-name adjacent to the field-name. For example,
 #
-#   field country optional string unknown
+#   field country string optional unknown
 #
-# parses as keyword=country, optional=true, type=string, default=unknown.
+# parses as keyword=country, type=string, optional=true, default=unknown.
 #
-# The `default` value, when present, MUST be representable as an inline
-# atom; multi-word or multi-line defaults are written as a child compound.
+# The convention is **flags before default**: a `default` value, when
+# present, comes last. Multi-word or multi-line defaults are written as a
+# child compound.
 
 record field-body
   field keyword identifier
-  field optional optional flag
-  field required optional flag
-  field repeatable optional flag
-  field irrepeatable optional flag
   field type identifier
-  field default optional string
+  field optional flag optional
+  field required flag optional
+  field repeatable flag optional
+  field irrepeatable flag optional
+  field default string optional
 
 # The body of a Select.
 
 record select-body
-  field optional optional flag
-  field required optional flag
-  field repeatable optional flag
-  field irrepeatable optional flag
-  field variant repeatable variant-body
+  field optional flag optional
+  field required flag optional
+  field repeatable flag optional
+  field irrepeatable flag optional
+  field variant variant-body repeatable
 
 # The body of a Variant: keyword + type-name.
 
@@ -111,8 +112,8 @@ record variant-body
 
 document
   field name identifier
-  field sigil optional sigil
-  field record optional repeatable record-body
-  field scalar optional repeatable scalar-body
+  field sigil sigil optional
+  field record record-body optional repeatable
+  field scalar scalar-body optional repeatable
   field document document-body
-  field layer optional repeatable layer-body
+  field layer layer-body optional repeatable

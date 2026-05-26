@@ -18,7 +18,7 @@ name tel-schema
 
 record layer-body
   field name identifier
-  field define repeatable define-body
+  field define define-body repeatable
   field root struct-body
 
 # The body of a definition (name + members).
@@ -55,7 +55,7 @@ record field-body
 record select-body
   field required flag
   field repeatable flag
-  field variant repeatable variant-body
+  field variant variant-body repeatable
 
 # The body of a Variant (keyword + type).
 
@@ -86,6 +86,6 @@ record reference-body
 document
   field name identifier
   field sigil sigil
-  field define repeatable define-body
+  field define define-body repeatable
   field document struct-body
-  field layer repeatable layer-body
+  field layer layer-body repeatable

@@ -34,7 +34,7 @@ name contact
 
 document
   field name string
-  field email optional string
+  field email string optional
 
 
 # ── Layer 1: with-address ─────────────────────────────────────────────────
@@ -49,7 +49,7 @@ layer
     field city string
     field country string
   overlay
-    field address optional address-body
+    field address address-body optional
 
 
 # ── Layer 2: extended-address ─────────────────────────────────────────────
@@ -66,7 +66,7 @@ layer
 layer
   name extended-address
   record address-body
-    field postcode optional string
+    field postcode string optional
 
 
 # ── Layer 3: with-phone ───────────────────────────────────────────────────
@@ -79,7 +79,7 @@ layer
     field country-code string
     field number string
   overlay
-    field phone optional repeatable phone-number
+    field phone phone-number optional repeatable
 
 
 # ── Layer 4: with-status ──────────────────────────────────────────────────
@@ -105,9 +105,9 @@ layer
   name with-business
   record organization
     field name string
-    field role optional string
+    field role string optional
   overlay
-    field business optional organization
+    field business organization optional
 
 
 # ── Layer 6: read-only-status ─────────────────────────────────────────────

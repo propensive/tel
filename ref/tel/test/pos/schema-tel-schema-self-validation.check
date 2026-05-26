@@ -115,11 +115,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "repeatable",
+                                            text: "define-body",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "define-body",
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -542,11 +542,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "repeatable",
+                                            text: "variant-body",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "variant-body",
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -854,11 +854,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "repeatable",
+                                            text: "define-body",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "define-body",
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -888,11 +888,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "repeatable",
+                                            text: "layer-body",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "layer-body",
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],

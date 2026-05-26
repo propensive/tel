@@ -28,19 +28,19 @@ record phone-number
 
 record organization
   field name string
-  field role optional string
+  field role string optional
 
 record address-body
   field street string
   field city string
   field country string
-  field postcode optional string
+  field postcode string optional
 
 document
   field name string
-  field email optional string
-  field address optional address-body
-  field phone optional repeatable phone-number
-  field business optional organization
+  field email string optional
+  field address address-body optional
+  field phone phone-number optional repeatable
+  field business organization optional
   select
     variant active flag
