@@ -29,25 +29,43 @@ Document {
                     text: "",
                 },
                 Comment {
-                    text: "  - required and optional `field`s with `scalar` types",
+                    text: "  - required and optional `field`s of named scalar types (`String`)",
                 },
                 Comment {
                     text: "  - a `repeatable` field (`phone`)",
                 },
                 Comment {
-                    text: "  - a named `define`d struct (`phone-number`, `address`) referenced from",
+                    text: "  - named `record`s (`PhoneNumber`, `Address`) referenced from",
                 },
                 Comment {
-                    text: "    multiple positions via `type`",
+                    text: "    multiple positions",
                 },
                 Comment {
-                    text: "  - a `select` member with all-`flag` variants for an enumerated status,",
+                    text: "  - a named top-level `select` (`Status`) with all-`Flag` variants,",
                 },
                 Comment {
-                    text: "    which can be set inline as an atom on the parent compound",
+                    text: "    placed as a `SelectRef` at the use site so it can also be set",
                 },
                 Comment {
-                    text: "  - a `default` value on a required scalar",
+                    text: "    inline as an atom on the parent compound",
+                },
+                Comment {
+                    text: "  - a per-field `default` value (`country`)",
+                },
+                Comment {
+                    text: "",
+                },
+                Comment {
+                    text: "Every `field` and `variant` carries its type as an inline atom after",
+                },
+                Comment {
+                    text: "any flags; type names are PascalCase and resolve to either a user-",
+                },
+                Comment {
+                    text: "declared `record`/`scalar`/`select` or one of the predefined names",
+                },
+                Comment {
+                    text: "`Flag`, `String`, `Identifier`, `Sigil`.",
                 },
                 Comment {
                     text: "",
@@ -86,7 +104,7 @@ Document {
                     keyword: "record",
                     atoms: [
                         Inline {
-                            text: "phone-number",
+                            text: "PhoneNumber",
                             preceding_spaces: 1,
                         },
                     ],
@@ -104,7 +122,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -119,7 +137,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -142,7 +160,7 @@ Document {
                     keyword: "record",
                     atoms: [
                         Inline {
-                            text: "address",
+                            text: "Address",
                             preceding_spaces: 1,
                         },
                     ],
@@ -160,7 +178,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -175,7 +193,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -190,11 +208,67 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
                                             text: "unknown",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                            ],
+                            trailing_blank_lines: 0,
+                        },
+                    ],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "select",
+                    atoms: [
+                        Inline {
+                            text: "Status",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [
+                        Block {
+                            comments: [],
+                            tabulation: None,
+                            compounds: [
+                                Compound {
+                                    keyword: "variant",
+                                    atoms: [
+                                        Inline {
+                                            text: "active",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "variant",
+                                    atoms: [
+                                        Inline {
+                                            text: "archived",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -230,7 +304,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -245,7 +319,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -260,7 +338,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "phone-number",
+                                            text: "PhoneNumber",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
@@ -279,7 +361,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "address",
+                                            text: "Address",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -294,7 +380,11 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "address",
+                                            text: "Address",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -305,53 +395,19 @@ Document {
                                     keyword: "select",
                                     atoms: [
                                         Inline {
-                                            text: "required",
+                                            text: "Status",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
                                     remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "variant",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "active",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                                Compound {
-                                                    keyword: "variant",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "archived",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
-                                        },
-                                    ],
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },

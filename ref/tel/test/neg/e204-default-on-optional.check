@@ -115,4 +115,5 @@ Document {
     ],
 }
 errors:
+  E310 [0,8): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
   E306 [0,0): Compound keyword is not recognized for its parent type: unrecognized keyword `scalar` in `field`

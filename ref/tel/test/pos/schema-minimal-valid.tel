@@ -3,5 +3,5 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name minimal-example
 
 document
-  field name string
-  field age string
+  field name String
+  field age String

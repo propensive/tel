@@ -16,6 +16,8 @@ use crate::{
     Atom, Block, Compound, Document, Member, Schema, Type,
     resolve, ResolvedType, scalar_value_text,
 };
+#[cfg(test)]
+use crate::Polarity;
 use sha2::{Sha256, Digest};
 
 /// The BinTEL magic number: four bytes `B2 C4 B5 BB`. In BASE-256 textual
@@ -66,7 +68,7 @@ pub fn decode_varint(bytes: &[u8]) -> Option<(u64, usize)> {
 
 /// Returns the keyword index (position in keyword order) of the given keyword
 /// among the parent's members, or `None` if absent.
-pub fn keyword_index(members: &[Member], keyword: &str) -> Option<usize> {
+pub fn keyword_index(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
     let mut idx = 0;
     for m in members {
         match m {
@@ -74,15 +76,16 @@ pub fn keyword_index(members: &[Member], keyword: &str) -> Option<usize> {
                 if f.keyword == keyword { return Some(idx); }
                 idx += 1;
             }
-            Member::Select(s) => {
-                for v in &s.variants {
-                    if v.keyword == keyword { return Some(idx); }
-                    idx += 1;
+            Member::SelectRef(s) => {
+                if let Some(variants) = crate::resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        if v.keyword == keyword { return Some(idx); }
+                        idx += 1;
+                    }
                 }
             }
             Member::Exclude(_) => {
-                // Exclude ops contribute no keyword index; they should
-                // not appear in a composed schema being encoded.
+                // Exclude ops are layer-only; not in a composed schema.
             }
         }
     }
@@ -90,13 +93,15 @@ pub fn keyword_index(members: &[Member], keyword: &str) -> Option<usize> {
 }
 
 /// Return the `Type` declared at the given keyword position, or `None`.
-pub fn keyword_type<'a>(members: &'a [Member], keyword: &str) -> Option<&'a Type> {
+pub fn keyword_type<'a>(members: &'a [Member], keyword: &str, schema: &'a Schema) -> Option<&'a Type> {
     for m in members {
         match m {
             Member::Field(f) => if f.keyword == keyword { return Some(&f.r#type); },
-            Member::Select(s) => {
-                for v in &s.variants {
-                    if v.keyword == keyword { return Some(&v.r#type); }
+            Member::SelectRef(s) => {
+                if let Some(variants) = crate::resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        if v.keyword == keyword { return Some(&v.r#type); }
+                    }
                 }
             }
             Member::Exclude(_) => {}
@@ -106,14 +111,16 @@ pub fn keyword_type<'a>(members: &'a [Member], keyword: &str) -> Option<&'a Type
 }
 
 /// Return the member index of the member that declares the given keyword (a
-/// Field's keyword or any Select variant's keyword).
-fn member_index(members: &[Member], keyword: &str) -> Option<usize> {
+/// Field's keyword or any Select variant's keyword via SelectRef).
+fn member_index(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
     for (i, m) in members.iter().enumerate() {
         match m {
             Member::Field(f) => if f.keyword == keyword { return Some(i); },
-            Member::Select(s) => {
-                if s.variants.iter().any(|v| v.keyword == keyword) {
-                    return Some(i);
+            Member::SelectRef(s) => {
+                if let Some(variants) = crate::resolve_select_ref(&s.reference, schema) {
+                    if variants.iter().any(|v| v.keyword == keyword) {
+                        return Some(i);
+                    }
                 }
             }
             Member::Exclude(_) => {}
@@ -175,23 +182,26 @@ fn enumerate_children<'a>(
                         keyword: &f.keyword,
                         text: atext,
                     }));
-                    if !f.repeatable { pos += 1; }
+                    if !f.repeatable.effective_repeatable() { pos += 1; }
                 }
                 ResolvedType::Flag => {
                     // atom_text == f.keyword (enforced by skip rule)
                     atom_assignments.push((pos, Element::AtomFlag { keyword: &f.keyword }));
-                    if !f.repeatable { pos += 1; }
+                    if !f.repeatable.effective_repeatable() { pos += 1; }
                 }
                 _ => {
                     // Non-atom-assignable; type assignment would flag E303.
                     break;
                 }
             },
-            Member::Select(s) => {
-                // Only atom-assignable if all variants are Flag (per §20.2).
-                if let Some(v) = s.variants.iter().find(|v| v.keyword == atext) {
+            Member::SelectRef(s) => {
+                // Only atom-assignable if every variant of the referenced
+                // SelectDefinition resolves to Flag.
+                let variants = crate::resolve_select_ref(&s.reference, schema)
+                    .unwrap_or(&[]);
+                if let Some(v) = variants.iter().find(|v| v.keyword == atext) {
                     atom_assignments.push((pos, Element::AtomFlag { keyword: &v.keyword }));
-                    if !s.repeatable { pos += 1; }
+                    if !s.repeatable.effective_repeatable() { pos += 1; }
                 } else {
                     // E304 territory; skip the atom.
                     break;
@@ -205,7 +215,7 @@ fn enumerate_children<'a>(
     let mut compound_by_member: Vec<Vec<&Compound>> = vec![Vec::new(); members.len()];
     for block in blocks {
         for c in &block.compounds {
-            if let Some(i) = member_index(members, &c.keyword) {
+            if let Some(i) = member_index(members, &c.keyword, schema) {
                 compound_by_member[i].push(c);
             }
             // Unknown keyword would trigger E306 at type-assignment time.
@@ -231,7 +241,7 @@ fn enumerate_children<'a>(
         // Default substitution if still unfilled and applicable.
         if !had_filling {
             if let Member::Field(f) = m {
-                if f.required {
+                if f.required.effective_required() {
                     if let Some(def) = &f.default {
                         out.push(Element::DefaultScalar {
                             keyword: &f.keyword,
@@ -257,7 +267,7 @@ fn should_skip_member(
     let m = &members[pos];
     match m {
         Member::Field(f) => {
-            if f.required { return false; }
+            if f.required.effective_required() { return false; }
             let resolved = resolve(&f.r#type, schema);
             let atom_assignable = matches!(resolved, ResolvedType::Scalar(_) | ResolvedType::Flag);
             if !atom_assignable { return true; }
@@ -267,12 +277,13 @@ fn should_skip_member(
             }
             false
         }
-        Member::Select(s) => {
-            if s.required { return false; }
-            let all_flag = s.variants.iter().all(|v|
+        Member::SelectRef(s) => {
+            if s.required.effective_required() { return false; }
+            let variants = crate::resolve_select_ref(&s.reference, schema).unwrap_or(&[]);
+            let all_flag = variants.iter().all(|v|
                 matches!(resolve(&v.r#type, schema), ResolvedType::Flag));
             if !all_flag { return true; }
-            !s.variants.iter().any(|v| v.keyword == atom_text)
+            !variants.iter().any(|v| v.keyword == atom_text)
         }
         Member::Exclude(_) => true,
     }
@@ -313,9 +324,9 @@ fn encode_element<'a>(
 ) {
     match elem {
         Element::Compound(c) => {
-            let kidx = keyword_index(parent_members, &c.keyword)
+            let kidx = keyword_index(parent_members, &c.keyword, schema)
                 .expect("keyword must resolve; type assignment should have caught E306");
-            let t = keyword_type(parent_members, &c.keyword)
+            let t = keyword_type(parent_members, &c.keyword, schema)
                 .expect("keyword must resolve");
             out.extend(encode_varint(kidx as u64));
             match resolve(t, schema) {
@@ -335,13 +346,13 @@ fn encode_element<'a>(
                 ResolvedType::Flag => {
                     // No body.
                 }
-                ResolvedType::Unresolved => {
+                ResolvedType::Unresolved | ResolvedType::KindMismatch => {
                     // Schema invalid; emit nothing rather than panic.
                 }
             }
         }
         Element::AtomScalar { keyword, text } => {
-            let kidx = keyword_index(parent_members, keyword)
+            let kidx = keyword_index(parent_members, keyword, schema)
                 .expect("atom-scalar keyword must resolve");
             out.extend(encode_varint(kidx as u64));
             let bytes = text.as_bytes();
@@ -349,12 +360,12 @@ fn encode_element<'a>(
             out.extend_from_slice(bytes);
         }
         Element::AtomFlag { keyword } => {
-            let kidx = keyword_index(parent_members, keyword)
+            let kidx = keyword_index(parent_members, keyword, schema)
                 .expect("atom-flag keyword must resolve");
             out.extend(encode_varint(kidx as u64));
         }
         Element::DefaultScalar { keyword, value } => {
-            let kidx = keyword_index(parent_members, keyword)
+            let kidx = keyword_index(parent_members, keyword, schema)
                 .expect("default keyword must resolve");
             out.extend(encode_varint(kidx as u64));
             let bytes = value.as_bytes();
@@ -569,10 +580,10 @@ fn decode_child(
     let (kidx, n) = decode_varint(&bytes[cur..])
         .ok_or_else(|| DecodeError::new(BCode::B02, "malformed keyword-index varint"))?;
     cur += n;
-    let (keyword, t) = lookup_by_index(parent_members, kidx)
+    let (keyword, t) = lookup_by_index(parent_members, kidx, schema)
         .ok_or_else(|| DecodeError::new(BCode::B05,
             format!("keyword index {} out of range [0, {})",
-                kidx, keyword_count(parent_members))))?;
+                kidx, keyword_count(parent_members, schema))))?;
     match resolve(t, schema) {
         ResolvedType::Struct(child_members) => {
             let (cc, n) = decode_varint(&bytes[cur..])
@@ -628,20 +639,22 @@ fn decode_child(
                 children: Vec::new(),
             }, cur))
         }
-        ResolvedType::Unresolved => Err(DecodeError::new(BCode::B10,
-            format!("Reference for `{}` does not resolve to a Definition", keyword))),
+        ResolvedType::Unresolved | ResolvedType::KindMismatch => Err(DecodeError::new(BCode::B10,
+            format!("Reference for `{}` does not resolve cleanly to a Definition of the expected kind", keyword))),
     }
 }
 
-fn keyword_count(members: &[Member]) -> usize {
+fn keyword_count(members: &[Member], schema: &Schema) -> usize {
     members.iter().map(|m| match m {
         Member::Field(_) => 1,
-        Member::Select(s) => s.variants.len(),
+        Member::SelectRef(s) => crate::resolve_select_ref(&s.reference, schema)
+            .map(|vs| vs.len())
+            .unwrap_or(0),
         Member::Exclude(_) => 0,
     }).sum()
 }
 
-fn lookup_by_index(members: &[Member], k: u64) -> Option<(&str, &Type)> {
+fn lookup_by_index<'a>(members: &'a [Member], k: u64, schema: &'a Schema) -> Option<(&'a str, &'a Type)> {
     let mut idx: u64 = 0;
     for m in members {
         match m {
@@ -649,10 +662,12 @@ fn lookup_by_index(members: &[Member], k: u64) -> Option<(&str, &Type)> {
                 if idx == k { return Some((f.keyword.as_str(), &f.r#type)); }
                 idx += 1;
             }
-            Member::Select(s) => {
-                for v in &s.variants {
-                    if idx == k { return Some((v.keyword.as_str(), &v.r#type)); }
-                    idx += 1;
+            Member::SelectRef(s) => {
+                if let Some(variants) = crate::resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        if idx == k { return Some((v.keyword.as_str(), &v.r#type)); }
+                        idx += 1;
+                    }
                 }
             }
             Member::Exclude(_) => {}
@@ -702,13 +717,13 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         // Document containing `name Alice`.
         let doc = crate::Document {
@@ -742,14 +757,14 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()] }),
                     default: Some("anon".to_string()),
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         // Document with no children (name absent — default applies).
         let doc = crate::Document {
@@ -767,13 +782,13 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -806,12 +821,12 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: false, repeatable: false,
+                    required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "ok".to_string(),
                     r#type: crate::Type::Flag, default: None,
                 })], validators: Vec::new(),
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -837,17 +852,17 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "person".to_string(),
                     r#type: crate::Type::Struct(crate::Struct {
                         members: vec![
                             crate::Member::Field(crate::Field {
-                                required: true, repeatable: false,
+                                required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "first".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                             }),
                             crate::Member::Field(crate::Field {
-                                required: true, repeatable: false,
+                                required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "last".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                             }),
@@ -857,7 +872,7 @@ mod tests {
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -921,14 +936,14 @@ mod tests {
             name: "demo".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar {
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         }
     }
 
@@ -1057,13 +1072,13 @@ mod tests {
             name: "bad".to_string(),
             document: crate::Struct {
                 members: vec![crate::Member::Field(crate::Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "child".to_string(),
                     r#type: crate::Type::Reference("missing-definition".to_string()), default: None,
                 })],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         // Encode (against a different schema; the decoder will reach the
         // dangling Reference). Simpler: hand-craft a minimal stream that

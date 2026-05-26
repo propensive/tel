@@ -16,31 +16,33 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 # (base + 6 layers). The two signatures are not byte-equal even though
 # the schemas describe the same document shape.
 #
-# Note: the `status` Select only contains `active` — the `archived`
-# variant was excluded by the `read-only-status` layer (sum-type
-# subtyping per §20.3).
+# Note: the `Status` SelectDefinition only contains `active` — the
+# `archived` variant was excluded by the `read-only-status` layer
+# (sum-type subtyping per §20.3).
 
 name contact-composed
 
-record phone-number
-  field country-code string
-  field number string
+record PhoneNumber
+  field country-code String
+  field number String
 
-record organization
-  field name string
-  field role string optional
+record Organization
+  field name String
+  field role String optional
 
-record address-body
-  field street string
-  field city string
-  field country string
-  field postcode string optional
+record Address
+  field street String
+  field city String
+  field country String
+  field postcode String optional
+
+select Status
+  variant active Flag
 
 document
-  field name string
-  field email string optional
-  field address address-body optional
-  field phone phone-number optional repeatable
-  field business organization optional
-  select
-    variant active flag
+  field name String
+  field email String optional
+  field address Address optional
+  field phone PhoneNumber optional repeatable
+  field business Organization optional
+  select Status optional

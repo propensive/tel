@@ -22,11 +22,18 @@ writing shows through later layers.
 | Symbol | Meaning                                                                                              |
 | ------ | ---------------------------------------------------------------------------------------------------- |
 | `H`    | Hash length in bytes. For SHA-256, `H = 32`.                                                         |
-| `n`    | Number of hashes in the sequence to encode. `n ≥ 1`.                                                 |
+| `n`    | Number of hashes in the sequence to encode. `n ≥ 1` (the empty sequence is not encodable).           |
 | `k`    | _Cadence_: the byte offset between successive hashes in the palimpsest. `1 ≤ k < H`. See note below. |
 | `hᵢ`   | The i-th hash in the sequence (0-indexed), a byte array of length `H`.                               |
 | `N`    | The total number of hashes in the receiver's library.                                                |
 | `L`    | Length of the palimpsest in bytes: `L = H + k*(n-1)`.                                                |
+
+**Normative constraints.** Encoders and decoders MUST enforce `n ≥ 1` and `1 ≤ k < H`. An empty
+input sequence (`n = 0`) is not representable as a palimpsest; protocols that need to convey
+"no hashes" MUST signal that out-of-band rather than by emitting a zero-length palimpsest.
+A cadence `k ≥ H` would yield a palimpsest no smaller than the naive concatenation of hashes
+(`L = H + k·(n−1) ≥ H·n` for `n ≥ 2`) and provides no compression benefit; the constraint `k < H`
+ensures the encoding is strictly more compact than the naive form.
 
 **Note on bit vs. byte cadence**: In principle, the cadence `k` could be measured in bits rather
 than bytes, allowing finer-grained control over the compression/cost trade-off. However, a bit-level
@@ -130,6 +137,13 @@ XOR of exactly those hashes). The all-zeros check at the base case (`i == n`) th
 integrity check: it confirms that the selected set of hashes is consistent with the palimpsest. A
 corrupted palimpsest or a missing hash will cause the check to fail, causing the algorithm to
 backtrack or ultimately return failure.
+
+**Ambiguity.** If two distinct hash sequences both leave `P` all-zero at the base case, the
+palimpsest is structurally ambiguous. With a collision-resistant hash (§7) this requires a hash
+collision and is computationally infeasible; a conforming decoder MAY treat the ambiguous case as
+a failure (returning no result) or MAY return the lexicographically first valid sequence
+(comparing hashes as byte arrays, position by position). The choice is implementation-defined,
+but a decoder MUST be deterministic across repeated invocations on the same inputs.
 
 ### 4.5 Backtracking
 
@@ -246,81 +260,32 @@ A palimpsest is intended for use in a protocol where:
 - The receiver holds a strictly larger set of hashes and maintains an index by `k`-byte prefix.
 - The receiver performs the computationally more expensive decoding; the sender only needs to XOR.
 
-The sender must know, or be able to infer, an appropriate cadence `k` for the receiver's current
-library size. The palimpsest length `L` alone does not encode the cadence; `k` must be communicated
-separately or agreed upon by convention.
+**Cadence is not embedded.** The palimpsest byte sequence does not carry the cadence `k`; sender
+and receiver MUST agree `k` out-of-band. Typical mechanisms include a framing header, a protocol
+constant, or a per-deployment configuration value. A receiver that assumes the wrong cadence will
+fail decoding (the integrity check of §4.4 will reject every candidate). Specifications that
+embed a palimpsest within another format are RESPONSIBLE for fixing or communicating `k`; for
+example, the BinTEL specification fixes `k = 2` for all schema signatures.
 
 ---
 
-## 9. Issues, Ambiguities, and Open Questions
+## 9. Open Items
 
-The following issues were identified during the production of this specification.
+The following remain as deferred analytical work, not as gaps in the encoding contract:
 
-### 9.1 Base case in the intro's decoding description
+- **Tight worst-case bound on backtracking depth.** The average-case analysis of §6.2 establishes
+  that backtracking is rare when `k ≥ ⌈log₂₅₆(N)⌉`, but a closed-form probabilistic bound on the
+  expected number of recursive calls under non-uniform hash distributions, and a formal
+  worst-case bound, are not given. Implementations SHOULD impose an explicit recursion-depth
+  limit (e.g. `2·n`) to guarantee termination on pathological inputs.
+- **Correlated hashes.** The complexity analysis assumes uniformly distributed hashes. When the
+  hash function's inputs are correlated (for example, near-duplicate source data), bucket
+  occupancy may deviate from uniform; the effect on decoding cost has not been characterised.
 
-The intro describes the termination condition as: _"if the palimpsest is exactly 32 bytes long, and
-every byte is zero, then return the stack of hashes collected so far."_
-
-This is incorrect or at best misleading. After XORing the final hash out of a 32-byte palimpsest and
-removing `k` leading bytes (as step 4 instructs), the remainder is `32 - k` bytes, not 32. The base
-case as stated is unreachable for `k > 0`.
-
-The correct base case (as reflected in the implementation) is: after processing all `n` hash
-positions, verify that all bytes of the palimpsest are zero.
-
-### 9.2 Bucket count error
-
-The intro states: _"For a library of n hashes, these must fit into 2^k distinct buckets."_ The
-correct value is `256^k` (equivalently `2^(8k)`), since `k` is measured in bytes. For example,
-`k = 1` gives 256 buckets, not 2.
-
-### 9.3 Recommended cadence for N = 1000
-
-The intro recommends cadence `k = 1` for a library of 1000 hashes. This gives 256 buckets with ~4
-hashes per bucket on average, which is functional but suboptimal. The formula `k = ⌈log₂₅₆(N)⌉`
-gives `k = 2` for `N = 1000`. Whether `k = 1` is acceptable depends on the tolerable decoding
-overhead; this should be clarified.
-
-### 9.4 "Improvement of nearly 25"
-
-The intro says a 100-sequence palimpsest at k=1, N=1000 is "an improvement of nearly 25." The
-compression ratio is 3200/131 ≈ 24.4. The word "improvement" is ambiguous — it should be stated as a
-_bandwidth factor_ of approximately 24×, meaning the palimpsest is approximately 24 times smaller
-than the naive encoding.
-
-### 9.5 "k is proportional to the log"
-
-The intro says the cadence `k` is proportional to the log of the library size. More precisely,
-`k ≈ log₂₅₆(N) = log₂(N) / 8`. The constant of proportionality is `1/8` (relative to log₂),
-reflecting the fact that the cadence is in bytes. This should be stated explicitly.
-
-### 9.6 Communication of the cadence
-
-The palimpsest encoding does not embed the cadence `k`. The receiver must know it independently
-(e.g., from a header, a framing protocol, or a convention). A receiver that assumes the wrong
-cadence will fail to decode. This protocol-level question is unaddressed in the intro.
-
-### 9.7 Handling of `n = 0`
-
-The case of an empty sequence (`n = 0`) is undefined by the formula (giving `L = 32 - k`, which is
-negative for `k > 0` or odd for various `k`). A convention for encoding an empty sequence must be
-specified separately.
-
-### 9.8 Incomplete complexity analysis
-
-The probabilistic analysis of decoding cost is marked incomplete in the original document. In
-particular:
-
-- The expected number of recursive calls under non-uniform hash distributions.
-- A formal bound on worst-case backtracking depth.
-- The effect of correlated hashes (e.g., hashes of related data) on bucket uniformity.
-
-### 9.9 Cadence must be less than `H`
-
-For the palimpsest to be smaller than the naive encoding, the cadence must satisfy `k < H`
-(otherwise the palimpsest size `H + k*(n-1) ≥ H*n` for n ≥ 2). Since `k ≈ log₂₅₆(N)` and for
-practical library sizes `N ≪ 256^H`, this is always satisfied in practice for SHA-256 (`H = 32`),
-but should be stated as a constraint.
+All other items previously listed as open (encoding for `n = 0`, communication of the cadence,
+the `2^k`-vs-`256^k` arithmetic, the `k < H` constraint, the bandwidth-factor wording, the
+recommended cadence for small libraries, the base-case condition in decoding) are resolved by
+the normative text of §2 through §8 of this revision.
 
 ---
 

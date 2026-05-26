@@ -5,12 +5,13 @@
 BASE-256 is a binary-to-text encoding that maps each byte of input to a single Unicode character
 drawn from a fixed 256-character alphabet. The alphabet is constructed such that decoding requires
 no lookup table: the original byte value of a character is its Unicode code point taken modulo 256.
-Every character in the alphabet has the Unicode General Category `Lu`, `Ll`, or `Lt` — uppercase,
-lowercase, or titlecase letter — drawn from blocks used by European alphabets, with the exception of
-the ten ASCII digits at positions `0x30`–`0x39`, which are the digits themselves. Consequently, a
-contiguous run of BASE-256 characters forms a single word under the Unicode default
-word-segmentation algorithm (letters via rule WB5, digits via WB8, and the two joined by WB9/WB10),
-so it may be selected as a unit by a double-click in any conforming text-handling environment.
+Every character in the alphabet has the Unicode General Category `Lu`, `Ll`, `Lt`, or `Nd` —
+uppercase, lowercase, or titlecase letter, or decimal digit — drawn from blocks used by European
+alphabets. The ten ASCII digits at positions `0x30`–`0x39` (category `Nd`) appear as the digits
+themselves; the remaining 246 positions are letters. Consequently, a contiguous run of BASE-256
+characters forms a single word under the Unicode default word-segmentation algorithm (letters via
+rule WB5, digits via WB8, and the two joined by WB9/WB10), so it may be selected as a unit by a
+double-click in any conforming text-handling environment.
 
 BASE-256 expands input by a factor of approximately 1.5× when measured in UTF-8 bytes (since most of
 its characters are encoded in 2 or 3 UTF-8 bytes), but the length in **characters** is identical to
@@ -40,13 +41,41 @@ The following definitions apply throughout this document:
 
 ## 4. Alphabet
 
-The alphabet is the following sequence of 256 Unicode characters, indexed from 0:
+The alphabet is the following sequence of 256 Unicode characters, indexed from 0. The first
+form below presents the alphabet linearly (positions 0–255 in order). The second form is a
+16×16 grid: row labels are the byte's high nibble, column labels are the low nibble, so the
+character at byte `b` is found at row `b >> 4`, column `b & 0xF`.
 
 ```
 ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠḡḢḣḤĥȦȧШḩЪЫЬЭĮį0123456789ĺĻļĽľĿŀABCDEFGHIJKLMNOPQRSTUVWXYZṛќѝŞşŠabc
 defghijklmnopqrstuvwxyzŻżṽžſẀẁẂẃẄẅẆẇẈẉΊẋẌẍΎƏҐґƒẓΔƕƖẗẘẙҚқƜƝΞƟƠơҢңƤƥΦƧƨΩΪΫάέήίưᾱβγδεζҷᾸικλμẽξοπӁӂÃτÅÆÇ
 ψωϊϋỌύώϏÐǑǒǓÔϕӖϗῘÙῚӛӜӝÞӟàῡǢǣӤåæçǨῩӪӫìíӮӯðñỲỳôỵǶỷӸùῺûǼǽþǿ
 ```
+
+```
+     0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+ 0_  Ḁ  ḁ  Ђ  Ѓ  Ą  ą  Ć  ć  Ȉ  ȉ  Њ  ḋ  Ќ  ḍ  Ď  ď
+ 1_  Ȑ  ȑ  Ē  Г  Д  ȕ  Ж  З  Ę  ę  Ț  ț  Ĝ  ĝ  Ḟ  ḟ
+ 2_  Ḡ  ḡ  Ḣ  ḣ  Ḥ  ĥ  Ȧ  ȧ  Ш  ḩ  Ъ  Ы  Ь  Э  Į  į
+ 3_  0  1  2  3  4  5  6  7  8  9  ĺ  Ļ  ļ  Ľ  ľ  Ŀ
+ 4_  ŀ  A  B  C  D  E  F  G  H  I  J  K  L  M  N  O
+ 5_  P  Q  R  S  T  U  V  W  X  Y  Z  ṛ  ќ  ѝ  Ş  ş
+ 6_  Š  a  b  c  d  e  f  g  h  i  j  k  l  m  n  o
+ 7_  p  q  r  s  t  u  v  w  x  y  z  Ż  ż  ṽ  ž  ſ
+ 8_  Ẁ  ẁ  Ẃ  ẃ  Ẅ  ẅ  Ẇ  ẇ  Ẉ  ẉ  Ί  ẋ  Ẍ  ẍ  Ύ  Ə
+ 9_  Ґ  ґ  ƒ  ẓ  Δ  ƕ  Ɩ  ẗ  ẘ  ẙ  Қ  қ  Ɯ  Ɲ  Ξ  Ɵ
+ A_  Ơ  ơ  Ң  ң  Ƥ  ƥ  Φ  Ƨ  ƨ  Ω  Ϊ  Ϋ  ά  έ  ή  ί
+ B_  ư  ᾱ  β  γ  δ  ε  ζ  ҷ  Ᾰ  ι  κ  λ  μ  ẽ  ξ  ο
+ C_  π  Ӂ  ӂ  Ã  τ  Å  Æ  Ç  ψ  ω  ϊ  ϋ  Ọ  ύ  ώ  Ϗ
+ D_  Ð  Ǒ  ǒ  Ǔ  Ô  ϕ  Ӗ  ϗ  Ῐ  Ù  Ὶ  ӛ  Ӝ  ӝ  Þ  ӟ
+ E_  à  ῡ  Ǣ  ǣ  Ӥ  å  æ  ç  Ǩ  Ῡ  Ӫ  ӫ  ì  í  Ӯ  ӯ
+ F_  ð  ñ  Ỳ  ỳ  ô  ỵ  Ƕ  ỷ  Ӹ  ù  Ὼ  û  Ǽ  ǽ  þ  ǿ
+```
+
+The two forms are equivalent; any divergence between them is an error in this specification. A
+conforming implementation MAY use either form when transcribing the alphabet into source code,
+but MUST verify the defining property of §4 over the resulting table to detect transcription
+errors.
 
 The alphabet has the following defining property:
 
@@ -147,7 +176,8 @@ residue.
 The converse — that `encode(decode(S)) = S` for an arbitrary Unicode string `S` — does **not** hold,
 because many distinct Unicode code points share the same residue modulo 256. The encoding is
 injective from bytes to characters within the chosen alphabet; it is not surjective from characters
-back to the alphabet. See §9.
+back to the alphabet. Composing decode then encode is therefore a **normalisation**: any Unicode
+string `S` is mapped to the canonical BASE-256 string carrying the same byte residues. See §9.
 
 ## 9. Error Handling on Decode
 

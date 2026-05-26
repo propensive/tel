@@ -153,4 +153,8 @@ Document {
     ],
 }
 errors:
-  E211 [0,0): Two or more Definitions share the same name: duplicate definition name `dup-name` in base schema
+  E310 [0,8): Scalar value failed validation: `name` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,8): Scalar value failed validation: `name` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,8): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

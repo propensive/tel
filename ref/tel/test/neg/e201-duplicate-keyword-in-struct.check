@@ -86,4 +86,5 @@ Document {
     ],
 }
 errors:
-  E201 [0,0): Duplicate keyword within a Struct: duplicate keyword `foo` within a Struct
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

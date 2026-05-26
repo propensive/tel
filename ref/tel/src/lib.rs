@@ -42,7 +42,7 @@ pub enum ErrorCode {
     E116, E117, E118, E119, E120, E121, E122, E123,
     // Schema validity errors (§20.1)
     E201, E202, E204, E205, E206, E207, E208, E209, E210, E211,
-    E212, E213, E214, E215, E216, E217,
+    E212, E213, E214, E215, E216, E217, E218,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
 }
@@ -87,7 +87,8 @@ impl ErrorCode {
             Self::E214 => "Layer attempts to add a variant to an existing Select in a non-subtyping way",
             Self::E215 => "Layer cannot loosen a required member to optional",
             Self::E216 => "Layer cannot loosen an irrepeatable member to repeatable",
-            Self::E217 => "Exclude operation appears outside a layer's root",
+            Self::E217 => "Exclude operation appears outside a layer's SelectDefinition body",
+            Self::E218 => "Reference/SelectRef kind mismatch (Reference resolved to a SelectDefinition, or SelectRef resolved to a Record/Scalar)",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -186,11 +187,12 @@ pub struct Schema {
     pub layers: Vec<Layer>,
     pub sigil: Option<char>,
     /// User-declared `record` definitions (named struct types).
-    pub types: Vec<Definition>,
-    /// User-declared `scalar` definitions (named scalar types). Shares a
-    /// single global namespace with `types` and the built-in type names
-    /// (`flag`, `string`, `identifier`, `sigil`).
+    pub records: Vec<RecordDefinition>,
+    /// User-declared `scalar` definitions (named scalar types).
     pub scalars: Vec<ScalarDefinition>,
+    /// User-declared `select` definitions (named sum types — D2 duality
+    /// with `RecordDefinition`).
+    pub selects: Vec<SelectDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,12 +201,13 @@ pub struct Layer {
     /// Members merged into the composed document root (§20.3). Written as
     /// the `overlay` keyword in TEL source.
     pub overlay: Struct,
-    pub types: Vec<Definition>,
+    pub records: Vec<RecordDefinition>,
     pub scalars: Vec<ScalarDefinition>,
+    pub selects: Vec<SelectDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Definition {
+pub struct RecordDefinition {
     pub name: String,
     pub members: Vec<Member>,
     /// Struct-level validators (§21.6) applying to instances of this
@@ -212,7 +215,7 @@ pub struct Definition {
     pub validators: Vec<String>,
 }
 
-/// A named scalar type declared via `scalar <name>` at schema or layer
+/// A named scalar type declared via `scalar <Name>` at schema or layer
 /// scope. Its `validators` apply (in AND-conjunction) to every value
 /// whose field/variant references this scalar by name.
 #[derive(Debug, Clone, PartialEq)]
@@ -221,13 +224,30 @@ pub struct ScalarDefinition {
     pub validators: Vec<String>,
 }
 
+/// A named sum type declared via `select <Name>` at schema or layer scope.
+/// The variants supply the keywords admissible at each `SelectRef` use
+/// site; the SelectDefinition's optional struct-level validators inspect
+/// the chosen variant (§21.6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectDefinition {
+    pub name: String,
+    pub variants: Vec<Variant>,
+    pub validators: Vec<String>,
+    /// Layer-only: `Exclude` markers declared in a layer's `select N` body
+    /// that name a variant of the base SelectDefinition to remove. Always
+    /// empty in a fully composed schema (consumed by `MergeSelect`).
+    pub layer_excludes: Vec<String>,
+}
+
 /// A `Type` is what a Field or Variant evaluates to. In the v1.0 schema
 /// syntax every user-written field/variant type is a `Reference`; the
 /// non-`Reference` variants exist only as resolution results.
 /// `Type::Reference(name)` resolves (per §20.2) to either a `Struct` formed
 /// from the named record's `members`, a `Scalar` formed from the named
-/// scalar's `validators`, or one of the built-in types `flag`, `string`,
-/// `identifier`, `sigil`.
+/// scalar's `validators`, or one of the built-in types `Flag`, `String`,
+/// `Identifier`, `Sigil`. Resolving to a `SelectDefinition` is **E218**
+/// — sums at a single-keyword position are written as `SelectRef`, not
+/// `Reference`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Struct(Struct),
@@ -255,35 +275,68 @@ pub struct Scalar {
     pub validators: Vec<String>,
 }
 
+/// Per-axis declaration state for `Field` and `SelectRef`. The tristate is
+/// retained through schema construction and layer merge so §20.3 can
+/// distinguish a layer that loosens an already-tight axis (E215/E216)
+/// from a redundant restatement. Effective booleans are derived:
+///   effective `required`   = `(polarity != Loose)`
+///   effective `repeatable` = `(polarity == Loose)`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Polarity {
+    /// No flag declared on this axis. Effective boolean follows the
+    /// schema-language default — `required=true`, `repeatable=false`.
+    Default,
+    /// `optional` or `repeatable` was declared (base-side loosening).
+    Loose,
+    /// `required` or `irrepeatable` was declared (layer-side tightening).
+    Tight,
+}
+
+impl Polarity {
+    /// Effective `required` for an axis carrying this polarity.
+    pub fn effective_required(self) -> bool {
+        !matches!(self, Polarity::Loose)
+    }
+    /// Effective `repeatable` for an axis carrying this polarity.
+    pub fn effective_repeatable(self) -> bool {
+        matches!(self, Polarity::Loose)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Member {
     Field(Field),
-    Select(Select),
-    /// Layer-only operation: exclude the variant with the given keyword
-    /// from whichever `Select` in the merged Struct declares it (§20.3).
-    /// `Exclude` MUST NOT appear in a base schema's `Schema.document` or
-    /// in any `Definition` of `Schema.types`; appearing there is a
-    /// schema validity error.
+    /// References a `SelectDefinition` at a member position. The named
+    /// Select's variants become the keywords admissible here; the
+    /// SelectRef itself has no own keyword. Polarity lives at the use
+    /// site (here), not on the SelectDefinition.
+    SelectRef(SelectRef),
+    /// Layer-only operation: declared inside a layer's `select N` body to
+    /// remove a variant from the merged SelectDefinition (§20.3). It MUST
+    /// NOT appear inside any Struct (root, RecordDefinition body, or
+    /// overlay); appearing there is **E217**.
     Exclude(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
-    pub required: bool,
-    pub repeatable: bool,
+    pub required: Polarity,
+    pub repeatable: Polarity,
     pub keyword: String,
     pub r#type: Type,
     /// Per-use-site default value, applied when a required Scalar-typed
-    /// field is absent from the document. Valid only when `required` is
-    /// `true` and the resolved `type` is `Scalar` (E204 otherwise).
+    /// field is absent from the document. Valid only when the effective
+    /// `required` is `true` and the resolved `type` is `Scalar`
+    /// (E204 otherwise).
     pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Select {
-    pub required: bool,
-    pub repeatable: bool,
-    pub variants: Vec<Variant>,
+pub struct SelectRef {
+    pub required: Polarity,
+    pub repeatable: Polarity,
+    /// `TypeName` of a `SelectDefinition` in the composed namespace.
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -362,15 +415,13 @@ impl<'a> StructView<'a> {
         let child = self.compound.children.iter()
             .flat_map(|b| b.compounds.iter())
             .find(|c| c.keyword == keyword)?;
-        let t = keyword_type_in(self.members, keyword)?;
-        match resolve(t, self.schema) {
-            ResolvedType::Struct(child_members) => Some(StructView {
-                compound: child,
-                members: child_members,
-                schema: self.schema,
-            }),
-            _ => None,
-        }
+        let type_name = keyword_type_name_in(self.members, keyword, self.schema)?;
+        let resolved_members = resolve_reference(&type_name, self.schema)?;
+        Some(StructView {
+            compound: child,
+            members: resolved_members,
+            schema: self.schema,
+        })
     }
 
     /// Iterate every child compound with its keyword. Useful for
@@ -381,16 +432,30 @@ impl<'a> StructView<'a> {
     }
 }
 
-/// Look up a Field's keyword in a member list and return its declared
-/// Type (before Reference resolution). Helper for `StructView`.
-fn keyword_type_in<'a>(members: &'a [Member], keyword: &str) -> Option<&'a Type> {
+/// Look up a Field's keyword in a member list and return the TypeName
+/// string from its declared `Reference`. For a `SelectRef` member, the
+/// keyword may identify a variant of the referenced `SelectDefinition`;
+/// resolution requires the schema. Returns `None` when the declared type
+/// isn't a Reference (which shouldn't happen in v1.0, where every
+/// user-declared type is a Reference).
+fn keyword_type_name_in(members: &[Member], keyword: &str, schema: &Schema) -> Option<String> {
     for m in members {
         match m {
-            Member::Field(f) if f.keyword == keyword => return Some(&f.r#type),
-            Member::Select(s) => {
-                for v in &s.variants {
-                    if v.keyword == keyword {
-                        return Some(&v.r#type);
+            Member::Field(f) if f.keyword == keyword => {
+                if let Type::Reference(n) = &f.r#type {
+                    return Some(n.clone());
+                }
+                return None;
+            }
+            Member::SelectRef(s) => {
+                if let Some(variants) = resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        if v.keyword == keyword {
+                            if let Type::Reference(n) = &v.r#type {
+                                return Some(n.clone());
+                            }
+                            return None;
+                        }
                     }
                 }
             }
@@ -487,6 +552,30 @@ pub fn validate_identifier(value: &str) -> ValidationResponse {
     ValidationResponse::Valid
 }
 
+/// Built-in validator: `type-name`. Accepts a string conforming to the
+/// PascalCase TypeName grammar of §20.7: begins with an uppercase ASCII
+/// letter; remainder is ASCII letters and digits; no hyphens, underscores,
+/// or non-ASCII characters; non-empty.
+pub fn validate_type_name(value: &str) -> ValidationResponse {
+    let end = value.chars().count();
+    let mk = |msg: &str| scalar_invalid(msg, end);
+    if value.is_empty() { return mk("empty TypeName"); }
+    let mut chars = value.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_uppercase() {
+        return mk("TypeName must start with an uppercase ASCII letter");
+    }
+    for c in chars {
+        if c == '-' || c == '_' {
+            return mk("TypeName may not contain hyphens or underscores");
+        }
+        if !(c.is_ascii_alphanumeric()) {
+            return mk("TypeName may contain only ASCII letters and digits");
+        }
+    }
+    ValidationResponse::Valid
+}
+
 /// Built-in validator: `sigil`. Accepts a single-character string whose
 /// character satisfies the sigil constraints in §8.
 pub fn validate_sigil(value: &str) -> ValidationResponse {
@@ -524,11 +613,12 @@ pub fn validate_with_builtins(
 ) -> ValidationResponse {
     let method = req.method();
     // Built-ins handle scalar kind only.
-    let builtin = matches!(method, "identifier" | "sigil" | "string");
+    let builtin = matches!(method, "identifier" | "sigil" | "string" | "type-name");
     if builtin {
         match req {
             ValidationRequest::Scalar { value, .. } => match method {
                 "identifier" => return validate_identifier(value),
+                "type-name" => return validate_type_name(value),
                 "sigil" => return validate_sigil(value),
                 "string" => return validate_string(value),
                 _ => unreachable!(),
@@ -548,126 +638,155 @@ pub fn validate_with_builtins(
 /// the schema referenced by every TEL schema document, and the closure
 /// invariant of §20.5 requires it to match what `tel-schema.tel` describes.
 pub fn builtin_tel_schema() -> Schema {
-    // Helpers — all built-in scalar/flag types are reached via References
-    // through `resolve_name`. This keeps the built-in and the
-    // self-bootstrap parse of `tel-schema.tel` byte-identical.
-    let scalar_id = || Type::Reference("identifier".to_string());
-    let scalar_sigil = || Type::Reference("sigil".to_string());
-    let scalar_str = || Type::Reference("string".to_string());
+    // Helpers. Every Type used here is a Reference; resolution at type
+    // assignment time (§20.2) picks the matching Definition or built-in.
+    let id_type = || Type::Reference("Identifier".to_string());
+    let sigil_type = || Type::Reference("Sigil".to_string());
+    let str_type = || Type::Reference("String".to_string());
+    let flag_type = || Type::Reference("Flag".to_string());
+    let tn_type = || Type::Reference("TypeName".to_string());
     let refn = |n: &str| Type::Reference(n.to_string());
-    let field = |req: bool, rep: bool, kw: &str, t: Type| Member::Field(Field {
+
+    // Per-axis polarity literals (kept short for readability).
+    let dflt = Polarity::Default;
+    let loose = Polarity::Loose;
+
+    // Field-construction helper. Polarity defaults: Default/Default unless
+    // a loosening flag was explicitly chosen.
+    let field = |req: Polarity, rep: Polarity, kw: &str, t: Type| Member::Field(Field {
         required: req, repeatable: rep, keyword: kw.to_string(),
         r#type: t, default: None,
     });
-    let select = |req: bool, rep: bool, variants: Vec<Variant>| Member::Select(Select {
-        required: req, repeatable: rep, variants,
+    // SelectRef-construction helper.
+    let selref = |req: Polarity, rep: Polarity, name: &str| Member::SelectRef(SelectRef {
+        required: req, repeatable: rep, reference: name.to_string(),
     });
     let variant = |kw: &str, t: Type| Variant { keyword: kw.to_string(), r#type: t };
 
-    // Member Select used inside a record-body. `field`/`select`/`validate`.
-    let record_member_select = || select(false, true, vec![
-        variant("field", refn("field-body")),
-        variant("select", refn("select-body")),
-        variant("validate", scalar_id()),
-    ]);
+    // ── RecordDefinitions ────────────────────────────────────────────────
 
-    // Member Select used inside an overlay-body. Includes `exclude` (layer-only).
-    let overlay_member_select = || select(false, true, vec![
-        variant("field", refn("field-body")),
-        variant("select", refn("select-body")),
-        variant("exclude", scalar_id()),
-        variant("validate", scalar_id()),
-    ]);
-
-    // Member Select used inside the schema's document body. No `exclude`.
-    let document_member_select = || select(false, true, vec![
-        variant("field", refn("field-body")),
-        variant("select", refn("select-body")),
-        variant("validate", scalar_id()),
-    ]);
-
-    let layer_body = Definition {
-        name: "layer-body".to_string(),
+    // A `field` declaration at a member position.
+    let r_field = RecordDefinition {
+        name: "Field".to_string(),
         members: vec![
-            field(true, false, "name", scalar_id()),
-            field(false, true, "record", refn("record-body")),
-            field(false, true, "scalar", refn("scalar-body")),
-            field(false, false, "overlay", refn("overlay-body")),
+            field(dflt, dflt, "keyword", id_type()),
+            field(dflt, dflt, "type", tn_type()),
+            field(loose, dflt, "optional", flag_type()),
+            field(loose, dflt, "required", flag_type()),
+            field(loose, dflt, "repeatable", flag_type()),
+            field(loose, dflt, "irrepeatable", flag_type()),
+            field(loose, dflt, "default", str_type()),
         ], validators: Vec::new(),
     };
 
-    let record_body = Definition {
-        name: "record-body".to_string(),
+    // A `select` declaration at a member position — a SelectRef.
+    let r_select_ref = RecordDefinition {
+        name: "SelectRef".to_string(),
         members: vec![
-            field(true, false, "name", scalar_id()),
-            record_member_select(),
+            field(dflt, dflt, "reference", tn_type()),
+            field(loose, dflt, "optional", flag_type()),
+            field(loose, dflt, "required", flag_type()),
+            field(loose, dflt, "repeatable", flag_type()),
+            field(loose, dflt, "irrepeatable", flag_type()),
         ], validators: Vec::new(),
     };
 
-    let scalar_body = Definition {
-        name: "scalar-body".to_string(),
+    // A `variant` declaration inside a Select body.
+    let r_variant = RecordDefinition {
+        name: "Variant".to_string(),
         members: vec![
-            field(true, false, "name", scalar_id()),
-            field(true, true, "validate", scalar_id()),
+            field(dflt, dflt, "keyword", id_type()),
+            field(dflt, dflt, "type", tn_type()),
         ], validators: Vec::new(),
     };
 
-    let overlay_body = Definition {
-        name: "overlay-body".to_string(),
-        members: vec![overlay_member_select()], validators: Vec::new(),
-    };
-
-    let document_body = Definition {
-        name: "document-body".to_string(),
-        members: vec![document_member_select()], validators: Vec::new(),
-    };
-
-    // Field-body: keyword, then `type` (required), then the four
-    // loosen/tighten flags, then `default` (optional). This ordering keeps
-    // the type adjacent to the field-name and lets a Field declare itself
-    // as a one-liner — `field foo string optional unknown`.
-    let field_body = Definition {
-        name: "field-body".to_string(),
+    // A `record` declaration: name + members.
+    let r_record = RecordDefinition {
+        name: "Record".to_string(),
         members: vec![
-            field(true, false, "keyword", scalar_id()),
-            field(true, false, "type", scalar_id()),
-            field(false, false, "optional", Type::Reference("flag".to_string())),
-            field(false, false, "required", Type::Reference("flag".to_string())),
-            field(false, false, "repeatable", Type::Reference("flag".to_string())),
-            field(false, false, "irrepeatable", Type::Reference("flag".to_string())),
-            field(false, false, "default", scalar_str()),
+            field(dflt, dflt, "name", tn_type()),
+            selref(loose, loose, "Member"),
         ], validators: Vec::new(),
     };
 
-    let select_body = Definition {
-        name: "select-body".to_string(),
+    // A `scalar` declaration: name + one or more validators.
+    let r_scalar = RecordDefinition {
+        name: "Scalar".to_string(),
         members: vec![
-            field(false, false, "optional", Type::Reference("flag".to_string())),
-            field(false, false, "required", Type::Reference("flag".to_string())),
-            field(false, false, "repeatable", Type::Reference("flag".to_string())),
-            field(false, false, "irrepeatable", Type::Reference("flag".to_string())),
-            field(true, true, "variant", refn("variant-body")),
+            field(dflt, dflt, "name", tn_type()),
+            field(dflt, loose, "validate", id_type()),
         ], validators: Vec::new(),
     };
 
-    let variant_body = Definition {
-        name: "variant-body".to_string(),
+    // A top-level `select` declaration.
+    let r_select = RecordDefinition {
+        name: "Select".to_string(),
         members: vec![
-            field(true, false, "keyword", scalar_id()),
-            field(true, false, "type", scalar_id()),
+            field(dflt, dflt, "name", tn_type()),
+            selref(dflt, loose, "SelectChild"),
         ], validators: Vec::new(),
     };
 
-    // The schema-document Struct: top-level members of any schema document.
+    // The shared struct-shape used by `document` and `overlay`.
+    let r_body = RecordDefinition {
+        name: "Body".to_string(),
+        members: vec![
+            selref(loose, loose, "Member"),
+        ], validators: Vec::new(),
+    };
+
+    // A `layer` declaration.
+    let r_layer = RecordDefinition {
+        name: "Layer".to_string(),
+        members: vec![
+            field(dflt, dflt, "name", id_type()),
+            field(loose, loose, "record", refn("Record")),
+            field(loose, loose, "scalar", refn("Scalar")),
+            field(loose, loose, "select", refn("Select")),
+            field(loose, dflt, "overlay", refn("Body")),
+        ], validators: Vec::new(),
+    };
+
+    // ── SelectDefinitions ────────────────────────────────────────────────
+
+    // Members admissible inside a Body, Record body, or Overlay.
+    let s_member = SelectDefinition {
+        name: "Member".to_string(),
+        variants: vec![
+            variant("field", refn("Field")),
+            variant("select", refn("SelectRef")),
+            variant("validate", id_type()),
+        ],
+        validators: Vec::new(),
+        layer_excludes: Vec::new(),
+    };
+
+    // Children admissible inside a Select body. `exclude` is lexically
+    // permitted (E217 if it appears outside a layer's Select body at
+    // construction time).
+    let s_select_child = SelectDefinition {
+        name: "SelectChild".to_string(),
+        variants: vec![
+            variant("variant", refn("Variant")),
+            variant("exclude", id_type()),
+            variant("validate", id_type()),
+        ],
+        validators: Vec::new(),
+        layer_excludes: Vec::new(),
+    };
+
+    // ── Schema document root ─────────────────────────────────────────────
+
     let document = Struct {
         validators: Vec::new(),
         members: vec![
-            field(true, false, "name", scalar_id()),
-            field(false, false, "sigil", scalar_sigil()),
-            field(false, true, "record", refn("record-body")),
-            field(false, true, "scalar", refn("scalar-body")),
-            field(true, false, "document", refn("document-body")),
-            field(false, true, "layer", refn("layer-body")),
+            field(dflt, dflt, "name", id_type()),
+            field(loose, dflt, "sigil", sigil_type()),
+            field(loose, loose, "record", refn("Record")),
+            field(loose, loose, "scalar", refn("Scalar")),
+            field(loose, loose, "select", refn("Select")),
+            field(dflt, dflt, "document", refn("Body")),
+            field(loose, loose, "layer", refn("Layer")),
         ],
     };
 
@@ -676,36 +795,51 @@ pub fn builtin_tel_schema() -> Schema {
         document,
         layers: vec![],
         sigil: None,
-        types: vec![
-            layer_body, record_body, scalar_body, overlay_body, document_body,
-            field_body, select_body, variant_body,
+        records: vec![
+            r_field, r_select_ref, r_variant, r_record, r_scalar,
+            r_select, r_body, r_layer,
         ],
         scalars: Vec::new(),
+        selects: vec![s_member, s_select_child],
     }
 }
 
 // ── Reference resolution (§20.2) ────────────────────────────────────────────
 
-/// The predefined type names that every TEL parser MUST recognize regardless
-/// of the user schema. User schemas MAY NOT declare a `record` or `scalar`
-/// with any of these names.
-pub const BUILTIN_TYPE_NAMES: &[&str] = &["flag", "string", "identifier", "sigil"];
+/// The predefined TypeNames (PascalCase) that every TEL parser MUST
+/// recognize regardless of the user schema. User schemas MAY NOT declare
+/// a `record`, `scalar`, or `select` with any of these names. `TypeName`
+/// is the scalar type used in the schema-of-schemas to type the `type`
+/// and `reference` fields; its values are validated by `validate_type_name`.
+pub const BUILTIN_TYPE_NAMES: &[&str] = &["Flag", "String", "Identifier", "Sigil", "TypeName"];
 
 /// Resolve a `Reference` to a record's `Member` slice. Returns `None` if the
-/// name doesn't resolve to a record (e.g. it's a built-in, a scalar
-/// definition, or unknown).
+/// name doesn't resolve to a record. Used by `Field.type` resolution; a
+/// `Field` whose Reference resolves to a `SelectDefinition` is E218 and
+/// should be caught at schema-validity time.
 pub(crate) fn resolve_reference<'a>(name: &str, schema: &'a Schema) -> Option<&'a [Member]> {
-    schema.types.iter()
-        .chain(schema.layers.iter().flat_map(|l| l.types.iter()))
+    schema.records.iter()
+        .chain(schema.layers.iter().flat_map(|l| l.records.iter()))
         .find(|d| d.name == name)
         .map(|d| d.members.as_slice())
 }
 
+/// Resolve a `SelectRef.reference` to a SelectDefinition's variants. Returns
+/// `None` if the name doesn't resolve to a SelectDefinition.
+pub(crate) fn resolve_select_ref<'a>(name: &str, schema: &'a Schema) -> Option<&'a [Variant]> {
+    schema.selects.iter()
+        .chain(schema.layers.iter().flat_map(|l| l.selects.iter()))
+        .find(|d| d.name == name)
+        .map(|d| d.variants.as_slice())
+}
+
 /// Per §20.2, resolve a Type that may be a Reference into a concrete
-/// non-Reference type. Built-in names (`flag`, `string`, `identifier`,
-/// `sigil`) short-circuit to owned built-in types. Records resolve to a
-/// member-slice borrow; scalars resolve to an owned `Scalar` synthesized
-/// from the definition's validators.
+/// non-Reference type. Built-in TypeNames (`Flag`, `String`, `Identifier`,
+/// `Sigil`, `TypeName`) short-circuit to owned built-in types. Records
+/// resolve to a member-slice borrow; scalars resolve to an owned `Scalar`
+/// synthesized from the definition's validators. A Reference that
+/// resolves to a `SelectDefinition` is the E218 condition and is not
+/// considered resolved here.
 pub(crate) enum ResolvedType<'a> {
     Struct(&'a [Member]),
     /// An owned Scalar — used for both built-in scalar types and named
@@ -714,7 +848,10 @@ pub(crate) enum ResolvedType<'a> {
     /// when it's a built-in or a named scalar definition.
     Scalar(std::borrow::Cow<'a, Scalar>),
     Flag,
-    Unresolved, // Reference whose name doesn't resolve (E210 caught at schema-validity time)
+    Unresolved, // Reference whose name doesn't resolve (E210)
+    /// Reference whose name resolves to a `SelectDefinition` — invalid in
+    /// a `Field.type` / `Variant.type` position (E218).
+    KindMismatch,
 }
 
 pub(crate) fn resolve<'a>(t: &'a Type, schema: &'a Schema) -> ResolvedType<'a> {
@@ -729,14 +866,21 @@ pub(crate) fn resolve<'a>(t: &'a Type, schema: &'a Schema) -> ResolvedType<'a> {
 
 pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'a> {
     use std::borrow::Cow;
-    // Built-in names short-circuit.
+    // Built-in TypeNames short-circuit.
     match name {
-        "flag" => return ResolvedType::Flag,
-        "string" | "identifier" | "sigil" => {
-            return ResolvedType::Scalar(Cow::Owned(Scalar {
-                validators: vec![name.to_string()],
-            }));
-        }
+        "Flag" => return ResolvedType::Flag,
+        "String" => return ResolvedType::Scalar(Cow::Owned(Scalar {
+            validators: vec!["string".to_string()],
+        })),
+        "Identifier" => return ResolvedType::Scalar(Cow::Owned(Scalar {
+            validators: vec!["identifier".to_string()],
+        })),
+        "Sigil" => return ResolvedType::Scalar(Cow::Owned(Scalar {
+            validators: vec!["sigil".to_string()],
+        })),
+        "TypeName" => return ResolvedType::Scalar(Cow::Owned(Scalar {
+            validators: vec!["type-name".to_string()],
+        })),
         _ => {}
     }
     // Record definitions
@@ -752,6 +896,10 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
                 validators: s.validators.clone(),
             }));
         }
+    }
+    // Select definitions: E218 in this position.
+    if resolve_select_ref(name, schema).is_some() {
+        return ResolvedType::KindMismatch;
     }
     ResolvedType::Unresolved
 }
@@ -802,7 +950,7 @@ fn assign_compound_children_at_root(
     cb: Option<&ValidatorFn>,
     errors: &mut Vec<TelError>,
 ) {
-    let k = build_keyword_map(members);
+    let k = build_keyword_map(members, schema);
     let mut current_member: i32 = -1;
     let mut seen_members: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut fill_counts: Vec<usize> = vec![0; members.len()];
@@ -843,21 +991,25 @@ fn assign_compound_children_at_root(
 }
 
 /// `K`: keyword → (member index, type — already cloned for ownership ease).
-fn build_keyword_map(members: &[Member]) -> std::collections::HashMap<&str, (usize, Type)> {
+/// SelectRef members expand to one entry per variant of the referenced
+/// SelectDefinition; the variant's type carries the entry's value type.
+fn build_keyword_map(members: &[Member], schema: &Schema) -> std::collections::HashMap<String, (usize, Type)> {
     let mut k = std::collections::HashMap::new();
     for (i, m) in members.iter().enumerate() {
         match m {
             Member::Field(f) => {
-                k.insert(f.keyword.as_str(), (i, f.r#type.clone()));
+                k.insert(f.keyword.clone(), (i, f.r#type.clone()));
             }
             Member::Exclude(_) => {
-                // Remove operations are layer-only; they should not be
-                // present in a composed schema being type-assigned. If
-                // one appears here, it's a no-op for keyword mapping.
+                // `Exclude` is layer-only and lives inside a layer's
+                // SelectDefinition body; it never reaches a composed Struct's
+                // member list. No keyword to map.
             }
-            Member::Select(s) => {
-                for v in &s.variants {
-                    k.insert(v.keyword.as_str(), (i, v.r#type.clone()));
+            Member::SelectRef(s) => {
+                if let Some(variants) = resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        k.insert(v.keyword.clone(), (i, v.r#type.clone()));
+                    }
                 }
             }
         }
@@ -906,8 +1058,8 @@ fn type_assign_compound(
     errors: &mut Vec<TelError>,
 ) {
     match resolve(t, schema) {
-        ResolvedType::Unresolved => {
-            // Schema-validity reports E210; nothing to do here.
+        ResolvedType::Unresolved | ResolvedType::KindMismatch => {
+            // Schema-validity reports E210/E218; nothing more to do here.
         }
         ResolvedType::Flag => {
             // E311: Flag compound must have no atoms and no compound children.
@@ -950,7 +1102,7 @@ fn type_assign_compound(
         ResolvedType::Struct(members) => {
             // §20.2: T MUST be a Struct (it is, after resolution). Run atom phase
             // then compound child phase then constraint check.
-            let k = build_keyword_map(members);
+            let k = build_keyword_map(members, schema);
             let mut pos: usize = 0;
             let mut fill_counts: Vec<usize> = vec![0; members.len()];
 
@@ -968,17 +1120,22 @@ fn type_assign_compound(
                             // Skippable if not required AND (not atom-assignable OR (Flag and atom doesn't match))
                             let atom_assignable = matches!(resolved_type,
                                 ResolvedType::Scalar(_) | ResolvedType::Flag);
-                            let skip = !f.required && (!atom_assignable || (is_flag && !atom_matches));
-                            (f.required, skip)
+                            let required = f.required.effective_required();
+                            let skip = !required && (!atom_assignable || (is_flag && !atom_matches));
+                            (required, skip)
                         }
                         Member::Exclude(_) => (false, true), // Skip Exclude ops in atom phase.
-                        Member::Select(s) => {
-                            // Select is atom-assignable iff all variants are Flag.
-                            let all_flag = s.variants.iter().all(|v|
+                        Member::SelectRef(s) => {
+                            // SelectRef is atom-assignable iff all variants of the
+                            // referenced SelectDefinition resolve to Flag.
+                            let variants = resolve_select_ref(&s.reference, schema)
+                                .unwrap_or(&[]);
+                            let all_flag = variants.iter().all(|v|
                                 matches!(resolve(&v.r#type, schema), ResolvedType::Flag));
-                            let atom_matches_some = s.variants.iter().any(|v| v.keyword == atom_text);
-                            let skip = !s.required && (!all_flag || (all_flag && !atom_matches_some));
-                            (s.required, skip)
+                            let atom_matches_some = variants.iter().any(|v| v.keyword == atom_text);
+                            let required = s.required.effective_required();
+                            let skip = !required && (!all_flag || (all_flag && !atom_matches_some));
+                            (required, skip)
                         }
                     };
                     if is_required { break; }
@@ -999,8 +1156,11 @@ fn type_assign_compound(
                 let atom_assignable = match m {
                     Member::Field(f) => matches!(resolve(&f.r#type, schema),
                         ResolvedType::Scalar(_) | ResolvedType::Flag),
-                    Member::Select(s) => s.variants.iter().all(|v|
-                        matches!(resolve(&v.r#type, schema), ResolvedType::Flag)),
+                    Member::SelectRef(s) => {
+                        let variants = resolve_select_ref(&s.reference, schema).unwrap_or(&[]);
+                        variants.iter().all(|v|
+                            matches!(resolve(&v.r#type, schema), ResolvedType::Flag))
+                    }
                     Member::Exclude(_) => false,
                 };
                 if !atom_assignable {
@@ -1014,7 +1174,7 @@ fn type_assign_compound(
                 // Assign atom to member
                 match m {
                     Member::Exclude(_) => {
-                        // Should not be reachable: Remove is skipped above.
+                        // Should not be reachable: Exclude is skipped above.
                     }
                     Member::Field(f) => {
                         match resolve(&f.r#type, schema) {
@@ -1040,19 +1200,21 @@ fn type_assign_compound(
                             _ => {}
                         }
                         fill_counts[pos] += 1;
-                        if !f.repeatable { pos += 1; }
+                        if !f.repeatable.effective_repeatable() { pos += 1; }
                     }
-                    Member::Select(s) => {
+                    Member::SelectRef(s) => {
                         // All variants must be Flag (checked above).
-                        let matched = s.variants.iter().any(|v| v.keyword == atom_text);
+                        let variants = resolve_select_ref(&s.reference, schema).unwrap_or(&[]);
+                        let matched = variants.iter().any(|v| v.keyword == atom_text);
                         if !matched {
                             errors.push(TelError::with_detail(
                                 ErrorCode::E304, 0, 0,
-                                format!("atom `{}` matches no variant keyword in Select", atom_text),
+                                format!("atom `{}` matches no variant keyword in SelectRef `{}`",
+                                        atom_text, s.reference),
                             ));
                         }
                         fill_counts[pos] += 1;
-                        if !s.repeatable { pos += 1; }
+                        if !s.repeatable.effective_repeatable() { pos += 1; }
                     }
                 }
             }
@@ -1119,8 +1281,8 @@ fn type_assign_compound(
 fn struct_validators<'a>(t: &'a Type, schema: &'a Schema) -> Option<&'a [String]> {
     match t {
         Type::Struct(s) => Some(&s.validators),
-        Type::Reference(n) => schema.types.iter()
-            .chain(schema.layers.iter().flat_map(|l| l.types.iter()))
+        Type::Reference(n) => schema.records.iter()
+            .chain(schema.layers.iter().flat_map(|l| l.records.iter()))
             .find(|d| d.name == *n)
             .map(|d| d.validators.as_slice()),
         _ => None,
@@ -1135,11 +1297,16 @@ fn check_member_constraints(
     for (i, m) in members.iter().enumerate() {
         let fc = fill_counts[i];
         let (required, repeatable, label) = match m {
-            Member::Field(f) => (f.required, f.repeatable, f.keyword.clone()),
-            Member::Select(s) => {
-                let names: Vec<&str> = s.variants.iter().map(|v| v.keyword.as_str()).collect();
-                (s.required, s.repeatable, names.join("|"))
-            }
+            Member::Field(f) => (
+                f.required.effective_required(),
+                f.repeatable.effective_repeatable(),
+                f.keyword.clone(),
+            ),
+            Member::SelectRef(s) => (
+                s.required.effective_required(),
+                s.repeatable.effective_repeatable(),
+                format!("<select-ref {}>", s.reference),
+            ),
             Member::Exclude(_) => continue, // Skip; no constraint applies.
         };
         // E307: required and empty (defaults handled separately for Scalar)
@@ -1211,8 +1378,9 @@ impl fmt::Display for SchemaError {
 pub fn construct_schema(doc: &Document) -> Schema {
     let mut name = String::new();
     let mut sigil: Option<char> = None;
-    let mut types: Vec<Definition> = Vec::new();
+    let mut records: Vec<RecordDefinition> = Vec::new();
     let mut scalars: Vec<ScalarDefinition> = Vec::new();
+    let mut selects: Vec<SelectDefinition> = Vec::new();
     let mut layers: Vec<Layer> = Vec::new();
     let mut document = Struct { members: Vec::new(), validators: Vec::new() };
 
@@ -1221,10 +1389,11 @@ pub fn construct_schema(doc: &Document) -> Schema {
             match c.keyword.as_str() {
                 "name" => name = scalar_value_text(c),
                 "sigil" => sigil = scalar_value_text(c).chars().next(),
-                "record" => types.push(construct_record(c)),
+                "record" => records.push(construct_record(c)),
                 "scalar" => scalars.push(construct_scalar_definition(c)),
+                "select" => selects.push(construct_select_definition(c)),
                 "document" => {
-                    let (members, validators) = construct_members_and_validators(&c.children);
+                    let (members, validators) = construct_struct_body(&c.children);
                     document = Struct { members, validators };
                 }
                 "layer" => layers.push(construct_layer(c)),
@@ -1233,18 +1402,18 @@ pub fn construct_schema(doc: &Document) -> Schema {
         }
     }
 
-    Schema { name, document, layers, sigil, types, scalars }
+    Schema { name, document, layers, sigil, records, scalars, selects }
 }
 
-fn construct_record(c: &Compound) -> Definition {
-    // The `record` compound's first inline atom is the name.
+fn construct_record(c: &Compound) -> RecordDefinition {
+    // The `record` compound's first inline atom is the TypeName.
     let name = first_inline_atom(c);
-    let (members, validators) = construct_members_and_validators(&c.children);
-    Definition { name, members, validators }
+    let (members, validators) = construct_struct_body(&c.children);
+    RecordDefinition { name, members, validators }
 }
 
 fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
-    // `scalar <name>` with one or more `validate <name>` children.
+    // `scalar <Name>` with one or more `validate <name>` children.
     let name = first_inline_atom(c);
     let mut validators: Vec<String> = Vec::new();
     for block in &c.children {
@@ -1257,6 +1426,30 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
     ScalarDefinition { name, validators }
 }
 
+/// Construct a `SelectDefinition` from a top-level `select <Name>` compound
+/// (at schema root or inside a `layer` body). Walks `variant`, `validate`,
+/// and (layer-only) `exclude` children. `exclude` is accumulated into
+/// `layer_excludes` to be consumed by `MergeSelect`; in a base schema
+/// `layer_excludes` should be empty (E217 if not, reported by
+/// `validate_schema`).
+fn construct_select_definition(c: &Compound) -> SelectDefinition {
+    let name = first_inline_atom(c);
+    let mut variants: Vec<Variant> = Vec::new();
+    let mut validators: Vec<String> = Vec::new();
+    let mut layer_excludes: Vec<String> = Vec::new();
+    for block in &c.children {
+        for child in &block.compounds {
+            match child.keyword.as_str() {
+                "variant" => variants.push(construct_variant(child)),
+                "validate" => validators.push(scalar_value_text(child)),
+                "exclude" => layer_excludes.push(scalar_value_text(child)),
+                _ => {}
+            }
+        }
+    }
+    SelectDefinition { name, variants, validators, layer_excludes }
+}
+
 /// Return the text of `c`'s first inline atom, or the empty string. Helper for
 /// extracting the keyword/name from compounds whose first atom is the name.
 fn first_inline_atom(c: &Compound) -> String {
@@ -1266,59 +1459,49 @@ fn first_inline_atom(c: &Compound) -> String {
 fn construct_layer(c: &Compound) -> Layer {
     let mut name = String::new();
     let mut overlay = Struct { members: Vec::new(), validators: Vec::new() };
-    let mut types: Vec<Definition> = Vec::new();
+    let mut records: Vec<RecordDefinition> = Vec::new();
     let mut scalars: Vec<ScalarDefinition> = Vec::new();
+    let mut selects: Vec<SelectDefinition> = Vec::new();
     // First inline atom (if present) is the layer name.
     if let Some(atom) = c.atoms.first() {
         name = atom_text(atom);
     }
-    // Children: `name` / `overlay` / `record` / `scalar` (per layer-body schema).
+    // Children: `name` / `overlay` / `record` / `scalar` / `select` (per Layer record).
     for block in &c.children {
         for child in &block.compounds {
             match child.keyword.as_str() {
                 "name" => name = scalar_value_text(child),
                 "overlay" => {
-                    let (members, validators) = construct_members_and_validators(&child.children);
+                    let (members, validators) = construct_struct_body(&child.children);
                     overlay = Struct { members, validators };
                 }
-                "record" => types.push(construct_record(child)),
+                "record" => records.push(construct_record(child)),
                 "scalar" => scalars.push(construct_scalar_definition(child)),
+                "select" => selects.push(construct_select_definition(child)),
                 _ => {}
             }
         }
     }
-    Layer { name, overlay, types, scalars }
+    Layer { name, overlay, records, scalars, selects }
 }
 
-/// Walk the children of a Struct-shaped compound and collect Members.
-fn construct_members(blocks: &[Block]) -> Vec<Member> {
-    construct_members_and_validators(blocks).0
-}
-
-/// Walk the children of a Struct-shaped compound and collect both its
-/// Members (`field`/`select`/`exclude`) and its struct-level validators
-/// (`validate K` lines). The two are returned separately because they
-/// live in different fields of the `Struct` model.
-fn construct_members_and_validators(blocks: &[Block]) -> (Vec<Member>, Vec<String>) {
+/// Walk the children of a struct-shaped compound (the `document` block, a
+/// `record`'s body, or an `overlay` block) and collect both Members
+/// (`field`, `select` → SelectRef, `validate`) and its struct-level
+/// validators. `Exclude` MUST NOT appear in a struct-shaped body (§20.3);
+/// if it does, that's E217, reported by `validate_schema`. To remain
+/// permissive at construction time and let the validator report cleanly,
+/// the constructor accepts `Member::Exclude` here without complaint.
+fn construct_struct_body(blocks: &[Block]) -> (Vec<Member>, Vec<String>) {
     let mut members = Vec::new();
     let mut validators = Vec::new();
     for block in blocks {
         for c in &block.compounds {
             match c.keyword.as_str() {
                 "field" => members.push(Member::Field(construct_field(c))),
-                "select" => members.push(Member::Select(construct_select(c))),
-                "exclude" => {
-                    // `exclude K` — K is the inline scalar atom (the variant
-                    // keyword to exclude). This is valid in a Layer's root or
-                    // any nested Struct inside a Layer; appearing in a base
-                    // schema's document or definitions is checked by
-                    // validate_schema (E212).
-                    members.push(Member::Exclude(scalar_value_text(c)));
-                }
-                "validate" => {
-                    // `validate K` — K is the validator name (§21.6).
-                    validators.push(scalar_value_text(c));
-                }
+                "select" => members.push(Member::SelectRef(construct_select_ref(c))),
+                "exclude" => members.push(Member::Exclude(scalar_value_text(c))),
+                "validate" => validators.push(scalar_value_text(c)),
                 _ => {}
             }
         }
@@ -1326,17 +1509,25 @@ fn construct_members_and_validators(blocks: &[Block]) -> (Vec<Member>, Vec<Strin
     (members, validators)
 }
 
+/// Per-axis polarity, computed from the four loosen/tighten Flag children
+/// per §20.6. The tightening flag wins when both axes-direction flags are
+/// declared on the same axis (`required` over `optional`, `irrepeatable`
+/// over `repeatable`).
+fn polarity_of(loose: bool, tight: bool) -> Polarity {
+    if tight {
+        Polarity::Tight
+    } else if loose {
+        Polarity::Loose
+    } else {
+        Polarity::Default
+    }
+}
+
 fn construct_field(c: &Compound) -> Field {
-    // Atom phase against field-body's member order (§20.5):
+    // Atom phase against the Field record's member order (§20.5):
     //   keyword (req Scalar), type (req Scalar),
     //   optional/required/repeatable/irrepeatable (opt Flags),
     //   default (opt Scalar).
-    //
-    // Per §20.6, the four loosen/tighten flags combine into the internal
-    // (required, repeatable) booleans per the rules:
-    //   required   = required-flag-present  OR  NOT optional-flag-present
-    //   repeatable = repeatable-flag-present AND NOT irrepeatable-flag-present
-    // i.e. the tightening flag wins when both directions are asserted.
     let mut optional_flag = false;
     let mut required_flag = false;
     let mut repeatable_flag = false;
@@ -1384,18 +1575,27 @@ fn construct_field(c: &Compound) -> Field {
             }
         }
     }
-    let required = required_flag || !optional_flag;
-    let repeatable = repeatable_flag && !irrepeatable_flag;
+    let required = polarity_of(optional_flag, required_flag);
+    let repeatable = polarity_of(repeatable_flag, irrepeatable_flag);
     let r#type = Type::Reference(type_name);
     Field { required, repeatable, keyword, r#type, default }
 }
 
-fn construct_select(c: &Compound) -> Select {
+/// Construct a `SelectRef` at a member position. The first inline atom is
+/// the TypeName of the referenced SelectDefinition; remaining atoms /
+/// child compounds set the four loosen/tighten flags. SelectRef carries
+/// no inline variants — those live on the referenced SelectDefinition.
+fn construct_select_ref(c: &Compound) -> SelectRef {
     let mut optional_flag = false;
     let mut required_flag = false;
     let mut repeatable_flag = false;
     let mut irrepeatable_flag = false;
-    for a in &c.atoms {
+    let mut reference = String::new();
+    let mut iter = c.atoms.iter();
+    if let Some(a) = iter.next() {
+        reference = atom_text(a);
+    }
+    for a in iter {
         match atom_text(a).as_str() {
             "optional" => optional_flag = true,
             "required" => required_flag = true,
@@ -1404,22 +1604,21 @@ fn construct_select(c: &Compound) -> Select {
             _ => {}
         }
     }
-    let mut variants: Vec<Variant> = Vec::new();
     for block in &c.children {
         for child in &block.compounds {
             match child.keyword.as_str() {
+                "reference" => reference = scalar_value_text(child),
                 "optional" => optional_flag = true,
                 "required" => required_flag = true,
                 "repeatable" => repeatable_flag = true,
                 "irrepeatable" => irrepeatable_flag = true,
-                "variant" => variants.push(construct_variant(child)),
                 _ => {}
             }
         }
     }
-    let required = required_flag || !optional_flag;
-    let repeatable = repeatable_flag && !irrepeatable_flag;
-    Select { required, repeatable, variants }
+    let required = polarity_of(optional_flag, required_flag);
+    let repeatable = polarity_of(repeatable_flag, irrepeatable_flag);
+    SelectRef { required, repeatable, reference }
 }
 
 fn construct_variant(c: &Compound) -> Variant {
@@ -1454,55 +1653,60 @@ fn construct_variant(c: &Compound) -> Variant {
 pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     let mut errors = Vec::new();
 
-    // E211: duplicate definition names in the BASE schema, across both
-    // records (Schema.types) and scalars (Schema.scalars), since they
-    // share a single namespace (§20.1). Same-name records across layers
-    // merge per §20.3 and do not trigger E211; within a single layer's
-    // own definitions, duplicates ARE an error (a layer cannot merge
-    // with itself).
+    // E211: duplicate definition names across the base schema's three
+    // Definition lists (records, scalars, selects). They share one
+    // namespace.
     let mut seen_base: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for d in &s.types {
-        if !seen_base.insert(&d.name) {
+    let push_dup = |name: &str, errs: &mut Vec<SchemaError>| {
+        errs.push(SchemaError {
+            code: ErrorCode::E211,
+            detail: format!("duplicate definition name `{}` in base schema", name),
+        });
+    };
+    for d in &s.records {
+        if !seen_base.insert(&d.name) { push_dup(&d.name, &mut errors); }
+    }
+    for sd in &s.scalars {
+        if !seen_base.insert(&sd.name) { push_dup(&sd.name, &mut errors); }
+    }
+    for sl in &s.selects {
+        if !seen_base.insert(&sl.name) { push_dup(&sl.name, &mut errors); }
+    }
+    // Built-in name collision: user definitions MAY NOT redefine the
+    // predefined TypeNames `Flag`, `String`, `Identifier`, `Sigil`, `TypeName`.
+    for d in &s.records {
+        if BUILTIN_TYPE_NAMES.contains(&d.name.as_str()) {
             errors.push(SchemaError {
                 code: ErrorCode::E211,
-                detail: format!("duplicate definition name `{}` in base schema", d.name),
+                detail: format!("record `{}` collides with a built-in TypeName", d.name),
             });
         }
     }
     for sd in &s.scalars {
-        if !seen_base.insert(&sd.name) {
-            errors.push(SchemaError {
-                code: ErrorCode::E211,
-                detail: format!("duplicate definition name `{}` in base schema", sd.name),
-            });
-        }
-        // Built-in name collision: user definitions MAY NOT redefine the
-        // predefined names `flag`, `string`, `identifier`, `sigil`.
         if BUILTIN_TYPE_NAMES.contains(&sd.name.as_str()) {
             errors.push(SchemaError {
                 code: ErrorCode::E211,
-                detail: format!("scalar `{}` collides with a built-in type name", sd.name),
+                detail: format!("scalar `{}` collides with a built-in TypeName", sd.name),
             });
         }
     }
-    for d in &s.types {
-        if BUILTIN_TYPE_NAMES.contains(&d.name.as_str()) {
+    for sl in &s.selects {
+        if BUILTIN_TYPE_NAMES.contains(&sl.name.as_str()) {
             errors.push(SchemaError {
                 code: ErrorCode::E211,
-                detail: format!("record `{}` collides with a built-in type name", d.name),
+                detail: format!("select `{}` collides with a built-in TypeName", sl.name),
             });
         }
     }
+    // Per-layer: a layer's own Definitions can't duplicate within the layer.
     for layer in &s.layers {
         let mut seen_in_layer: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for d in &layer.types {
+        for d in &layer.records {
             if !seen_in_layer.insert(&d.name) {
                 errors.push(SchemaError {
                     code: ErrorCode::E211,
-                    detail: format!(
-                        "duplicate definition name `{}` within layer `{}`",
-                        d.name, layer.name
-                    ),
+                    detail: format!("duplicate definition name `{}` within layer `{}`",
+                        d.name, layer.name),
                 });
             }
         }
@@ -1510,28 +1714,48 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
             if !seen_in_layer.insert(&sd.name) {
                 errors.push(SchemaError {
                     code: ErrorCode::E211,
-                    detail: format!(
-                        "duplicate definition name `{}` within layer `{}`",
-                        sd.name, layer.name
-                    ),
+                    detail: format!("duplicate definition name `{}` within layer `{}`",
+                        sd.name, layer.name),
+                });
+            }
+        }
+        for sl in &layer.selects {
+            if !seen_in_layer.insert(&sl.name) {
+                errors.push(SchemaError {
+                    code: ErrorCode::E211,
+                    detail: format!("duplicate definition name `{}` within layer `{}`",
+                        sl.name, layer.name),
                 });
             }
         }
     }
-    // Compose the namespace: base types first, then each layer's
-    // types in order. Definitions with shared names will be merged
-    // by compose_schema; here we just gather all names that exist
-    // (including scalar definitions and built-in names) so References
-    // can be resolved.
-    let mut def_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for n in BUILTIN_TYPE_NAMES { def_names.insert(*n); }
-    let mut all_defs: Vec<&Definition> = s.types.iter().collect();
-    for d in &s.types { def_names.insert(d.name.as_str()); }
-    for sd in &s.scalars { def_names.insert(sd.name.as_str()); }
-    for layer in &s.layers {
-        all_defs.extend(layer.types.iter());
-        for d in &layer.types { def_names.insert(d.name.as_str()); }
-        for sd in &layer.scalars { def_names.insert(sd.name.as_str()); }
+
+    // E202: every SelectDefinition (base or layer) must have ≥ 1 variant.
+    // (A layer-side select with only Exclude/validate children but no
+    // variants is fine in the LAYER source — the merge consumes excludes
+    // against the base's variants; the layer's own `variants` list may be
+    // empty.)
+    for sl in &s.selects {
+        if sl.variants.is_empty() {
+            errors.push(SchemaError {
+                code: ErrorCode::E202,
+                detail: format!("SelectDefinition `{}` has empty variants list", sl.name),
+            });
+        }
+    }
+    // E217: an `exclude` declared inside a *base* SelectDefinition (i.e.
+    // `layer_excludes` non-empty on a base select) is layer-only and not
+    // allowed here. Layer-side excludes are valid; we trust them.
+    for sl in &s.selects {
+        for kw in &sl.layer_excludes {
+            errors.push(SchemaError {
+                code: ErrorCode::E217,
+                detail: format!(
+                    "`exclude {}` appears in base SelectDefinition `{}`; exclude is layer-only",
+                    kw, sl.name,
+                ),
+            });
+        }
     }
 
     // E205: duplicate layer names
@@ -1555,124 +1779,47 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // Walk every Struct in the schema (document, each Definition, every nested
-    // Struct inside any Type) and check the per-Struct constraints.
-    let mut to_visit: Vec<&Struct> = Vec::new();
-    to_visit.push(&s.document);
-    for d in &all_defs {
-        check_members_recursive(&d.members, &def_names, &mut errors);
-    }
-    while let Some(st) = to_visit.pop() {
-        check_members_recursive(&st.members, &def_names, &mut errors);
-        for m in &st.members {
-            collect_inner_structs(member_types(m), &mut to_visit);
-        }
+    // Walk every Struct-shaped member list in the schema.
+    check_members_recursive(&s.document.members, s, &mut errors);
+    for d in &s.records {
+        check_members_recursive(&d.members, s, &mut errors);
     }
     for l in &s.layers {
-        check_members_recursive(&l.overlay.members, &def_names, &mut errors);
-    }
-
-    // E217: Exclude is layer-only (§20.3). An `exclude` appearing in
-    // Schema.document or in any Schema.types Definition body — including
-    // nested Structs within their members' types — is a validity error.
-    // Layers may freely contain `exclude` operations in their root and in
-    // any nested Struct under that root.
-    check_no_exclude(&s.document.members, "document", &mut errors);
-    for d in &s.types {
-        check_no_exclude(&d.members, &format!("define `{}`", d.name), &mut errors);
-    }
-
-    // E206/E207: layer-merge constraints (§20.3).
-    // Run a simulation of the Merge algorithm to detect keyword overlaps that
-    // violate the layer extension rules.
-    let mut composed_keywords: std::collections::HashMap<String, MergeKind> =
-        std::collections::HashMap::new();
-    for m in &s.document.members {
-        match m {
-            Member::Field(f) => {
-                composed_keywords.insert(f.keyword.clone(),
-                    MergeKind::Field(is_struct_type(&f.r#type)));
-            }
-            Member::Select(sel) => {
-                for v in &sel.variants {
-                    composed_keywords.insert(v.keyword.clone(), MergeKind::Variant);
-                }
-            }
-            Member::Exclude(name) => {
-                // Remove operations are invalid in a base schema's document.
-                errors.push(SchemaError {
-                    code: ErrorCode::E212,
-                    detail: format!(
-                        "`exclude {}` appears in the base schema's document; exclude operations are layer-only",
-                        name
-                    ),
-                });
-            }
+        check_members_recursive(&l.overlay.members, s, &mut errors);
+        for d in &l.records {
+            check_members_recursive(&d.members, s, &mut errors);
         }
     }
-    for layer in &s.layers {
-        for m in &layer.overlay.members {
-            match m {
-                Member::Exclude(_) => {
-                    // Detailed exclude validation happens at compose time
-                    // (E212, E213). validate_schema only checks for the
-                    // structural shape.
-                }
-                Member::Field(f) => {
-                    if let Some(existing) = composed_keywords.get(&f.keyword) {
-                        // E207: existing must be a Field whose type is Struct,
-                        // and the layer's type must also be Struct.
-                        match existing {
-                            MergeKind::Field(base_is_struct) => {
-                                let layer_is_struct = is_struct_type(&f.r#type);
-                                if !base_is_struct || !layer_is_struct {
-                                    errors.push(SchemaError {
-                                        code: ErrorCode::E207,
-                                        detail: format!(
-                                            "layer `{}` overrides keyword `{}` but Field merge requires both base and layer types to be Struct",
-                                            layer.name, f.keyword,
-                                        ),
-                                    });
-                                }
-                            }
-                            MergeKind::Variant => {
-                                errors.push(SchemaError {
-                                    code: ErrorCode::E207,
-                                    detail: format!(
-                                        "layer `{}` adds Field `{}` but base member with that keyword is a Select variant, not a Field",
-                                        layer.name, f.keyword,
-                                    ),
-                                });
-                            }
-                        }
-                    } else {
-                        composed_keywords.insert(f.keyword.clone(),
-                            MergeKind::Field(is_struct_type(&f.r#type)));
-                    }
-                }
-                Member::Select(sel) => {
-                    for v in &sel.variants {
-                        if composed_keywords.contains_key(&v.keyword) {
-                            errors.push(SchemaError {
-                                code: ErrorCode::E206,
-                                detail: format!(
-                                    "layer `{}` adds Select variant `{}` which collides with an existing keyword in the composed schema",
-                                    layer.name, v.keyword,
-                                ),
-                            });
-                        } else {
-                            composed_keywords.insert(v.keyword.clone(), MergeKind::Variant);
-                        }
-                    }
-                }
-            }
+
+    // E217 (alternative path): `Member::Exclude` MUST NOT appear inside any
+    // struct-shaped body. (Layer-side exclude lives on `SelectDefinition.layer_excludes`
+    // which is collected by `construct_select_definition`, not as a Member.)
+    check_no_exclude_in_struct(&s.document.members, "document", &mut errors);
+    for d in &s.records {
+        check_no_exclude_in_struct(&d.members, &format!("record `{}`", d.name), &mut errors);
+    }
+    for l in &s.layers {
+        check_no_exclude_in_struct(&l.overlay.members,
+            &format!("layer `{}` overlay", l.name), &mut errors);
+        for d in &l.records {
+            check_no_exclude_in_struct(&d.members,
+                &format!("layer `{}` record `{}`", l.name, d.name), &mut errors);
+        }
+    }
+
+    // E209: reserved keyword `tel` — check every Field/Variant keyword.
+    for kw in collect_all_keywords(s) {
+        if kw == "tel" {
+            errors.push(SchemaError {
+                code: ErrorCode::E209,
+                detail: "keyword `tel` is reserved (§8)".to_string(),
+            });
         }
     }
 
     // Run the full composition algorithm to surface any merge-time errors
-    // (E207 due to type mismatch, E212/E213 for excludes, etc.) that the
-    // naive simulation above does not catch — particularly Reference vs.
-    // Reference mismatches.
+    // (E206/E207/E212/E213/E214). The simulation in the legacy code is
+    // subsumed by compose_schema.
     if !s.layers.is_empty() {
         let (_, compose_errs) = compose_schema(s);
         errors.extend(compose_errs);
@@ -1681,124 +1828,255 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     errors
 }
 
+/// Collect every Field/Variant keyword reachable from the schema (for E209 check).
+fn collect_all_keywords(s: &Schema) -> Vec<String> {
+    let mut out = Vec::new();
+    let visit_members = |out: &mut Vec<String>, members: &[Member]| {
+        for m in members {
+            if let Member::Field(f) = m {
+                out.push(f.keyword.clone());
+            }
+        }
+    };
+    visit_members(&mut out, &s.document.members);
+    for d in &s.records { visit_members(&mut out, &d.members); }
+    for l in &s.layers {
+        visit_members(&mut out, &l.overlay.members);
+        for d in &l.records { visit_members(&mut out, &d.members); }
+    }
+    for sl in &s.selects {
+        for v in &sl.variants { out.push(v.keyword.clone()); }
+    }
+    for l in &s.layers {
+        for sl in &l.selects {
+            for v in &sl.variants { out.push(v.keyword.clone()); }
+        }
+    }
+    out
+}
+
 // ── Schema composition (§20.3) ───────────────────────────────────────────────
 
 /// Apply every `Layer` in `s.layers` to produce a fully composed schema
 /// per §20.3. Returns the composed `Schema` (with empty `layers`) plus
-/// any `SchemaError`s raised during composition (E206, E207, E212, E213,
-/// E214). The returned schema is always a best-effort result: layers
-/// whose operations produced errors are merged as far as possible so
-/// callers can continue to inspect the composed structure.
+/// any `SchemaError`s raised during composition (E206, E207, E211, E212,
+/// E213, E214). The returned schema is always a best-effort result.
 pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
     let mut errors: Vec<SchemaError> = Vec::new();
-    let mut composed_types: Vec<Definition> = s.types.clone();
-    let mut composed_scalars: Vec<ScalarDefinition> = s.scalars.clone();
-    let mut composed_root_members: Vec<Member> = s.document.members.clone();
-    let mut composed_root_validators: Vec<String> = s.document.validators.clone();
+    let mut records: Vec<RecordDefinition> = s.records.clone();
+    let mut scalars: Vec<ScalarDefinition> = s.scalars.clone();
+    let mut selects: Vec<SelectDefinition> = s.selects.clone();
+    let mut root_members: Vec<Member> = s.document.members.clone();
+    let mut root_validators: Vec<String> = s.document.validators.clone();
 
     for layer in &s.layers {
-        // Record merge: same-name record → merge members and validators;
-        // otherwise → append. Collision with an existing scalar of the
-        // same name is a kind mismatch.
-        for def in &layer.types {
-            if composed_scalars.iter().any(|sd| sd.name == def.name) {
+        // Record merge.
+        for def in &layer.records {
+            if scalars.iter().any(|sd| sd.name == def.name)
+                || selects.iter().any(|sl| sl.name == def.name)
+            {
                 errors.push(SchemaError {
-                    code: ErrorCode::E207,
+                    code: ErrorCode::E211,
                     detail: format!(
-                        "layer `{}` declares record `{}` but a scalar with the same name already exists",
+                        "layer `{}` declares record `{}` but a Definition of another kind with that name already exists",
                         layer.name, def.name,
                     ),
                 });
                 continue;
             }
-            if let Some(pos) = composed_types.iter().position(|d| d.name == def.name) {
-                let merged = merge_members(
-                    &composed_types[pos].members,
+            if let Some(pos) = records.iter().position(|d| d.name == def.name) {
+                let merged_members = merge_members(
+                    &records[pos].members,
                     &def.members,
                     &layer.name,
                     &format!("record `{}`", def.name),
                     &mut errors,
                 );
                 let merged_validators = merge_validators(
-                    &composed_types[pos].validators,
+                    &records[pos].validators,
                     &def.validators,
                 );
-                composed_types[pos] = Definition {
+                records[pos] = RecordDefinition {
                     name: def.name.clone(),
-                    members: merged,
+                    members: merged_members,
                     validators: merged_validators,
                 };
             } else {
-                composed_types.push(def.clone());
+                records.push(def.clone());
             }
         }
 
-        // Scalar merge: same-name scalar → append-deduplicate validators;
-        // otherwise → append. Collision with an existing record is a
-        // kind mismatch.
+        // Scalar merge.
         for sd in &layer.scalars {
-            if composed_types.iter().any(|d| d.name == sd.name) {
+            if records.iter().any(|d| d.name == sd.name)
+                || selects.iter().any(|sl| sl.name == sd.name)
+            {
                 errors.push(SchemaError {
-                    code: ErrorCode::E207,
+                    code: ErrorCode::E211,
                     detail: format!(
-                        "layer `{}` declares scalar `{}` but a record with the same name already exists",
+                        "layer `{}` declares scalar `{}` but a Definition of another kind with that name already exists",
                         layer.name, sd.name,
                     ),
                 });
                 continue;
             }
-            if let Some(pos) = composed_scalars.iter().position(|x| x.name == sd.name) {
-                let merged = merge_validators(
-                    &composed_scalars[pos].validators,
-                    &sd.validators,
-                );
-                composed_scalars[pos] = ScalarDefinition {
+            if let Some(pos) = scalars.iter().position(|x| x.name == sd.name) {
+                let merged = merge_validators(&scalars[pos].validators, &sd.validators);
+                scalars[pos] = ScalarDefinition {
                     name: sd.name.clone(),
                     validators: merged,
                 };
             } else {
-                composed_scalars.push(sd.clone());
+                scalars.push(sd.clone());
             }
         }
 
-        // Overlay merge: members merge as before; validators concatenate.
-        composed_root_members = merge_members(
-            &composed_root_members,
+        // Select merge: same-name SelectDefinition → MergeSelect (exclude
+        // variants per layer's `layer_excludes`; append validators). Adding
+        // a variant in a layer (i.e. layer's SelectDefinition has a variant
+        // keyword absent from the base) is E214.
+        for sl in &layer.selects {
+            if records.iter().any(|d| d.name == sl.name)
+                || scalars.iter().any(|sd| sd.name == sl.name)
+            {
+                errors.push(SchemaError {
+                    code: ErrorCode::E211,
+                    detail: format!(
+                        "layer `{}` declares select `{}` but a Definition of another kind with that name already exists",
+                        layer.name, sl.name,
+                    ),
+                });
+                continue;
+            }
+            if let Some(pos) = selects.iter().position(|x| x.name == sl.name) {
+                // Existing SelectDefinition → MergeSelect.
+                let merged = merge_select_def(&selects[pos], sl, &layer.name, &mut errors);
+                selects[pos] = merged;
+            } else {
+                // Brand-new SelectDefinition introduced by the layer; only
+                // valid if the layer's `layer_excludes` is empty (you can't
+                // exclude a variant from a Select that doesn't exist yet).
+                if !sl.layer_excludes.is_empty() {
+                    for kw in &sl.layer_excludes {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E212,
+                            detail: format!(
+                                "layer `{}` exclude `{}` in fresh select `{}`: no base SelectDefinition to exclude from",
+                                layer.name, kw, sl.name,
+                            ),
+                        });
+                    }
+                }
+                let mut fresh = sl.clone();
+                fresh.layer_excludes.clear();
+                selects.push(fresh);
+            }
+        }
+
+        // Overlay merge into document Struct.
+        root_members = merge_members(
+            &root_members,
             &layer.overlay.members,
             &layer.name,
             "overlay",
             &mut errors,
         );
-        composed_root_validators = merge_validators(
-            &composed_root_validators,
-            &layer.overlay.validators,
-        );
+        root_validators = merge_validators(&root_validators, &layer.overlay.validators);
     }
 
     (Schema {
         name: s.name.clone(),
-        document: Struct {
-            members: composed_root_members,
-            validators: composed_root_validators,
-        },
+        document: Struct { members: root_members, validators: root_validators },
         layers: Vec::new(),
         sigil: s.sigil,
-        types: composed_types,
-        scalars: composed_scalars,
+        records,
+        scalars,
+        selects,
     }, errors)
 }
 
+/// Merge a layer's SelectDefinition into the base SelectDefinition with the
+/// same name. Variant addition by the layer is E214; an Exclude that names
+/// a non-existent variant is E212; emptying a SelectDefinition referenced
+/// by any required SelectRef would be E213 (deferred: we don't know the
+/// referencing SelectRefs at this layer; the validity check is left to
+/// downstream schema validation that observes the composed schema).
+fn merge_select_def(
+    base: &SelectDefinition,
+    layer: &SelectDefinition,
+    layer_name: &str,
+    errors: &mut Vec<SchemaError>,
+) -> SelectDefinition {
+    let mut variants = base.variants.clone();
+    // Variants in `layer.variants` MUST identify existing base variants
+    // (variant restatement, allowed); a layer variant whose keyword is
+    // absent from the base is E214.
+    for lv in &layer.variants {
+        if !variants.iter().any(|v| v.keyword == lv.keyword) {
+            errors.push(SchemaError {
+                code: ErrorCode::E214,
+                detail: format!(
+                    "layer `{}` introduces variant `{}` in SelectDefinition `{}` not present in base (would widen the sum)",
+                    layer_name, lv.keyword, base.name,
+                ),
+            });
+        }
+    }
+    // Apply excludes.
+    for kw in &layer.layer_excludes {
+        let before = variants.len();
+        variants.retain(|v| v.keyword != *kw);
+        if variants.len() == before {
+            errors.push(SchemaError {
+                code: ErrorCode::E212,
+                detail: format!(
+                    "layer `{}` exclude `{}` in SelectDefinition `{}`: no such variant in base",
+                    layer_name, kw, base.name,
+                ),
+            });
+        }
+    }
+    let validators = merge_validators(&base.validators, &layer.validators);
+    SelectDefinition {
+        name: base.name.clone(),
+        variants,
+        validators,
+        layer_excludes: Vec::new(),
+    }
+}
+
+/// Merge per-axis Polarity (§20.3): tightening or restatement allowed;
+/// loosening an already-tight or default axis is E215 (required axis) or
+/// E216 (repeatable axis).
+fn merge_polarity(
+    base: Polarity,
+    layer: Polarity,
+    is_required_axis: bool,
+    layer_name: &str,
+    where_: &str,
+    errors: &mut Vec<SchemaError>,
+) -> Polarity {
+    match (base, layer) {
+        (_, Polarity::Default) => base,
+        (_, Polarity::Tight) => Polarity::Tight,
+        (Polarity::Loose, Polarity::Loose) => Polarity::Loose,
+        (Polarity::Default, Polarity::Loose) | (Polarity::Tight, Polarity::Loose) => {
+            errors.push(SchemaError {
+                code: if is_required_axis { ErrorCode::E215 } else { ErrorCode::E216 },
+                detail: format!(
+                    "layer `{}` in {}: cannot loosen a {} axis whose merged polarity is {}",
+                    layer_name, where_,
+                    if is_required_axis { "required" } else { "repeatable" },
+                    match base { Polarity::Default => "default", Polarity::Tight => "tight", _ => "loose" },
+                ),
+            });
+            base
+        }
+    }
+}
+
 /// Merge a layer's Field into an existing base Field with the same keyword
-/// (§20.3). Returns `Some(new_field)` if the merge is valid, or `None` and
-/// pushes a SchemaError if it is not.
-///
-/// Rules:
-/// - **Types** must be structurally compatible: both Struct (recursive
-///   merge) or otherwise structurally equal. A type mismatch is E207.
-/// - **`required`** may be tightened by the layer (`false → true`) but
-///   not loosened (`true → false` is E215).
-/// - **`repeatable`** may be tightened by the layer (`true → false`) but
-///   not loosened (`false → true` is E216).
+/// (§20.3).
 fn merge_field_with(
     base: &Field,
     layer: &Field,
@@ -1806,35 +2084,10 @@ fn merge_field_with(
     where_: &str,
     errors: &mut Vec<SchemaError>,
 ) -> Option<Field> {
-    // Required: tightening is base=false ∧ layer=true. Loosening is base=true ∧ layer=false.
-    let merged_required = match (base.required, layer.required) {
-        (true, false) => {
-            errors.push(SchemaError {
-                code: ErrorCode::E215,
-                detail: format!(
-                    "layer `{}` field `{}` in {}: required cannot be loosened to optional",
-                    layer_name, layer.keyword, where_,
-                ),
-            });
-            true
-        }
-        (b, l) => b || l,
-    };
-    // Repeatable: tightening is base=true ∧ layer=false. Loosening is base=false ∧ layer=true.
-    let merged_repeatable = match (base.repeatable, layer.repeatable) {
-        (false, true) => {
-            errors.push(SchemaError {
-                code: ErrorCode::E216,
-                detail: format!(
-                    "layer `{}` field `{}` in {}: irrepeatable cannot be loosened to repeatable",
-                    layer_name, layer.keyword, where_,
-                ),
-            });
-            false
-        }
-        (b, l) => b && l,
-    };
-    // Type merge.
+    let merged_required = merge_polarity(base.required, layer.required, true,
+        layer_name, &format!("{} → field `{}`", where_, layer.keyword), errors);
+    let merged_repeatable = merge_polarity(base.repeatable, layer.repeatable, false,
+        layer_name, &format!("{} → field `{}`", where_, layer.keyword), errors);
     let merged_type = match (&base.r#type, &layer.r#type) {
         (Type::Struct(gs), Type::Struct(fs)) => {
             let merged_inner = merge_members(
@@ -1854,7 +2107,7 @@ fn merge_field_with(
             errors.push(SchemaError {
                 code: ErrorCode::E207,
                 detail: format!(
-                    "layer `{}` field `{}` in {}: type mismatch (base and layer must declare the same type, or both be Struct)",
+                    "layer `{}` field `{}` in {}: type mismatch",
                     layer_name, layer.keyword, where_,
                 ),
             });
@@ -1865,7 +2118,8 @@ fn merge_field_with(
         required: merged_required,
         repeatable: merged_repeatable,
         keyword: base.keyword.clone(),
-        r#type: merged_type, default: None,
+        r#type: merged_type,
+        default: base.default.clone(),
     })
 }
 
@@ -1895,183 +2149,107 @@ fn merge_members(
     for op in layer_ops {
         match op {
             Member::Field(f) => {
-                // Look up f.keyword in merged.
+                // Find an existing Field with the same keyword in merged.
                 let existing_idx = merged.iter().position(|m| match m {
                     Member::Field(g) => g.keyword == f.keyword,
-                    Member::Select(s) => s.variants.iter().any(|v| v.keyword == f.keyword),
-                    Member::Exclude(_) => false,
+                    Member::SelectRef(_) | Member::Exclude(_) => false,
                 });
                 match existing_idx {
                     Some(idx) => match &merged[idx] {
                         Member::Field(g) => {
-                            // Merge: types must be structurally equal (recursive
-                            // Struct merge is supported and produces a subtype);
-                            // required/repeatable may be tightened by the layer
-                            // but not loosened.
-                            let merged_field = merge_field_with(
-                                g, f, layer_name, where_, errors,
-                            );
-                            if let Some(field) = merged_field {
+                            if let Some(field) = merge_field_with(g, f, layer_name, where_, errors) {
                                 merged[idx] = Member::Field(field);
                             }
                         }
-                        Member::Select(_) => {
-                            errors.push(SchemaError {
-                                code: ErrorCode::E207,
-                                detail: format!(
-                                    "layer `{}` field `{}` in {}: keyword already declared as a Select variant in the base",
-                                    layer_name, f.keyword, where_,
-                                ),
-                            });
-                        }
-                        Member::Exclude(_) => unreachable!(),
+                        _ => unreachable!(),
                     },
-                    None => {
-                        merged.push(Member::Field(f.clone()));
-                    }
+                    None => merged.push(Member::Field(f.clone())),
                 }
             }
-            Member::Select(s) => {
-                // Every variant keyword MUST NOT exist in merged.
-                let mut had_overlap = false;
-                for v in &s.variants {
-                    let collides = merged.iter().any(|m| match m {
-                        Member::Field(g) => g.keyword == v.keyword,
-                        Member::Select(ms) => ms.variants.iter().any(|mv| mv.keyword == v.keyword),
-                        Member::Exclude(_) => false,
-                    });
-                    if collides {
-                        had_overlap = true;
-                        let owned_by_select = merged.iter().any(|m| matches!(m,
-                            Member::Select(ms) if ms.variants.iter().any(|mv| mv.keyword == v.keyword)));
-                        if owned_by_select {
-                            errors.push(SchemaError {
-                                code: ErrorCode::E214,
-                                detail: format!(
-                                    "layer `{}` Select variant `{}` in {} would widen an existing Select (subtyping requires removing variants, not adding to an existing Select)",
-                                    layer_name, v.keyword, where_,
-                                ),
-                            });
-                        } else {
-                            errors.push(SchemaError {
-                                code: ErrorCode::E206,
-                                detail: format!(
-                                    "layer `{}` Select variant `{}` in {} collides with an existing Field keyword",
-                                    layer_name, v.keyword, where_,
-                                ),
-                            });
-                        }
-                    }
-                }
-                if !had_overlap {
-                    merged.push(Member::Select(s.clone()));
-                }
-            }
-            Member::Exclude(kw_to_exclude) => {
-                // Find the Select in merged that owns kw_to_exclude.
-                let mut found_in: Option<usize> = None;
-                for (i, m) in merged.iter().enumerate() {
-                    if let Member::Select(ms) = m {
-                        if ms.variants.iter().any(|v| v.keyword == *kw_to_exclude) {
-                            found_in = Some(i);
-                            break;
-                        }
-                    }
-                }
-                match found_in {
-                    None => {
-                        errors.push(SchemaError {
-                            code: ErrorCode::E212,
-                            detail: format!(
-                                "layer `{}` exclude `{}` in {}: no Select variant with that keyword exists in the merged Struct",
-                                layer_name, kw_to_exclude, where_,
-                            ),
-                        });
-                    }
+            Member::SelectRef(sref) => {
+                // Same-reference merge: polarity merge in place.
+                let existing_idx = merged.iter().position(|m| match m {
+                    Member::SelectRef(s) => s.reference == sref.reference,
+                    _ => false,
+                });
+                match existing_idx {
                     Some(idx) => {
-                        if let Member::Select(ms) = &mut merged[idx] {
-                            ms.variants.retain(|v| v.keyword != *kw_to_exclude);
-                            if ms.variants.is_empty() {
-                                if ms.required {
-                                    errors.push(SchemaError {
-                                        code: ErrorCode::E213,
-                                        detail: format!(
-                                            "layer `{}` exclude `{}` in {}: would leave a required Select with no variants",
-                                            layer_name, kw_to_exclude, where_,
-                                        ),
-                                    });
-                                } else {
-                                    merged.remove(idx);
-                                }
-                            }
+                        if let Member::SelectRef(base_sref) = &merged[idx] {
+                            let merged_required = merge_polarity(
+                                base_sref.required, sref.required, true,
+                                layer_name,
+                                &format!("{} → select-ref `{}`", where_, sref.reference),
+                                errors,
+                            );
+                            let merged_repeatable = merge_polarity(
+                                base_sref.repeatable, sref.repeatable, false,
+                                layer_name,
+                                &format!("{} → select-ref `{}`", where_, sref.reference),
+                                errors,
+                            );
+                            merged[idx] = Member::SelectRef(SelectRef {
+                                required: merged_required,
+                                repeatable: merged_repeatable,
+                                reference: base_sref.reference.clone(),
+                            });
                         }
                     }
+                    None => merged.push(Member::SelectRef(sref.clone())),
                 }
+            }
+            Member::Exclude(kw) => {
+                // Exclude is layer-only and lives in a layer's SelectDefinition
+                // body, not in a struct-shaped member list. Reaching here is a
+                // validity error (E217) — but the validate_schema path
+                // typically catches it first. Report defensively.
+                errors.push(SchemaError {
+                    code: ErrorCode::E217,
+                    detail: format!(
+                        "layer `{}` exclude `{}` in {}: `exclude` is only valid inside a layer's `select` body, not in a struct-shaped member list",
+                        layer_name, kw, where_,
+                    ),
+                });
             }
         }
     }
     merged
 }
 
-/// Helper enum for tracking the kind of merged keyword during layer composition.
-enum MergeKind { Field(bool /* type is Struct */), Variant }
-
-fn is_struct_type(t: &Type) -> bool {
-    matches!(t, Type::Struct(_) | Type::Reference(_))
-    // A Reference to a Definition always resolves to a Struct (per §20).
-}
-
-/// Return all `Type`s reachable directly inside a Member (one per Field, or
-/// one per Variant of a Select).
+/// Return all `Type`s reachable directly inside a Member.
+#[allow(dead_code)]
 fn member_types(m: &Member) -> Vec<&Type> {
     match m {
         Member::Field(f) => vec![&f.r#type],
-        Member::Select(s) => s.variants.iter().map(|v| &v.r#type).collect(),
-        Member::Exclude(_) => Vec::new(),
+        Member::SelectRef(_) | Member::Exclude(_) => Vec::new(),
     }
 }
 
-fn collect_inner_structs<'a>(types: Vec<&'a Type>, out: &mut Vec<&'a Struct>) {
-    for t in types {
-        if let Type::Struct(st) = t { out.push(st); }
-    }
-}
-
-/// E217 (§20.3): recursively scan a member list and any nested Struct types
-/// for `Member::Exclude` and report each as an error. Called with the document
-/// root's members and each base Definition's members; layer roots are NOT
-/// scanned (they are the only legitimate site for `exclude`).
-fn check_no_exclude(members: &[Member], where_: &str, errors: &mut Vec<SchemaError>) {
+/// E217 (§20.3): scan a member list (a struct-shaped body) for `Member::Exclude`
+/// and report each as an error.
+fn check_no_exclude_in_struct(members: &[Member], where_: &str, errors: &mut Vec<SchemaError>) {
     for m in members {
         match m {
             Member::Exclude(kw) => {
                 errors.push(SchemaError {
                     code: ErrorCode::E217,
                     detail: format!(
-                        "`exclude {}` appears in {} but is permitted only inside a layer's root",
+                        "`exclude {}` appears in {} but `exclude` is only valid inside a layer's `select` body",
                         kw, where_,
                     ),
                 });
             }
             Member::Field(f) => {
                 if let Type::Struct(st) = &f.r#type {
-                    check_no_exclude(
+                    check_no_exclude_in_struct(
                         &st.members,
                         &format!("{} → field `{}`", where_, f.keyword),
                         errors,
                     );
                 }
             }
-            Member::Select(s) => {
-                for v in &s.variants {
-                    if let Type::Struct(st) = &v.r#type {
-                        check_no_exclude(
-                            &st.members,
-                            &format!("{} → variant `{}`", where_, v.keyword),
-                            errors,
-                        );
-                    }
-                }
+            Member::SelectRef(_) => {
+                // SelectRef has no inline body; its variants live on the
+                // referenced SelectDefinition.
             }
         }
     }
@@ -2079,91 +2257,137 @@ fn check_no_exclude(members: &[Member], where_: &str, errors: &mut Vec<SchemaErr
 
 fn check_members_recursive(
     members: &[Member],
-    def_names: &std::collections::HashSet<&str>,
+    schema: &Schema,
     errors: &mut Vec<SchemaError>,
 ) {
-    // E201: duplicate keyword within a Struct (across Field and Sum variant keywords)
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // E201: duplicate keyword within a Struct (Field keywords + variant
+    // keywords of every SelectRef's referenced SelectDefinition).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let push_dup = |seen: &mut std::collections::HashSet<String>,
+                    errors: &mut Vec<SchemaError>, kw: &str| {
+        if !seen.insert(kw.to_string()) {
+            errors.push(SchemaError {
+                code: ErrorCode::E201,
+                detail: format!("duplicate keyword `{}` within a Struct", kw),
+            });
+        }
+    };
     for m in members {
-        let kws: Vec<&str> = match m {
-            Member::Field(f) => vec![&f.keyword],
-            Member::Select(s) => s.variants.iter().map(|v| v.keyword.as_str()).collect(),
-            Member::Exclude(_) => Vec::new(),
-        };
-        for kw in &kws {
-            if !seen.insert(*kw) {
-                errors.push(SchemaError {
-                    code: ErrorCode::E201,
-                    detail: format!("duplicate keyword `{}` within a Struct", kw),
-                });
-            }
-            // E209: reserved keyword `tel`
-            if *kw == "tel" {
-                errors.push(SchemaError {
-                    code: ErrorCode::E209,
-                    detail: "keyword `tel` is reserved (§8)".to_string(),
-                });
-            }
-        }
-
-        // E202: empty Select variants list
-        if let Member::Select(s) = m {
-            if s.variants.is_empty() {
-                errors.push(SchemaError {
-                    code: ErrorCode::E202,
-                    detail: "Select member has empty variants list".to_string(),
-                });
-            }
-        }
-
-        // E204: Field.default is only valid when the field is required AND
-        // its resolved type is a Scalar. (In v1.0 the default lives on the
-        // enclosing Field, not on the Scalar value-type.)
-        let (is_required, types_to_check): (bool, Vec<&Type>) = match m {
-            Member::Field(f) => (f.required, vec![&f.r#type]),
-            Member::Select(s) => (s.required, s.variants.iter().map(|v| &v.r#type).collect()),
-            Member::Exclude(_) => (false, Vec::new()),
-        };
-        if let Member::Field(f) = m {
-            if let Some(def_val) = &f.default {
-                let resolves_to_scalar = matches!(&f.r#type,
-                    Type::Scalar(_) | Type::Reference(_));
-                if !is_required {
-                    errors.push(SchemaError {
-                        code: ErrorCode::E204,
-                        detail: format!(
-                            "Field `{}` has default `{}` but is not required",
-                            f.keyword, def_val,
-                        ),
-                    });
-                } else if !resolves_to_scalar {
-                    errors.push(SchemaError {
-                        code: ErrorCode::E204,
-                        detail: format!(
-                            "Field `{}` has default `{}` but its type is not Scalar",
-                            f.keyword, def_val,
-                        ),
-                    });
+        match m {
+            Member::Field(f) => push_dup(&mut seen, errors, &f.keyword),
+            Member::SelectRef(s) => {
+                if let Some(variants) = resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        push_dup(&mut seen, errors, &v.keyword);
+                    }
                 }
             }
+            Member::Exclude(_) => {}
         }
+    }
 
-        // E210: Reference name must resolve
-        for t in types_to_check {
-            if let Type::Reference(n) = t {
-                if !def_names.contains(n.as_str()) {
-                    errors.push(SchemaError {
-                        code: ErrorCode::E210,
-                        detail: format!("Reference `{}` does not resolve to any Definition", n),
-                    });
+    // Per-member checks.
+    for m in members {
+        match m {
+            Member::Field(f) => {
+                // E204: Field.default requires required + Scalar resolution.
+                if let Some(def_val) = &f.default {
+                    let is_required = f.required.effective_required();
+                    let resolves_to_scalar = matches!(&f.r#type, Type::Scalar(_)) ||
+                        match &f.r#type {
+                            Type::Reference(n) => matches!(
+                                resolve_name(n, schema),
+                                ResolvedType::Scalar(_)
+                            ),
+                            _ => false,
+                        };
+                    if !is_required {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E204,
+                            detail: format!(
+                                "Field `{}` has default `{}` but is not required",
+                                f.keyword, def_val,
+                            ),
+                        });
+                    } else if !resolves_to_scalar {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E204,
+                            detail: format!(
+                                "Field `{}` has default `{}` but its type is not Scalar",
+                                f.keyword, def_val,
+                            ),
+                        });
+                    }
+                }
+                // E210/E218: type-name resolution.
+                if let Type::Reference(n) = &f.r#type {
+                    match resolve_name(n, schema) {
+                        ResolvedType::Unresolved => {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E210,
+                                detail: format!(
+                                    "Reference `{}` (Field `{}`) does not resolve to any Definition",
+                                    n, f.keyword,
+                                ),
+                            });
+                        }
+                        ResolvedType::KindMismatch => {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E218,
+                                detail: format!(
+                                    "Reference `{}` (Field `{}`) resolves to a SelectDefinition; use `select <Name>` at this position instead",
+                                    n, f.keyword,
+                                ),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                // Recurse into nested Struct types.
+                if let Type::Struct(st) = &f.r#type {
+                    check_members_recursive(&st.members, schema, errors);
                 }
             }
-        }
-
-        // Recurse into nested Struct types
-        for t in member_types(m) {
-            if let Type::Struct(st) = t {
-                check_members_recursive(&st.members, def_names, errors);
+            Member::SelectRef(s) => {
+                // E210/E218: SelectRef must resolve to a SelectDefinition.
+                match resolve_name(&s.reference, schema) {
+                    ResolvedType::Unresolved => {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E210,
+                            detail: format!(
+                                "SelectRef `{}` does not resolve to any Definition",
+                                s.reference,
+                            ),
+                        });
+                    }
+                    ResolvedType::Struct(_) | ResolvedType::Scalar(_) => {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E218,
+                            detail: format!(
+                                "SelectRef `{}` resolves to a Record or Scalar (not a SelectDefinition)",
+                                s.reference,
+                            ),
+                        });
+                    }
+                    _ => {
+                        // KindMismatch here means resolve_name found a
+                        // SelectDefinition (good — that's exactly what a
+                        // SelectRef should resolve to). The
+                        // resolve_select_ref helper confirms it.
+                        if resolve_select_ref(&s.reference, schema).is_none() {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E210,
+                                detail: format!(
+                                    "SelectRef `{}` does not resolve to a SelectDefinition",
+                                    s.reference,
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Member::Exclude(_) => {
+                // Handled by check_no_exclude_in_struct.
             }
         }
     }
@@ -3413,11 +3637,13 @@ mod tests {
     #[test]
     fn builtin_tel_schema_has_expected_definitions() {
         let s = builtin_tel_schema();
-        let names: Vec<&str> = s.types.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec![
-            "layer-body", "record-body", "scalar-body", "overlay-body",
-            "document-body", "field-body", "select-body", "variant-body",
+        let record_names: Vec<&str> = s.records.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(record_names, vec![
+            "Field", "SelectRef", "Variant", "Record", "Scalar",
+            "Select", "Body", "Layer",
         ]);
+        let select_names: Vec<&str> = s.selects.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(select_names, vec!["Member", "SelectChild"]);
     }
 
     #[test]
@@ -3487,18 +3713,18 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                 ],
              validators: Vec::new(),},
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E201),
@@ -3507,17 +3733,19 @@ mod tests {
 
     #[test]
     fn validate_schema_catches_e202_empty_select() {
+        // A SelectDefinition with no variants is E202.
         let s = Schema {
             name: "test".to_string(),
-            document: Struct {
-                members: vec![
-                    Member::Select(Select {
-                        required: false, repeatable: false,
-                        variants: vec![],
-                    }),
-                ],
-             validators: Vec::new(),},
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            document: Struct { members: vec![], validators: vec![] },
+            layers: vec![], sigil: None,
+            records: vec![],
+            scalars: Vec::new(),
+            selects: vec![SelectDefinition {
+                name: "Empty".to_string(),
+                variants: vec![],
+                validators: Vec::new(),
+                layer_excludes: Vec::new(),
+            }],
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E202),
@@ -3532,8 +3760,8 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: false, // not required, so default is illegal
-                        repeatable: false,
+                        required: Polarity::Loose, // not required, so default is illegal
+                        repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()] }),
                         default: Some("bar".to_string()),
@@ -3541,7 +3769,7 @@ mod tests {
                 ],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E204),
@@ -3555,7 +3783,7 @@ mod tests {
             document: Struct { members: vec![], validators: vec![] },
             layers: vec![],
             sigil: Some('A'), // letter
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E208),
@@ -3569,13 +3797,13 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "tel".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                 ],
              validators: Vec::new(),},
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E209),
@@ -3589,13 +3817,13 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Reference("missing".to_string()), default: None,
                     }),
                 ],
              validators: Vec::new(),},
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E210),
@@ -3604,8 +3832,8 @@ mod tests {
 
     #[test]
     fn validate_schema_catches_e211_duplicate_definition() {
-        let dup = || Definition {
-            name: "dup".to_string(),
+        let dup = || RecordDefinition {
+            name: "Dup".to_string(),
             members: vec![], validators: Vec::new(),
         };
         let s = Schema {
@@ -3613,7 +3841,7 @@ mod tests {
             document: Struct { members: vec![], validators: vec![] },
             layers: vec![],
             sigil: None,
-            types: vec![dup(), dup()], scalars: Vec::new(),
+            records: vec![dup(), dup()], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E211),
@@ -3632,7 +3860,7 @@ mod tests {
             },
             layers: vec![],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E217),
@@ -3648,11 +3876,11 @@ mod tests {
             document: Struct { members: vec![], validators: vec![] },
             layers: vec![],
             sigil: None,
-            types: vec![Definition {
-                name: "thing".to_string(),
+            records: vec![RecordDefinition {
+                name: "Thing".to_string(),
                 members: vec![Member::Exclude("bar".to_string())],
                 validators: vec![],
-            }], scalars: Vec::new(),
+            }], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E217),
@@ -3660,30 +3888,40 @@ mod tests {
     }
 
     #[test]
-    fn validate_schema_accepts_exclude_in_layer_root() {
-        // Exclude is legitimate inside a layer's root struct: NOT E217.
+    fn validate_schema_accepts_exclude_in_layer_select_def() {
+        // `exclude` inside a layer's SelectDefinition body is the valid
+        // path — NOT E217. Base schema declares a named Select with
+        // variants {a, b}; the layer declares a same-name Select with
+        // `exclude b` to narrow.
+        let base_select = SelectDefinition {
+            name: "Choice".to_string(),
+            variants: vec![
+                Variant { keyword: "a".to_string(), r#type: Type::Flag },
+                Variant { keyword: "b".to_string(), r#type: Type::Flag },
+            ],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        };
+        let layer_select = SelectDefinition {
+            name: "Choice".to_string(),
+            variants: vec![],
+            validators: Vec::new(),
+            layer_excludes: vec!["b".to_string()],
+        };
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
-                members: vec![Member::Select(Select {
-                    required: false, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "a".to_string(), r#type: Type::Flag },
-                        Variant { keyword: "b".to_string(), r#type: Type::Flag },
-                    ],
-                })],
+                members: vec![select_ref(false, false, "Choice")],
                 validators: vec![],
             },
             layers: vec![Layer {
                 name: "drop-b".to_string(),
-                overlay: Struct {
-                    members: vec![Member::Exclude("b".to_string())],
-                    validators: vec![],
-                },
-                types: vec![], scalars: Vec::new(),
+                overlay: Struct { members: vec![], validators: vec![] },
+                records: vec![], scalars: Vec::new(),
+                selects: vec![layer_select],
             }],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: vec![base_select],
         };
         let errors = validate_schema(&s);
         assert!(!errors.iter().any(|e| e.code == ErrorCode::E217),
@@ -3695,14 +3933,14 @@ mod tests {
         let l = || Layer {
             name: "dup".to_string(),
             overlay: Struct { members: vec![], validators: vec![] },
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let s = Schema {
             name: "test".to_string(),
             document: Struct { members: vec![], validators: vec![] },
             layers: vec![l(), l()],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E205),
@@ -3718,18 +3956,25 @@ mod tests {
             document: Struct { members, validators: Vec::new() },
             layers: vec![],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         }
     }
 
     fn field(req: bool, rep: bool, kw: &str, t: Type) -> Member {
         Member::Field(Field {
-            required: req, repeatable: rep, keyword: kw.to_string(), r#type: t, default: None,
+            required: if req { Polarity::Default } else { Polarity::Loose },
+            repeatable: if rep { Polarity::Loose } else { Polarity::Default },
+            keyword: kw.to_string(), r#type: t, default: None,
         })
     }
 
-    fn select(req: bool, rep: bool, variants: Vec<Variant>) -> Member {
-        Member::Select(Select { required: req, repeatable: rep, variants })
+    /// Test helper: build a `SelectRef` member pointing at a named SelectDefinition.
+    fn select_ref(req: bool, rep: bool, name: &str) -> Member {
+        Member::SelectRef(SelectRef {
+            required: if req { Polarity::Default } else { Polarity::Loose },
+            repeatable: if rep { Polarity::Loose } else { Polarity::Default },
+            reference: name.to_string(),
+        })
     }
 
     fn variant_(kw: &str, t: Type) -> Variant {
@@ -3779,7 +4024,7 @@ mod tests {
         // substituted when the field is absent from the document.
         let s = schema_with_root(vec![
             Member::Field(Field {
-                required: true, repeatable: false,
+                required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
                 r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()] }),
                 default: Some("Anonymous".to_string()),
@@ -3806,7 +4051,7 @@ mod tests {
         // schema with identifier validator on `id` field
         let s = schema_with_root(vec![
             Member::Field(Field {
-                required: true, repeatable: false,
+                required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
                 r#type: Type::Scalar(Scalar { validators: vec!["identifier".to_string()]}), default: None,
             }),
@@ -3858,13 +4103,13 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                 ],
              validators: Vec::new(),},
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         // Write the wrong atom name
         let doc = parse("active inactive\n").document;
@@ -3895,25 +4140,26 @@ mod tests {
 
     #[test]
     fn type_assign_catches_e303_atom_at_non_atom_assignable_position() {
-        // `outer` is a required Field whose Struct contains a required Select
-        // with mixed variant types (Scalar + Flag). The Select is therefore
-        // not atom-assignable, and the atom on `outer`'s line cannot be
-        // assigned: E303.
+        // `outer` is a required Field whose Struct contains a SelectRef to
+        // `Mixed`, whose variants mix Scalar and Flag types. The SelectRef
+        // is therefore not atom-assignable, and the atom on `outer`'s line
+        // cannot be assigned: E303.
         let mixed_struct = Type::Struct(Struct {
-            members: vec![
-                Member::Select(Select {
-                    required: true, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "one".to_string(), r#type: scalar_string() },
-                        Variant { keyword: "two".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ],
+            members: vec![select_ref(true, false, "Mixed")],
             validators: Vec::new(),
         });
-        let s = schema_with_root(vec![
+        let mut s = schema_with_root(vec![
             field(true, false, "outer", mixed_struct),
         ]);
+        s.selects.push(SelectDefinition {
+            name: "Mixed".to_string(),
+            variants: vec![
+                Variant { keyword: "one".to_string(), r#type: scalar_string() },
+                Variant { keyword: "two".to_string(), r#type: Type::Flag },
+            ],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        });
         let doc = parse("outer something\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E303),
@@ -3922,21 +4168,27 @@ mod tests {
 
     #[test]
     fn type_assign_catches_e304_select_no_matching_variant() {
-        // `colour` is a Field with Struct type whose only member is a required
-        // all-Flag Select {red, green, blue}. The atom `yellow` on the
-        // `colour` compound must match a variant — it doesn't, so E304.
+        // `colour` is a Field with Struct type whose only member is a SelectRef
+        // to an all-Flag SelectDefinition `Colour` = {red, green, blue}. The
+        // atom `yellow` on the `colour` compound must match a variant — it
+        // doesn't, so E304.
         let colour_struct = Type::Struct(Struct {
-            members: vec![
-                select(true, false, vec![
-                    variant_("red", Type::Flag),
-                    variant_("green", Type::Flag),
-                    variant_("blue", Type::Flag),
-                ]),
-            ],
-         validators: Vec::new(),});
-        let s = schema_with_root(vec![
+            members: vec![select_ref(true, false, "Colour")],
+            validators: Vec::new(),
+        });
+        let mut s = schema_with_root(vec![
             field(true, false, "colour", colour_struct),
         ]);
+        s.selects.push(SelectDefinition {
+            name: "Colour".to_string(),
+            variants: vec![
+                variant_("red", Type::Flag),
+                variant_("green", Type::Flag),
+                variant_("blue", Type::Flag),
+            ],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        });
         let doc = parse("colour yellow\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E304),
@@ -3945,17 +4197,20 @@ mod tests {
 
     // ── compose_schema tests (§20.3) ────────────────────────────────────
 
-    fn layer(name: &str, root_members: Vec<Member>, types: Vec<Definition>) -> Layer {
+    fn layer(name: &str, root_members: Vec<Member>, records: Vec<RecordDefinition>) -> Layer {
         Layer {
             name: name.to_string(),
             overlay: Struct { members: root_members, validators: Vec::new() },
-            types, scalars: Vec::new(),
+            records, scalars: Vec::new(), selects: Vec::new(),
         }
     }
 
+    #[allow(dead_code)]
     fn flag_field(req: bool, kw: &str) -> Member {
         Member::Field(Field {
-            required: req, repeatable: false, keyword: kw.to_string(), r#type: Type::Flag, default: None,
+            required: if req { Polarity::Default } else { Polarity::Loose },
+            repeatable: Polarity::Default,
+            keyword: kw.to_string(), r#type: Type::Flag, default: None,
         })
     }
 
@@ -3966,18 +4221,18 @@ mod tests {
             name: "x".to_string(),
             document: Struct { members: vec![
                 Member::Field(Field {
-                    required: true, repeatable: false, keyword: "name".to_string(),
+                    required: Polarity::Default, repeatable: Polarity::Default, keyword: "name".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], validators: Vec::new()},
             layers: vec![layer("with-email", vec![
                 Member::Field(Field {
-                    required: false, repeatable: false, keyword: "email".to_string(),
+                    required: Polarity::Loose, repeatable: Polarity::Default, keyword: "email".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], vec![])],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
@@ -3991,66 +4246,98 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![], validators: vec![] },
-            layers: vec![layer("ext", vec![], vec![Definition {
-                name: "address".to_string(),
+            layers: vec![layer("ext", vec![], vec![RecordDefinition {
+                name: "Address".to_string(),
                 members: vec![
                     Member::Field(Field {
-                        required: false, repeatable: false, keyword: "postcode".to_string(),
+                        required: Polarity::Loose, repeatable: Polarity::Default, keyword: "postcode".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
                 ], validators: Vec::new(),
             }])],
             sigil: None,
-            types: vec![Definition {
-                name: "address".to_string(),
+            records: vec![RecordDefinition {
+                name: "Address".to_string(),
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false, keyword: "street".to_string(),
+                        required: Polarity::Default, repeatable: Polarity::Default, keyword: "street".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
                 ], validators: Vec::new(),
-            }], scalars: Vec::new(),
+            }], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
-        assert_eq!(composed.types.len(), 1);
-        assert_eq!(composed.types[0].members.len(), 2);
+        assert_eq!(composed.records.len(), 1);
+        assert_eq!(composed.records[0].members.len(), 2);
     }
 
     #[test]
     fn compose_exclude_variant_works() {
+        // Base has `select Status { active, archived }`. Layer excludes
+        // `archived`. Composed Status has only `active`.
+        let base_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![
+                Variant { keyword: "active".to_string(), r#type: Type::Flag },
+                Variant { keyword: "archived".to_string(), r#type: Type::Flag },
+            ],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        };
+        let layer_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![],
+            validators: Vec::new(),
+            layer_excludes: vec!["archived".to_string()],
+        };
         let base = Schema {
             name: "x".to_string(),
-            document: Struct { members: vec![
-                Member::Select(Select {
-                    required: false, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "active".to_string(), r#type: Type::Flag },
-                        Variant { keyword: "archived".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ], validators: Vec::new()},
-            layers: vec![layer("ro", vec![Member::Exclude("archived".to_string())], vec![])],
+            document: Struct {
+                members: vec![select_ref(false, false, "Status")],
+                validators: Vec::new(),
+            },
+            layers: vec![Layer {
+                name: "ro".to_string(),
+                overlay: Struct { members: vec![], validators: vec![] },
+                records: vec![], scalars: Vec::new(),
+                selects: vec![layer_status],
+            }],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: vec![base_status],
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
-        assert_eq!(composed.document.members.len(), 1);
-        if let Member::Select(s) = &composed.document.members[0] {
-            assert_eq!(s.variants.len(), 1);
-            assert_eq!(s.variants[0].keyword, "active");
-        } else { panic!("expected Select"); }
+        let composed_status = composed.selects.iter().find(|s| s.name == "Status").unwrap();
+        assert_eq!(composed_status.variants.len(), 1);
+        assert_eq!(composed_status.variants[0].keyword, "active");
     }
 
     #[test]
     fn compose_exclude_variant_unknown_keyword_is_e212() {
+        let base_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![Variant { keyword: "active".to_string(), r#type: Type::Flag }],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        };
+        let layer_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![],
+            validators: Vec::new(),
+            layer_excludes: vec!["never-existed".to_string()],
+        };
         let base = Schema {
             name: "x".to_string(),
-            document: Struct { members: vec![flag_field(false, "active")], validators: Vec::new() },
-            layers: vec![layer("bad", vec![Member::Exclude("never-existed".to_string())], vec![])],
+            document: Struct { members: vec![], validators: Vec::new() },
+            layers: vec![Layer {
+                name: "bad".to_string(),
+                overlay: Struct { members: vec![], validators: vec![] },
+                records: vec![], scalars: Vec::new(),
+                selects: vec![layer_status],
+            }],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: vec![base_status],
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E212),
@@ -4058,83 +4345,37 @@ mod tests {
     }
 
     #[test]
-    fn compose_exclude_variant_empties_required_select_is_e213() {
-        let base = Schema {
-            name: "x".to_string(),
-            document: Struct { members: vec![
-                Member::Select(Select {
-                    required: true, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "only".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ], validators: Vec::new()},
-            layers: vec![layer("strip", vec![Member::Exclude("only".to_string())], vec![])],
-            sigil: None,
-            types: vec![], scalars: Vec::new(),
+    fn compose_select_variant_addition_is_e214() {
+        // A layer tries to introduce a fresh variant `extra` in an existing
+        // SelectDefinition — variant addition is forbidden (E214 — would
+        // widen the sum).
+        let base_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![Variant { keyword: "active".to_string(), r#type: Type::Flag }],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
         };
-        let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E213),
-                "expected E213, got: {:?}", errs);
-    }
-
-    #[test]
-    fn compose_select_variant_keyword_overlap_is_e214() {
-        // A layer tries to add a Select whose variant keyword `archived`
-        // already exists in the base's Select. This should be E214 —
-        // can't widen an existing Select.
+        let layer_status = SelectDefinition {
+            name: "Status".to_string(),
+            variants: vec![Variant { keyword: "extra".to_string(), r#type: Type::Flag }],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        };
         let base = Schema {
             name: "x".to_string(),
-            document: Struct { members: vec![
-                Member::Select(Select {
-                    required: false, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "active".to_string(), r#type: Type::Flag },
-                        Variant { keyword: "archived".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ], validators: Vec::new()},
-            layers: vec![layer("widen", vec![
-                Member::Select(Select {
-                    required: false, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "archived".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ], vec![])],
+            document: Struct { members: vec![], validators: Vec::new() },
+            layers: vec![Layer {
+                name: "widen".to_string(),
+                overlay: Struct { members: vec![], validators: vec![] },
+                records: vec![], scalars: Vec::new(),
+                selects: vec![layer_status],
+            }],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: vec![base_status],
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E214),
                 "expected E214, got: {:?}", errs);
-    }
-
-    #[test]
-    fn compose_select_variant_collides_with_field_is_e206() {
-        // Layer's Select variant `name` collides with the base Field `name`.
-        let base = Schema {
-            name: "x".to_string(),
-            document: Struct { members: vec![
-                Member::Field(Field {
-                    required: true, repeatable: false, keyword: "name".to_string(),
-                    r#type: scalar_string(), default: None,
-                }),
-            ], validators: Vec::new()},
-            layers: vec![layer("collide", vec![
-                Member::Select(Select {
-                    required: false, repeatable: false,
-                    variants: vec![
-                        Variant { keyword: "name".to_string(), r#type: Type::Flag },
-                    ],
-                }),
-            ], vec![])],
-            sigil: None,
-            types: vec![], scalars: Vec::new(),
-        };
-        let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E206),
-                "expected E206, got: {:?}", errs);
     }
 
     #[test]
@@ -4153,10 +4394,10 @@ mod tests {
                     members: vec![],
                     validators: vec!["base-ok".to_string(), "layer-ok".to_string()],
                 },
-                types: vec![], scalars: Vec::new(),
+                records: vec![], scalars: Vec::new(), selects: Vec::new(),
             }],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
@@ -4174,23 +4415,23 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![], validators: vec![] },
-            layers: vec![layer("ext", vec![], vec![Definition {
-                name: "address".to_string(),
+            layers: vec![layer("ext", vec![], vec![RecordDefinition {
+                name: "Address".to_string(),
                 members: vec![],
                 validators: vec!["layer-rule".to_string()],
             }])],
             sigil: None,
-            types: vec![Definition {
-                name: "address".to_string(),
+            records: vec![RecordDefinition {
+                name: "Address".to_string(),
                 members: vec![],
                 validators: vec!["base-rule".to_string()],
-            }], scalars: Vec::new(),
+            }], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
-        assert_eq!(composed.types.len(), 1);
+        assert_eq!(composed.records.len(), 1);
         assert_eq!(
-            composed.types[0].validators,
+            composed.records[0].validators,
             vec!["base-rule".to_string(), "layer-rule".to_string()],
         );
     }
@@ -4204,7 +4445,7 @@ mod tests {
             name: "x".to_string(),
             document: Struct {
                 members: vec![Member::Field(Field {
-                    required: false, repeatable: false,
+                    required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 })],
@@ -4212,18 +4453,18 @@ mod tests {
             },
             layers: vec![layer("tighten", vec![
                 Member::Field(Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Tight, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], vec![])],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
         if let Member::Field(f) = &composed.document.members[0] {
-            assert!(f.required, "merged field should be required after tightening");
+            assert!(f.required.effective_required(), "merged field should be required after tightening");
         } else {
             panic!("expected Field at index 0");
         }
@@ -4231,14 +4472,14 @@ mod tests {
 
     #[test]
     fn compose_layer_can_tighten_repeatable_to_irrepeatable() {
-        // Base: `field foo repeatable scalar string` (repeatable=true).
-        // Layer: `field foo scalar string` (repeatable=false, i.e. irrepeatable).
-        // Expected: merged field has repeatable=false, no errors.
+        // Base: `field foo repeatable scalar string` (Polarity::Loose).
+        // Layer: declares `irrepeatable` (Polarity::Tight).
+        // Expected: merged field has repeatable=false (effective).
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
                 members: vec![Member::Field(Field {
-                    required: true, repeatable: true,
+                    required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 })],
@@ -4246,18 +4487,18 @@ mod tests {
             },
             layers: vec![layer("tighten", vec![
                 Member::Field(Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Tight,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], vec![])],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (composed, errs) = compose_schema(&base);
         assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
         if let Member::Field(f) = &composed.document.members[0] {
-            assert!(!f.repeatable, "merged field should be irrepeatable after tightening");
+            assert!(!f.repeatable.effective_repeatable(), "merged field should be irrepeatable after tightening");
         } else {
             panic!("expected Field at index 0");
         }
@@ -4270,7 +4511,7 @@ mod tests {
             name: "x".to_string(),
             document: Struct {
                 members: vec![Member::Field(Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 })],
@@ -4278,13 +4519,13 @@ mod tests {
             },
             layers: vec![layer("loosen", vec![
                 Member::Field(Field {
-                    required: false, repeatable: false,
+                    required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], vec![])],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E215),
@@ -4298,7 +4539,7 @@ mod tests {
             name: "x".to_string(),
             document: Struct {
                 members: vec![Member::Field(Field {
-                    required: true, repeatable: false,
+                    required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 })],
@@ -4306,13 +4547,13 @@ mod tests {
             },
             layers: vec![layer("loosen", vec![
                 Member::Field(Field {
-                    required: true, repeatable: true,
+                    required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], vec![])],
             sigil: None,
-            types: vec![], scalars: Vec::new(),
+            records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E216),
@@ -4327,7 +4568,7 @@ mod tests {
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
         if let Member::Field(f) = &s.document.members[0] {
-            assert!(!f.required, "optional flag should produce required=false");
+            assert!(!f.required.effective_required(), "optional flag should produce required=false");
             assert_eq!(f.keyword, "foo");
         } else {
             panic!("expected Field");
@@ -4342,8 +4583,8 @@ mod tests {
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
         if let Member::Field(f) = &s.document.members[0] {
-            assert!(f.required, "no flag should default to required=true");
-            assert!(!f.repeatable, "no flag should default to repeatable=false");
+            assert!(f.required.effective_required(), "no flag should default to required=true");
+            assert!(!f.repeatable.effective_repeatable(), "no flag should default to repeatable=false");
         } else {
             panic!("expected Field");
         }
@@ -4358,7 +4599,7 @@ mod tests {
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let s = construct_schema(&parsed.document);
         if let Member::Field(f) = &s.document.members[0] {
-            assert!(f.required, "required should override optional in conflict");
+            assert!(f.required.effective_required(), "required should override optional in conflict");
         } else {
             panic!("expected Field");
         }
@@ -4385,8 +4626,12 @@ mod tests {
         assert_eq!(constructed.name, builtin.name);
         assert_eq!(constructed.document, builtin.document,
                    "constructed.document differs from built-in.document");
-        assert_eq!(constructed.types, builtin.types,
-                   "constructed.types differs from built-in.types");
+        assert_eq!(constructed.records, builtin.records,
+                   "constructed.records differs from built-in.records");
+        assert_eq!(constructed.scalars, builtin.scalars,
+                   "constructed.scalars differs from built-in.scalars");
+        assert_eq!(constructed.selects, builtin.selects,
+                   "constructed.selects differs from built-in.selects");
         assert_eq!(constructed.layers, builtin.layers);
         assert_eq!(constructed.sigil, builtin.sigil);
         // Lastly: a constructed schema should itself be valid.
@@ -4407,15 +4652,15 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
-                        r#type: Type::Reference("string".to_string()),
+                        r#type: Type::Reference("String".to_string()),
                         default: None,
                     }),
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
-                        r#type: Type::Reference("flag".to_string()),
+                        r#type: Type::Reference("Flag".to_string()),
                         default: None,
                     }),
                 ],
@@ -4423,14 +4668,15 @@ mod tests {
             },
             layers: vec![],
             sigil: None,
-            types: vec![],
+            records: vec![],
             scalars: Vec::new(),
+            selects: Vec::new(),
         };
         let source = "tel 1.0\n\n\
                       name round-trip\n\n\
                       document\n  \
-                      field name string\n  \
-                      field active flag optional\n";
+                      field name String\n  \
+                      field active Flag optional\n";
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let constructed = construct_schema(&parsed.document);
@@ -4439,25 +4685,25 @@ mod tests {
 
     #[test]
     fn type_assign_with_definitions_resolves_reference() {
-        // schema has a Definition `address`, and the root has a Field
+        // schema has a RecordDefinition `Address`, and the root has a Field
         // referencing it.
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    field(true, false, "home", Type::Reference("address".to_string())),
+                    field(true, false, "home", Type::Reference("Address".to_string())),
                 ],
              validators: Vec::new(),},
             layers: vec![],
             sigil: None,
-            types: vec![
-                Definition {
-                    name: "address".to_string(),
+            records: vec![
+                RecordDefinition {
+                    name: "Address".to_string(),
                     members: vec![
                         field(true, false, "city", scalar_string()),
                     ], validators: Vec::new(),
                 },
-            ], scalars: Vec::new(),
+            ], scalars: Vec::new(), selects: Vec::new(),
         };
         let doc = parse("home\n  city London\n").document;
         let ta = type_assign(&doc, &s, None);
@@ -4470,7 +4716,7 @@ mod tests {
     /// Specification. Two conforming implementations MUST agree on this
     /// value.
     pub const TEL_SCHEMA_VALUE_HASH_HEX: &str =
-        "15075381a17c781436717e2ff12ca75e4ba6503b8c47b6f6b26fa8fb0e831866";
+        "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd";
 
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2)
@@ -4486,11 +4732,21 @@ mod tests {
         assert!(parsed.errors.is_empty(), "tel-schema.tel must parse cleanly");
         let schema = builtin_tel_schema();
         let hash = bintel::value_hash(&parsed.document, &schema);
+        let bytes = bintel::encode_root(&parsed.document, &schema);
+        // When DUMP_TEL_SCHEMA_BINTEL is set, write the canonical hex to
+        // demo/tel-schema.bintel.hex. Useful for regenerating the pinned
+        // artefacts after schema changes.
+        if std::env::var("DUMP_TEL_SCHEMA_BINTEL").is_ok() {
+            let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            fs::write("../../demo/tel-schema.bintel.hex", &hex).ok();
+            eprintln!("wrote {} bytes to demo/tel-schema.bintel.hex", bytes.len());
+        }
         let expected = hex_decode(TEL_SCHEMA_VALUE_HASH_HEX);
         assert_eq!(hash.to_vec(), expected,
                    "tel-schema.tel value hash does not match the normative \
-                   value pinned in spec/tel.md §20.5; computed hex={}",
-                   hash.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+                   value pinned in spec/tel.md §20.5; computed hex={} (bytes={})",
+                   hash.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+                   bytes.len());
     }
 
     #[test]
@@ -4539,16 +4795,18 @@ mod tests {
         assert!(errs.is_empty(),
                 "compose_schema reported errors: {:?}", errs);
         assert!(composed.layers.is_empty());
-        let composed_keywords: Vec<&str> = composed.document.members.iter().flat_map(|m| {
+        let composed_keywords: Vec<String> = composed.document.members.iter().flat_map(|m| {
             match m {
-                Member::Field(f) => vec![f.keyword.as_str()],
-                Member::Select(s) => s.variants.iter().map(|v| v.keyword.as_str()).collect(),
+                Member::Field(f) => vec![f.keyword.clone()],
+                Member::SelectRef(s) => crate::resolve_select_ref(&s.reference, &composed)
+                    .map(|vs| vs.iter().map(|v| v.keyword.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
                 Member::Exclude(_) => Vec::new(),
             }
         }).collect();
-        assert!(composed_keywords.contains(&"active"),
+        assert!(composed_keywords.iter().any(|k| k == "active"),
                 "composed schema should still contain `active`: {:?}", composed_keywords);
-        assert!(!composed_keywords.contains(&"archived"),
+        assert!(!composed_keywords.iter().any(|k| k == "archived"),
                 "composed schema should NOT contain `archived`: {:?}", composed_keywords);
 
         // Validate the document.
@@ -4732,18 +4990,18 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "address".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
                                 Member::Field(Field {
-                                    required: true, repeatable: false,
+                                    required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
                                     r#type: Type::Scalar(Scalar {
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field {
-                                    required: true, repeatable: false,
+                                    required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
                                     r#type: Type::Scalar(Scalar {
                                         validators: vec!["string".to_string()]}), default: None,
@@ -4755,7 +5013,7 @@ mod tests {
                 ],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let doc = parse("tel 1.0\n\naddress\n  street  221B Baker Street\n  country UK\n").document;
 
@@ -4799,19 +5057,19 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                 ],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         // Two equivalent presentation forms — root-level can't use inline
         // atoms (the document root has no atoms), so this test focuses on
@@ -4841,17 +5099,17 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "record".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
                                 Member::Field(Field {
-                                    required: true, repeatable: false,
+                                    required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
                                     r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field {
-                                    required: false, repeatable: false,
+                                    required: Polarity::Loose, repeatable: Polarity::Default,
                                     keyword: "active".to_string(),
                                     r#type: Type::Flag, default: None,
                                 }),
@@ -4862,7 +5120,7 @@ mod tests {
                 ],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         // Form A: inline atoms — `record alpha active`. The atoms `alpha`
         // and `active` fill the `id` Scalar and `active` Flag members.
@@ -4885,19 +5143,19 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
                         r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field {
-                        required: false, repeatable: false,
+                        required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "bold".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
                 ],
                 validators: vec![],
             },
-            layers: Vec::new(), sigil: None, types: Vec::new(), scalars: Vec::new(),
+            layers: Vec::new(), sigil: None, records: Vec::new(), scalars: Vec::new(), selects: Vec::new(),
         };
         let source = "tel 1.0\n\ntext  hello, world\nbold\n";
         let parsed = parse(source);

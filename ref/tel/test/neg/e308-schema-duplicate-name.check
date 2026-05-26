@@ -82,4 +82,5 @@ Document {
     ],
 }
 errors:
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
   E308 [0,0): Non-repeatable member is filled more than once: non-repeatable member `name` is filled 2 times

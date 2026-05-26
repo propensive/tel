@@ -40,7 +40,7 @@ Document {
                     keyword: "record",
                     atoms: [
                         Inline {
-                            text: "node",
+                            text: "Node",
                             preceding_spaces: 1,
                         },
                     ],
@@ -58,7 +58,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -73,7 +73,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "node",
+                                            text: "Node",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -109,7 +109,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "node",
+                                            text: "Node",
                                             preceding_spaces: 1,
                                         },
                                     ],

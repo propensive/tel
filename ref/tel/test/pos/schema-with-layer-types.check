@@ -40,7 +40,7 @@ Document {
                     keyword: "record",
                     atoms: [
                         Inline {
-                            text: "address",
+                            text: "Address",
                             preceding_spaces: 1,
                         },
                     ],
@@ -58,7 +58,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -94,7 +94,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "address",
+                                            text: "Address",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -137,7 +137,7 @@ Document {
                                     keyword: "record",
                                     atoms: [
                                         Inline {
-                                            text: "backup-address",
+                                            text: "BackupAddress",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -155,7 +155,7 @@ Document {
                                                             preceding_spaces: 1,
                                                         },
                                                         Inline {
-                                                            text: "string",
+                                                            text: "String",
                                                             preceding_spaces: 1,
                                                         },
                                                     ],
@@ -184,7 +184,7 @@ Document {
                                                             preceding_spaces: 1,
                                                         },
                                                         Inline {
-                                                            text: "backup-address",
+                                                            text: "BackupAddress",
                                                             preceding_spaces: 1,
                                                         },
                                                     ],

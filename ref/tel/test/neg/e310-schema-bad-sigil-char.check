@@ -83,3 +83,4 @@ Document {
 }
 errors:
   E310 [0,1): Scalar value failed validation: `sigil` failed validation: sigil must not be a letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

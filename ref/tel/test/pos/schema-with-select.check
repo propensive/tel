@@ -37,6 +37,77 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
+                    keyword: "select",
+                    atoms: [
+                        Inline {
+                            text: "Status",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [
+                        Block {
+                            comments: [],
+                            tabulation: None,
+                            compounds: [
+                                Compound {
+                                    keyword: "variant",
+                                    atoms: [
+                                        Inline {
+                                            text: "active",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "variant",
+                                    atoms: [
+                                        Inline {
+                                            text: "inactive",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "variant",
+                                    atoms: [
+                                        Inline {
+                                            text: "unknown",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                            ],
+                            trailing_blank_lines: 0,
+                        },
+                    ],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
                     keyword: "document",
                     atoms: [],
                     remark: None,
@@ -53,7 +124,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -64,68 +135,15 @@ Document {
                                     keyword: "select",
                                     atoms: [
                                         Inline {
-                                            text: "required",
+                                            text: "Status",
                                             preceding_spaces: 1,
                                         },
                                     ],
                                     remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "variant",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "active",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                                Compound {
-                                                    keyword: "variant",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "inactive",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                                Compound {
-                                                    keyword: "variant",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "unknown",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
-                                        },
-                                    ],
+                                    children: [],
                                 },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },

@@ -2,15 +2,15 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name base-schema
 
-record address
-  field street string
+record Address
+  field street String
 
 document
-  field home address
+  field home Address
 
 layer
   name with-secondary
-  record backup-address
-    field place string
+  record BackupAddress
+    field place String
   overlay
-    field secondary backup-address
+    field secondary BackupAddress

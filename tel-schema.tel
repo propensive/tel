@@ -1,119 +1,121 @@
 tel 1.0
 
-# The TEL schema-for-schemas. Self-describing: parsing this document under
-# the schema it defines yields a valid semantic model. The vocabulary is
-# specified in §20.5 of the TEL Specification.
+# The TEL schema-for-schemas (v1.0). Self-describing: parsing this document
+# under the schema it defines yields a valid semantic model. The vocabulary
+# and surface conventions are specified in §20.5 of the TEL Specification.
 #
-# Polarity convention (§20):
-#   - The default for every Field and Select is REQUIRED and IRREPEATABLE.
-#   - `optional` (Flag) loosens to optional; `required` (Flag, layer-only)
-#     re-tightens.
-#   - `repeatable` (Flag) loosens to repeatable; `irrepeatable` (Flag,
-#     layer-only) re-tightens.
+# Naming. Every Definition is a PascalCase TypeName; every variant or field
+# keyword is kebab-case. The two grammars are disjoint by leading letter case
+# (§20.7).
 #
-# Type names. Every `field` and `variant` carries its type as an inline
-# atom positioned after any flags. The type-name must resolve to either a
-# predefined type (`flag`, `string`, `identifier`, `sigil`) or a user-
-# declared `record` / `scalar` in the composed namespace.
+# Polarity. The default for every Field and SelectRef is required and
+# irrepeatable. `optional`/`repeatable` (Flag fields) loosen on the base side;
+# `required`/`irrepeatable` re-tighten on the layer side (§20 surface
+# syntax).
+#
+# Type references. Every `field type` and `variant type` atom, and every
+# SelectRef's first inline atom, is a TypeName that resolves through the
+# composed Definition namespace to a record, scalar, select, or built-in
+# (`Flag`, `String`, `Identifier`, `Sigil`).
 
 name tel-schema
 
 # ---------------------------------------------------------------------------
-# Record and scalar definitions used elsewhere in this schema. Each `record`
-# names a Struct; each `scalar` names a Scalar (a list of validators).
-# Definitions share one global namespace.
+# Record definitions
 # ---------------------------------------------------------------------------
 
-# The body of a Layer. `overlay` is optional so a layer may extend
-# Definitions without modifying the document root.
+# A `field` declaration at a member position. The four loosen/tighten flags
+# yield the per-axis Polarity (§20). `default` is permitted only on required
+# Scalar-typed fields (E204).
 
-record layer-body
-  field name identifier
-  field record record-body optional repeatable
-  field scalar scalar-body optional repeatable
-  field overlay overlay-body optional
+record Field
+  field keyword Identifier
+  field type TypeName
+  field optional Flag optional
+  field required Flag optional
+  field repeatable Flag optional
+  field irrepeatable Flag optional
+  field default String optional
 
-# The body of a record definition: name + members + optional struct-level
-# validators (§21.6).
+# A `select` declaration at a member position — a SelectRef. The first inline
+# atom names a top-level SelectDefinition; polarity lives at the use site.
 
-record record-body
-  field name identifier
-  select optional repeatable
-    variant field field-body
-    variant select select-body
-    variant validate identifier
+record SelectRef
+  field reference TypeName
+  field optional Flag optional
+  field required Flag optional
+  field repeatable Flag optional
+  field irrepeatable Flag optional
 
-# The body of a scalar definition: name + one or more validators.
+# A `variant` declaration inside a Select body.
 
-record scalar-body
-  field name identifier
-  field validate identifier repeatable
+record Variant
+  field keyword Identifier
+  field type TypeName
 
-# The body of an overlay (members merged into the composed document root
-# per §20.3). Permits the layer-only `exclude K` operation as well as
-# ordinary field/select/validate children.
+# A `record` declaration: a named struct definition.
 
-record overlay-body
-  select optional repeatable
-    variant field field-body
-    variant select select-body
-    variant exclude identifier
-    variant validate identifier
+record Record
+  field name TypeName
+  select Member optional repeatable
 
-# The body of the schema's document struct.
+# A `scalar` declaration: a named scalar definition (one or more validators).
 
-record document-body
-  select optional repeatable
-    variant field field-body
-    variant select select-body
-    variant validate identifier
+record Scalar
+  field name TypeName
+  field validate Identifier repeatable
 
-# The body of a Field. Member ordering — keyword, then `type` (required),
-# then the four loosen/tighten flags, then `default` (optional) — is chosen
-# so that the atom-phase rules of §20.2 / §20.8 let a typical declaration
-# fit one line, with the type-name adjacent to the field-name. For example,
-#
-#   field country string optional unknown
-#
-# parses as keyword=country, type=string, optional=true, default=unknown.
-#
-# The convention is **flags before default**: a `default` value, when
-# present, comes last. Multi-word or multi-line defaults are written as a
-# child compound.
+# A top-level `select` declaration. `exclude` children are permitted
+# lexically but only valid inside a layer's select body; appearing in a
+# base-schema select body raises E217 during construction.
 
-record field-body
-  field keyword identifier
-  field type identifier
-  field optional flag optional
-  field required flag optional
-  field repeatable flag optional
-  field irrepeatable flag optional
-  field default string optional
+record Select
+  field name TypeName
+  select SelectChild repeatable
 
-# The body of a Select.
+# The shared struct-shape used by `document` (Schema.document) and `overlay`
+# (Layer.overlay): a sequence of member declarations.
 
-record select-body
-  field optional flag optional
-  field required flag optional
-  field repeatable flag optional
-  field irrepeatable flag optional
-  field variant variant-body repeatable
+record Body
+  select Member optional repeatable
 
-# The body of a Variant: keyword + type-name.
+# A `layer` declaration: per-layer Definitions and an optional overlay.
 
-record variant-body
-  field keyword identifier
-  field type identifier
+record Layer
+  field name Identifier
+  field record Record optional repeatable
+  field scalar Scalar optional repeatable
+  field select Select optional repeatable
+  field overlay Body optional
 
 # ---------------------------------------------------------------------------
-# The schema document struct. Describes the top-level members of every TEL
-# schema document, including this one.
+# Select definitions
+# ---------------------------------------------------------------------------
+
+# Members admissible inside a struct-shaped Body, Record body, or Overlay.
+
+select Member
+  variant field Field
+  variant select SelectRef
+  variant validate Identifier
+
+# Children admissible inside a Select body. `exclude` is layer-only (E217 in
+# a base) but is lexically permitted here.
+
+select SelectChild
+  variant variant Variant
+  variant exclude Identifier
+  variant validate Identifier
+
+# ---------------------------------------------------------------------------
+# Schema document root
 # ---------------------------------------------------------------------------
 
 document
-  field name identifier
-  field sigil sigil optional
-  field record record-body optional repeatable
-  field scalar scalar-body optional repeatable
-  field document document-body
-  field layer layer-body optional repeatable
+  field name Identifier
+  field sigil Sigil optional
+  field record Record optional repeatable
+  field scalar Scalar optional repeatable
+  field select Select optional repeatable
+  field document Body
+  field layer Layer optional repeatable

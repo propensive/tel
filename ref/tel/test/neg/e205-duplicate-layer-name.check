@@ -193,4 +193,6 @@ Document {
     ],
 }
 errors:
-  E205 [0,0): Two or more Layers share the same name: duplicate Layer name `same-name`
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

@@ -216,7 +216,7 @@ impl<F: SchemaFetcher> Resolver<F> {
         if let Some(sig) = &identifier.signature {
             let builtin = builtin_tel_schema();
             let builtin_hash = hex_decode_const(
-                "df50abce267dc79106d4320f0879fb054236e8dce9efa04872fb5e2a6560fc52");
+                "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd");
             if sig == &builtin_hash {
                 return Ok(builtin);
             }
@@ -361,17 +361,19 @@ fn compute_layer_hash(layer_compound: &Compound) -> [u8; 32] {
         children: layer_compound.children.clone(),
     };
     let tel = builtin_tel_schema();
-    let layer_body_def = tel.types.iter().find(|d| d.name == "layer-body")
-        .expect("builtin tel-schema must define layer-body");
+    let layer_def = tel.records.iter().find(|d| d.name == "Layer")
+        .expect("builtin tel-schema must define the Layer record");
     let synth_schema = Schema {
-        name: "tel-layer-body".to_string(),
+        name: "tel-layer".to_string(),
         document: Struct {
-            members: layer_body_def.members.clone(),
-            validators: layer_body_def.validators.clone(),
+            members: layer_def.members.clone(),
+            validators: layer_def.validators.clone(),
         },
         layers: Vec::new(),
         sigil: tel.sigil,
-        types: tel.types.clone(), scalars: Vec::new(),
+        records: tel.records.clone(),
+        scalars: tel.scalars.clone(),
+        selects: tel.selects.clone(),
     };
     bintel::value_hash(&layer_doc, &synth_schema)
 }
@@ -433,7 +435,7 @@ mod tests {
     #[test]
     fn resolver_library_lookup_after_add_to_library() {
         // Schema with no layers: signature is exactly the base hash (32 bytes).
-        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x string\n";
+        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x String\n";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(src).expect("add_to_library should succeed");
         assert_eq!(sig.len(), 32, "no-layer signature is 32 bytes");
@@ -444,7 +446,7 @@ mod tests {
 
     #[test]
     fn resolver_returns_builtin_for_tel_schema_hash() {
-        let pinned_hex = "df50abce267dc79106d4320f0879fb054236e8dce9efa04872fb5e2a6560fc52";
+        let pinned_hex = "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd";
         let sig = hex_decode_const(pinned_hex);
         let id = SchemaIdentifier { url: None, signature: Some(sig) };
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
@@ -454,7 +456,7 @@ mod tests {
 
     #[test]
     fn resolver_fetches_url_when_signature_absent() {
-        let body = "name greeting\n\ndocument\n  field x string\n";
+        let body = "name greeting\n\ndocument\n  field x String\n";
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/x", body);
         let mut r = Resolver::with_fetcher(fetcher);
@@ -480,7 +482,7 @@ mod tests {
 
     #[test]
     fn resolver_signature_mismatch_is_reported() {
-        let body = "name greeting\n\ndocument\n  field x string\n";
+        let body = "name greeting\n\ndocument\n  field x String\n";
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/x", body);
         let mut r = Resolver::with_fetcher(fetcher);
@@ -503,12 +505,12 @@ tel 1.0
 name layered-demo
 
 document
-  field x string
+  field x String
 
 layer
   name extra
   overlay
-    field y string
+    field y String
 ";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(layered_src).expect("add_to_library succeeds");
@@ -537,12 +539,12 @@ tel 1.0
 name url-layered
 
 document
-  field x string
+  field x String
 
 layer
   name extra
   overlay
-    field y optional string
+    field y String optional
 ";
         // First compute the expected signature using add_to_library; this
         // doesn't add the schema to the library — we discard the resolver
@@ -574,12 +576,12 @@ tel 1.0
 name with-layer
 
 document
-  field x string
+  field x String
 
 layer
   name extra
   overlay
-    field y string
+    field y String
 ";
         let sig = r.add_to_library(src).unwrap();
         // Now drop the layer from the library and re-attempt resolution.

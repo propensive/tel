@@ -75,7 +75,7 @@ fn emit_struct_body(
     // Group children by member index in member order.
     let children: Vec<&Compound> = blocks.iter()
         .flat_map(|b| b.compounds.iter()).collect();
-    let by_member = group_by_member(&children, members);
+    let by_member = group_by_member(&children, members, schema);
 
     for (i, m) in members.iter().enumerate() {
         for c in &by_member[i] {
@@ -91,15 +91,19 @@ fn emit_member_child(
     indent: usize,
     out: &mut String,
 ) {
-    let t = match member {
-        Member::Field(f) => &f.r#type,
-        Member::Select(s) => s.variants.iter()
-            .find(|v| v.keyword == c.keyword)
-            .map(|v| &v.r#type)
-            .expect("variant must match compound keyword (schema validity guarantees this)"),
+    let t: Type = match member {
+        Member::Field(f) => f.r#type.clone(),
+        Member::SelectRef(s) => {
+            match crate::resolve_select_ref(&s.reference, schema)
+                .and_then(|vs| vs.iter().find(|v| v.keyword == c.keyword))
+            {
+                Some(v) => v.r#type.clone(),
+                None => return,
+            }
+        }
         Member::Exclude(_) => return,
     };
-    emit_compound_line(c, t, schema, indent, out);
+    emit_compound_line(c, &t, schema, indent, out);
 }
 
 fn emit_compound_line(
@@ -129,7 +133,7 @@ fn emit_compound_line(
             out.push('\n');
             emit_struct_body(&[], &c.children, child_members, schema, indent + 2, out);
         }
-        ResolvedType::Unresolved => {
+        ResolvedType::Unresolved | ResolvedType::KindMismatch => {
             // Schema invalid; emit just the keyword line.
             out.push('\n');
         }
@@ -211,21 +215,27 @@ fn choose_literal_delim(payload: &str) -> String {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn group_by_member<'a>(children: &[&'a Compound], members: &[Member]) -> Vec<Vec<&'a Compound>> {
+fn group_by_member<'a>(children: &[&'a Compound], members: &[Member], schema: &Schema) -> Vec<Vec<&'a Compound>> {
     let mut buckets: Vec<Vec<&Compound>> = vec![Vec::new(); members.len()];
     for c in children {
-        if let Some(i) = member_index_for_keyword(members, &c.keyword) {
+        if let Some(i) = member_index_for_keyword(members, &c.keyword, schema) {
             buckets[i].push(c);
         }
     }
     buckets
 }
 
-fn member_index_for_keyword(members: &[Member], keyword: &str) -> Option<usize> {
+fn member_index_for_keyword(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
     for (i, m) in members.iter().enumerate() {
         match m {
             Member::Field(f) if f.keyword == keyword => return Some(i),
-            Member::Select(s) if s.variants.iter().any(|v| v.keyword == keyword) => return Some(i),
+            Member::SelectRef(s) => {
+                if let Some(variants) = crate::resolve_select_ref(&s.reference, schema) {
+                    if variants.iter().any(|v| v.keyword == keyword) {
+                        return Some(i);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -239,21 +249,22 @@ fn push_indent(out: &mut String, n: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse, type_assign, Field, Member, Scalar, Struct, Type};
+    use crate::{parse, type_assign, Field, Member, Polarity, Scalar, Struct, Type};
 
     fn schema_string_field(keyword: &str, required: bool) -> Schema {
         Schema {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![Member::Field(Field {
-                    required, repeatable: false,
+                    required: if required { Polarity::Default } else { Polarity::Loose },
+                    repeatable: Polarity::Default,
                     keyword: keyword.to_string(),
                     r#type: Type::Scalar(Scalar {
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         }
     }
 
@@ -327,13 +338,13 @@ mod tests {
             document: Struct {
                 members: vec![
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "a".to_string(),
                         r#type: Type::Scalar(Scalar {
                             validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field {
-                        required: true, repeatable: false,
+                        required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
                         r#type: Type::Scalar(Scalar {
                             validators: vec!["string".to_string()]}), default: None,
@@ -341,7 +352,7 @@ mod tests {
                 ],
                 validators: vec![],
             },
-            layers: vec![], sigil: None, types: vec![], scalars: Vec::new(),
+            layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         // Two source orderings.
         let d1 = parse("tel 1.0\n\na 1\nb 2\n").document;

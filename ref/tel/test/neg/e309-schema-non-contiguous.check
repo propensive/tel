@@ -153,4 +153,9 @@ Document {
     ],
 }
 errors:
+  E310 [0,10): Scalar value failed validation: `name` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
   E309 [0,0): Compound children of the same member are not contiguous: children for member `record` are not contiguous
+  E310 [0,11): Scalar value failed validation: `name` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

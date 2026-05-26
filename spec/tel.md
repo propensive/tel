@@ -105,7 +105,9 @@ each delimiting `LF` is part of the line terminator and is not part of the line'
 
 A **soft space** is exactly one `U+0020` SPACE character.
 
-A **hard space** is two or more consecutive `U+0020` SPACE characters.
+A **hard space** is two or more consecutive `U+0020` SPACE characters. A **hard-space run** is a
+maximal such contiguous sequence; the **position** of a hard-space run is the column of its
+first character.
 
 A **blank line** is a line containing only `U+0020` SPACE characters, or no characters at all.
 
@@ -270,7 +272,7 @@ the producer intended (§20.3 of this specification).
 A schema may be supplied in two independent ways when parsing a TEL document:
 
 - an **invocation schema**, supplied directly to the parser by the calling application
-- a **document schema**, identified by the schema parameter in the pragma
+- a **document schema**, identified by the schema identifier in the pragma
 
 The following table defines the outcome for each combination:
 
@@ -406,10 +408,14 @@ A TEL document MAY begin with zero or more blank lines.
 A document containing no non-blank lines (other than an interpreter directive or pragma) is valid
 and has an empty `children` list.
 
-If the document begins with an interpreter directive, the **margin** is zero. Otherwise, if the
-document contains at least one non-blank content line, the **margin** is the sequence of leading
-spaces on the first such line. If the document contains no non-blank content lines, the margin is
-zero.
+The **margin** is determined as follows:
+
+- If the document begins with an interpreter directive, the margin is zero.
+- Otherwise the margin is the sequence of leading spaces on the first non-blank line of the
+  document. The pragma line, if present, is the first non-blank line and therefore sets the
+  margin. (As an ordinary line per §8, the pragma is subject to all line-level rules of this
+  section, including margin determination.)
+- If the document contains no non-blank lines, the margin is zero.
 
 Every non-blank line in the document MUST begin with the margin, optionally followed by additional
 spaces. A non-blank line which does not begin with the margin is invalid (**E106**).
@@ -453,19 +459,21 @@ After the keyword, the line is parsed left-to-right.
 
 Initially, a single space is sufficient to terminate a phrase and begin the next phrase.
 
-If a hard space is encountered anywhere on the same line after the keyword, then from that point
-onward only hard spaces terminate phrases. Soft spaces after that point become part of the current
-phrase.
+If a hard-space run occurs anywhere on the same line after the keyword, then from the **start**
+of that run onward, only hard-space runs terminate phrases. Soft spaces after that point become
+part of the current phrase.
 
 Accordingly:
 
-- before the first hard space on a line, either a soft space or a hard space terminates a phrase
-- after the first hard space on a line, only a hard space terminates a phrase
-- after the first hard space on a line, a soft space becomes content within the current phrase
+- before the start of the first hard-space run on a line, either a soft space or a hard-space
+  run terminates a phrase
+- from the start of the first hard-space run onward, only a hard-space run terminates a phrase
+- from the start of the first hard-space run onward, a soft space becomes content within the
+  current phrase
 - each new line resets this rule
 
-Consequently, after the first hard space on a line, a phrase may contain soft spaces but may not
-contain hard spaces.
+Consequently, from the start of the first hard-space run onward, a phrase may contain soft
+spaces but may not contain hard-space runs.
 
 ## 11. Comments and Remarks
 
@@ -502,17 +510,25 @@ The payload of a comment is not further parsed. Spaces inside the payload are pr
 Comments participate in indentation and structural ordering as line-level nodes. Comments cannot
 have children.
 
-A comment line MUST be immediately preceded by one of the following: a blank line, another comment
-line, the start of the document (i.e., a comment may be the very first non-blank line), or a line at
-a lesser indent (i.e., a comment may appear after a compound if it is indented one level deeper than
-that compound) (**E109**). Because a blank line terminates any active tabulated block, this rule
-ensures that comments cannot appear inside tabulated blocks.
+A comment line MUST be immediately preceded by one of the following: a blank line, another
+comment line, the start of the document (i.e., a comment may be the very first non-blank line),
+or a non-blank line at a **strictly lesser indent** than the comment itself — that is, the
+comment opens a new (deeper) child block of that preceding compound (**E109**). Because a blank
+line terminates any active tabulated block, this rule ensures that comments cannot appear inside
+tabulated blocks. Example:
 
-A comment is **attached** to the immediately following node if there is no blank line between the
-comment and that node. The following node may be a compound node, or a tabulation line (in which
-case the comment is attached to the tabulated block that the tabulation line introduces). The
-attached node MUST be at the same indentation level as the comment. A comment that is followed by a
-blank line, by end of input, or by a line at a shallower indentation level is **free-standing**.
+```text
+parent              # indent 0
+  # comment         # indent 1 — preceded by a non-blank line at lesser indent (0); valid
+  child             # indent 1
+```
+
+A comment is **attached** to the immediately following node if there is no blank line between
+the comment and that node *and* the following node is at the same indentation level as the
+comment. The following node may be a compound node, or a tabulation line (in which case the
+comment is attached to the tabulated block that the tabulation line introduces). A comment that
+is followed by a blank line, by end of input, by a line at a shallower indentation level, or by
+a line at a deeper indentation level is **free-standing**.
 
 Comment attachment is a semantic property recorded in the presentation model. It is significant
 during programmatic editing: when a node is moved or deleted, its attached comments travel with it
@@ -649,18 +665,31 @@ the delimiter.
 The delimiter MUST consist only of ASCII characters other than whitespace (spaces, linefeeds,
 carriage returns, tabs, and other ASCII control characters).
 
-If the delimiter is empty, the line does not begin a literal atom.
+If the delimiter is empty (the candidate opening line contains only its leading indentation and
+no further content), the line does not begin a literal atom; it is then a blank line per §5 and
+contributes no structural effect. Indentation on a blank line is not significant.
 
 The literal payload begins immediately after the `LF` that terminates the delimiter line.
 
 The closing delimiter is identified by scanning for a `LF` immediately followed by the exact
-delimiter characters and then immediately followed by another `LF`. This scan uses bare `LF`
-characters regardless of the document's line-ending mode; the `LF` characters that structurally
-delimit the literal atom (the opening `LF`, the `LF` before the closing delimiter, and the `LF`
-after the closing delimiter) are exempt from the CRLF mode requirement. The closing delimiter match
-is performed against the raw byte stream, without any margin stripping or indentation processing.
-The payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
+delimiter characters and then immediately followed by another `LF`. The match is performed
+against the **raw byte stream of the document**, without any margin stripping or indentation
+processing: the closing delimiter line therefore begins at column zero of the document, *not* at
+the opening indent. The scan uses bare `LF` regardless of the document's line-ending mode. The
+payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
 delimiter (exclusive). The `LF` after the closing delimiter terminates the literal atom.
+
+For example, a literal atom nested two indent levels deep with delimiter `END` looks like this
+(note that the closing `END` is flush left, not indented):
+
+```text
+outer
+  inner
+      END
+        leading-space-preserved-content
+END
+  sibling-of-inner
+```
 
 Accordingly, an empty literal payload (a `LF` immediately followed by the delimiter and a `LF`) is
 permitted.
@@ -673,11 +702,12 @@ If the end of file is reached before a closing delimiter is encountered, the doc
 
 The sigil has no special meaning inside a literal atom.
 
-The line-ending mode rules of §4 do not apply inside a literal atom payload or to the structural
-`LF` characters that bound it. `CR` characters within the payload are preserved exactly as-is and
-carry no special meaning; only bare `LF` is recognised as a line separator for the purpose of
-identifying the closing delimiter. In particular, a `CR` immediately before a `LF` inside the
-payload is payload content, not a line terminator.
+The line-ending mode rules of §4 do not apply anywhere inside a literal atom payload, nor to the
+three structural `LF` characters that bound it (the opening `LF`, the `LF` before the closing
+delimiter, and the `LF` after the closing delimiter). Every byte between the opening `LF` and
+the closing-delimiter `LF` — including any `CR`, bare `LF`, or `CR LF` sequence — is payload
+content. Only the bare `LF` characters that frame a closing-delimiter match are structurally
+significant, and only for the purpose of identifying that match.
 
 Literal atom payload content is raw: it is not subject to any TEL parsing rules. Indentation,
 trailing spaces, and all other content are preserved exactly. The only termination condition is a
@@ -762,13 +792,18 @@ line) terminates the current `Block` and begins a new `Block` with the new tabul
 block's `trailingBlankLines` on the preceding block is zero, indicating that no blank lines separate
 the two tabulated sub-blocks.
 
-Every non-blank, non-comment row MUST be an ordinary compound line. Every row MUST have the same
-indent as the tabulation line (**E116**). Rows MUST NOT have child line-nodes (**E112**).
+Every non-blank row MUST be an ordinary compound line (comments cannot appear inside a tabulated
+block, since the blank line that would have to precede a comment per §11.1 would itself
+terminate the block). Every row MUST have the same indent as the tabulation line (**E116**).
+Rows MUST NOT have child line-nodes (**E112**).
 
-**Row structure.** Each row consists of a keyword and zero or more **pre-column atoms**, followed by
-zero or more **column values**. The keyword and pre-column atoms are parsed using the same
-phrase-separation rules as ordinary lines (§10.3). Column values are introduced by the column
-positions defined by the tabulation line.
+**Row structure.** Each row consists of a keyword and zero or more **pre-column atoms**, followed
+by zero or more **column values**. The keyword and pre-column atoms — that is, the portion of
+the row before the first hard-space run — are parsed using the same phrase-separation rules as
+ordinary lines (§10.3). From the first hard-space run onward, the column-based grammar below
+**replaces** §10.3: column boundaries are derived from the marker offsets `M_i` declared on the
+tabulation line, not from phrase mode, and the rules below override the §10.3 phrase
+classification for that portion of the row.
 
 **Spacing constraints.** The following two rules govern the spacing on every row:
 
@@ -1075,7 +1110,7 @@ specified in the tables below.
 | E107 | §9       | Relative indentation after the margin is odd                                                           | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see Indentation Recovery below) |
 | E108 | §9, §16  | Trailing spaces on a non-blank ordinary line or tabulated row                                          | The trailing space characters                                                                                                    |
 | E109 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                                                 |
-| E110 | §13      | Line indent does not match any open compound's indent (not reachable by the recursive parser given herein; raised by implementations that track an explicit ancestor stack)                       | The leading spaces of the line                                                                                                   |
+| E110 | §13      | Line indent does not match any open compound's indent. Reserved: not reachable by the recursive parser of this specification (see §19.5); raised only by implementations that track an explicit ancestor stack. | The leading spaces of the line |
 | E111 | §13      | Line indent exceeds the preceding non-blank line's indent by more than one                             | The leading spaces of the line                                                                                                   |
 | E112 | §13, §16 | Line would become a child of a comment, tabulation, or tabulated row                                   | Zero-width span at the start of the line                                                                                         |
 | E113 | §14      | Source atom introduced when the preceding compound already has a source or literal atom                | The first line of the duplicate source atom                                                                                      |
@@ -1180,11 +1215,15 @@ compound line, the over-indented line is recorded as an **E111** error and omitt
 presentation model. Parsing continues with the next line at the originally expected indent. This
 keeps the parser deterministic without requiring schema-aware indent inference.
 
-**E110.** §13 also defines **E110** for the case of a dedent that cannot find a matching ancestor
-indent. The recursive parsing algorithm used here cannot produce that case (every dedent
-encountered during the recursive descent terminates a `parse_blocks` invocation at the matching
-ancestor level). E110 is therefore retained in the error catalogue as a reserved code for future
-implementations that track an explicit ancestor stack.
+**E110.** §13 also defines **E110** for the case of a dedent that cannot find a matching
+ancestor indent. The recursive parsing algorithm used here cannot produce that case (every
+dedent encountered during the recursive descent terminates a `parse_blocks` invocation at the
+matching ancestor level). E110 is therefore retained in the error catalogue as a reserved code
+for non-recursive implementations — for example, ones that track an explicit ancestor stack and
+match dedents against it. Such an implementation surfaces E110 in place of the recursive
+parser's silent terminations; the recovery is then the same as E107 (treat the line at the
+shallower of the two candidate indent levels). Under the canonical recursive parser of this
+specification, E110 never fires.
 
 ## 20. Schema Language
 
@@ -1196,27 +1235,38 @@ interface Schema {
   document: Struct;
   layers: Layer[];
   sigil: Sigil | null;
-  types: RecordDefinition[];
+  records: RecordDefinition[];
   scalars: ScalarDefinition[];
+  selects: SelectDefinition[];
 }
 
 interface Layer {
   name: string;
   overlay: Struct;
-  types: RecordDefinition[];
+  records: RecordDefinition[];
   scalars: ScalarDefinition[];
+  selects: SelectDefinition[];
 }
 
-type Definition = RecordDefinition | ScalarDefinition;
+type Definition =
+  | RecordDefinition
+  | ScalarDefinition
+  | SelectDefinition;
 
 interface RecordDefinition {
-  name: string;
+  name: TypeName;
   members: Member[];
   validators: string[];
 }
 
 interface ScalarDefinition {
-  name: string;
+  name: TypeName;
+  validators: string[];
+}
+
+interface SelectDefinition {
+  name: TypeName;
+  variants: Variant[];
   validators: string[];
 }
 
@@ -1234,23 +1284,43 @@ interface Scalar {
 interface Flag {}
 
 interface Reference {
-  name: string;
+  name: TypeName;
 }
 
-type Member = Field | Select | Exclude;
+type Member = Field | SelectRef | Exclude;
+
+// Per-axis declaration state. "default" means no flag was declared on this
+// axis (its effective value is the schema-language default — required=true,
+// repeatable=false). "loose" means the loosening flag was declared on the
+// base side (`optional` or `repeatable`). "tight" means the tightening flag
+// was declared on the layer side (`required` or `irrepeatable`).
+//
+// Effective booleans are derived from polarity:
+//   required   = (member.required   != "loose")
+//   repeatable = (member.repeatable == "loose")
+//
+// The tristate is retained (rather than collapsing to booleans during schema
+// construction) so that the layer-merge of §20.3 can detect loosening of an
+// already-tight axis (E215, E216) regardless of whether the layer's declared
+// flag agrees with or contradicts the base's effective value.
+type Polarity = "default" | "loose" | "tight";
 
 interface Field {
-  required: boolean;
-  repeatable: boolean;
+  required: Polarity;
+  repeatable: Polarity;
   keyword: string;
   type: Type;
   default: string | null;
 }
 
-interface Select {
-  required: boolean;
-  repeatable: boolean;
-  variants: Variant[];
+// References a SelectDefinition at a member position. The named Select's
+// variants become the keywords admissible at this position; the SelectRef
+// itself has no own keyword. Polarity lives on the use site (here), not
+// on the SelectDefinition.
+interface SelectRef {
+  required: Polarity;
+  repeatable: Polarity;
+  reference: TypeName;
 }
 
 interface Variant {
@@ -1258,12 +1328,23 @@ interface Variant {
   type: Type;
 }
 
-// Layer-only: removes a variant from whichever Select in the merged Struct
-// declares the keyword. Consumed during layer composition (§20.3); never
-// appears in a composed Schema.
+// Layer-only operation. At the position of a Struct, `Exclude(K)` would
+// have applied at a use-site; in this revision exclusion is performed only
+// at the SelectDefinition level, where K names a variant of the
+// SelectDefinition being merged. The Member-kind form is retained for
+// symmetry with §20.3 merge tables and is permitted only inside a layer's
+// SelectDefinition body (not in a Struct), where it removes a variant from
+// the merged SelectDefinition. Use outside that position is **E217**.
 interface Exclude {
   keyword: string;
 }
+
+// A TypeName is a PascalCase identifier (§20.7) naming a RecordDefinition,
+// ScalarDefinition, SelectDefinition, or a built-in type. Distinct from a
+// kebab-case `identifier` (§20.7), which is used for non-type names
+// (schema name, layer name, field keywords, variant keywords, validator
+// names).
+type TypeName = string;
 ```
 
 `Schema.name` is a kebab-case identifier (§20.7) for the schema. It is a human-readable label used
@@ -1284,35 +1365,71 @@ parenthetical symbol (§5) (**E208**). When a document's pragma omits a sigil bu
 identifier that resolves to a schema with a non-null `sigil`, the schema's sigil is used as if it
 had been specified in the pragma (§8.3).
 
-`Schema.types` is an ordered list of `Definition` declarations. Each `Definition` binds a kebab-case
-identifier to a `Struct`, allowing that struct to be referenced by name from elsewhere in the
-schema via a `Reference`. This mechanism is what makes recursive schemas finitely expressible: the
-schema-of-schemas itself (see the tel-schema subsection below) is necessarily recursive, and so is
-any schema whose data has cyclical structure. The empty list is the normal case for non-recursive
-schemas.
+`Schema.records`, `Schema.scalars`, and `Schema.selects` are ordered lists of `RecordDefinition`,
+`ScalarDefinition`, and `SelectDefinition` declarations respectively. Each binds a PascalCase
+`TypeName` (§20.7) to a Struct, Scalar, or Sum (union of variants). Together the three lists
+populate the schema's **Definition namespace** — the union of `TypeName`s addressable by a
+`Reference` or by a `SelectRef`. A `Reference` resolves to whichever Definition carries the
+matching name; structurally, records produce `Struct`s with members, scalars produce `Scalar`s
+with validators, and selects produce sums with variants. The three lists are kept distinct in
+the data model because their bodies differ, but they share a **single namespace**: no two
+Definitions across the three lists may share a name within the composed schema (**E211**).
+
+The Definition mechanism is what makes recursive schemas finitely expressible: the
+schema-of-schemas itself (see the tel-schema subsection below) is necessarily recursive, and so
+is any schema whose data has cyclical structure. The empty list is the normal case for
+non-recursive schemas.
 
 A `Layer`'s `name` is a kebab-case identifier (§20.7) labelling the layer. It MUST be unique
-across all layers of a schema (**E205**). `Layer.overlay` is a `Struct` whose members are merged into
-the composed schema's root struct by the algorithm in §20.3. `Layer.types` is an ordered list of
-`Definition`s introduced by the layer; these merge with the base schema's `Schema.types` and any
-preceding layers' `types` to form a single namespace of definitions visible to all references in
-the composed schema. The empty list is the normal case for layers that only extend the root struct.
+across all layers of a schema (**E205**). `Layer.overlay` is a `Struct` whose members are merged
+into the composed schema's root struct by the algorithm in §20.3. `Layer.records`,
+`Layer.scalars`, and `Layer.selects` are ordered lists of Definitions introduced by the layer;
+together they merge with the base schema's `Schema.records ∪ Schema.scalars ∪ Schema.selects`
+and any preceding layers' Definitions to form a single namespace visible to all references in
+the composed schema. The empty lists are the normal case for layers that only extend the root
+struct.
 
-A `Definition` has a `name`, a list of `members`, and an optional list of struct-level
-`validators`. The `name` MUST be a kebab-case identifier (§20.7), unique across all `Definition`s
-in the composed schema — that is, the concatenation of `Schema.types` with each `Layer.types` in
-layer order (duplicates anywhere in this concatenation are **E211**). The `members` field is a list
-of `Member`s, structurally identical to those of a `Struct`: a `Definition` is, in effect, a named
-`Struct` — it exists solely to give a reusable name to a struct definition so that recursive
-schemas may be expressed in finite form. `Definition.validators` mirrors `Struct.validators`
-(§21.6) and applies to every instance of the Definition. Non-`Struct` types (`Scalar`, `Flag`)
-cannot be aliased through `Definition`; they should be inlined at their use site.
+A `RecordDefinition` has a `name`, a list of `members`, and a list of struct-level
+`validators`. The `name` MUST be a `TypeName` (§20.7), unique across the composed namespace
+`Schema.records ∪ Schema.scalars ∪ Schema.selects ∪ ⋃ Layer.{records,scalars,selects}`
+(**E211**, with same-name records, scalars, or selects in *layers* triggering Definition merge
+per §20.3 rather than E211). The `members` field is a list of `Member`s, structurally identical
+to those of a `Struct`: a `RecordDefinition` is, in effect, a named `Struct`.
+`RecordDefinition.validators` mirrors `Struct.validators` (§21.6) and applies to every instance
+of the Definition.
 
-A `Reference` is a `Type` whose semantic content is delegated to the `Definition` it points at by
+A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) and a list of
+`validators`; it is a named `Scalar`. Layer-merge of same-name `ScalarDefinition`s concatenates
+the `validators` lists in declaration order, deduplicated.
+
+A `SelectDefinition` has a `name` (subject to the same uniqueness rule), a non-empty list of
+`variants`, and a list of `validators`. It is a named sum type. Each variant has a kebab-case
+`keyword` (the source-level keyword by which an instance is written) and a `type`; the type may
+be any `Type` (Struct, Scalar, Flag, or Reference). A `SelectDefinition`'s `validators` list
+mirrors `Struct.validators` for symmetry: each named validator inspects the chosen variant of an
+instance and may reject it under cross-cutting rules. Layer-merge of same-name
+`SelectDefinition`s removes variants (via `Exclude` members declared in the layer's
+SelectDefinition body) and appends validators; a layer MUST NOT introduce a variant with a
+keyword absent from the base SelectDefinition (**E214**).
+
+`Flag` types cannot be aliased through `Definition`; they are referenced by the built-in name
+`Flag` instead (§20.5).
+
+A `Reference` is a `Type` whose semantic content is delegated to the Definition it points at by
 name. During type assignment (§20.2) a value position whose schema type is `Reference(N)` is
-treated as if its type were the `Struct` formed from the `members` of the `Definition` in
-`Schema.types` whose `name` equals `N`. A `Reference` whose name does not match any
-`Definition.name` in the schema (after layer composition) is invalid (**E210**).
+treated as if its type were the resolved Definition: a `RecordDefinition` resolves to the
+`Struct` formed from its `members` and `validators`; a `ScalarDefinition` resolves to the
+`Scalar` formed from its `validators`. A `SelectDefinition` is never the resolved type of a
+plain `Reference`: a sum at a member position is always introduced via `SelectRef` rather than
+`Field.type`, because a `Field` has a single keyword whereas a sum has none. A `Reference` whose
+`name` resolves to a `SelectDefinition` is invalid (**E218**); a `Reference` whose `name` does
+not match any Definition in the composed schema is also invalid (**E210**).
+
+A `SelectRef` is a `Member` kind that places a sum at a member position. Its `reference` is the
+`TypeName` of a `SelectDefinition`; the SelectRef's polarity (`required`, `repeatable`) lives at
+the use site. A `SelectRef` whose `reference` does not match any `SelectDefinition.name` in the
+composed schema is invalid (**E210**); one that resolves to a non-`SelectDefinition` (a record
+or scalar) is also invalid (**E218**).
 
 TEL schemas are themselves representable as TEL documents. The TEL schema that describes the TEL
 schema language is therefore self-describing; the schema for schemas has `Schema.name = tel-schema`. The serialization of a schema as a TEL document is governed by that schema. Because
@@ -1323,46 +1440,67 @@ ordering, and validators used to write a schema as a TEL document — is given i
 in the file [`tel-schema.tel`](tel-schema.tel).
 
 A `Struct` has an ordered list of `Member`s. Each member describes one logical child slot of the
-struct and is either a `Field` or a `Select`. Both carry the common properties `required` and
-`repeatable`:
+struct and is either a `Field` or a `SelectRef`. Both carry the per-axis polarities
+`required: Polarity` and `repeatable: Polarity`. Their effective boolean values are derived:
 
-- `required`: if `true`, the slot MUST be present at least once in a conforming document
-- `repeatable`: if `true`, the slot MAY appear more than once; if `false`, it MUST appear at most
-  once
+- effective `required` = `(member.required != "loose")` — the slot MUST appear at least once
+  unless `optional` was declared
+- effective `repeatable` = `(member.repeatable == "loose")` — the slot MAY appear more than once
+  only when `repeatable` was declared
 
-**Surface syntax for `required` and `repeatable`.** A schema document expresses these two booleans
-via four Flag fields in `field-body` / `select-body` (§20.5). The default for any Field or Select
-is `required: true, repeatable: false` — that is, the **tight** cardinality `(exactly one)`. To
-loosen, a base schema declares one of:
+**Surface syntax.** A schema document expresses these two polarities via four Flag fields in
+the `Field` and `Select` records (§20.5). The default for any Field or SelectRef — neither flag
+declared — is `required: "default", repeatable: "default"`, i.e. the **tight** cardinality
+`(exactly one)`. To loosen, a base schema declares one of:
 
-- `optional` — sets `required: false`
-- `repeatable` — sets `repeatable: true`
+- `optional` — sets `required: "loose"` (effective `required` becomes `false`)
+- `repeatable` — sets `repeatable: "loose"` (effective `repeatable` becomes `true`)
 
 To re-tighten a member that an earlier layer declared loose, a later layer declares one of:
 
-- `required` — sets `required: true` (overrides a previous `optional`)
-- `irrepeatable` — sets `repeatable: false` (overrides a previous `repeatable`)
+- `required` — sets `required: "tight"` (overrides a previous `optional`)
+- `irrepeatable` — sets `repeatable: "tight"` (overrides a previous `repeatable`)
 
-A layer that tries to LOOSEN a member previously tightened (declaring `optional` against a
-required base, or `repeatable` against an irrepeatable base) is invalid (**E215**, **E216**).
-Tightening is subtype-producing (§24); loosening is not. The two flags `required`/`irrepeatable`
-are layer-tightening overrides; the two flags `optional`/`repeatable` are base-side loosening
-declarations.
+`required` and `irrepeatable` may also appear in a base schema; there they are redundant
+no-ops that re-state the default, since the default is already tight on both axes. They are not
+errors.
+
+The §20.3 merge rule for each axis is: a layer declaration of `"loose"` (i.e. `optional` or
+`repeatable`) against a merged base whose polarity is `"default"` or `"tight"` is **E215** /
+**E216** respectively. A layer declaration of `"tight"` against a base of any polarity is
+permitted (override). When neither flag is declared on the layer for an axis (`layer.required =
+"default"`), the base's polarity carries through unchanged. The retention of the tristate, in
+preference to a simple boolean, is what lets the merge distinguish a layer redundantly restating
+the existing state from a layer attempting to flip it.
+
+Tightening is subtype-producing (§24); loosening is not.
 
 A `Field` member has a single `keyword` and a single `type`. It represents a child whose keyword
 and type are fixed.
 
-A `Select` member has a non-empty list of `Variant`s. Any variant's keyword may be used to fill that
-slot; the chosen keyword determines the type of the child node placed in that slot.
+A `SelectRef` member references a named `SelectDefinition`. After Reference resolution, the
+referenced SelectDefinition's `variants` become the keywords admissible at this position; the
+SelectRef itself has no own keyword. A `SelectRef` value at a member position looks and behaves
+exactly like one of the referenced sum's variants: if the chosen variant has `Struct` type, the
+compound child has that struct's members as children; if the variant has `Scalar` type, the
+compound child carries a value; if the variant has `Flag` type, the compound child is a bare
+keyword with no content.
 
-`Variant.keyword` is the keyword by which a child compound of that variant is written in TEL when
-explicit. `Variant.type` may be any `Type`. A `Select` value looks and behaves exactly like one of its
-variants: if the chosen variant has `Struct` type, the compound child has that struct's members as
-children; if the variant has `Scalar` type, the compound child carries a value; if the variant
-has `Flag` type, the compound child is a bare keyword with no content.
+`Variant.keyword` is the kebab-case keyword by which a child compound of that variant is written
+in TEL when explicit. `Variant.type` may be any `Type`.
 
-A `Select` member is **atom-assignable** if and only if all of its variants have `Flag` type. A `Select`
-with any non-`Flag` variant may only be filled by compound children with explicit keywords.
+A member is **atom-assignable** when it can be satisfied by an inline atom rather than only by a
+compound child:
+
+- A `Field` is atom-assignable iff its type, after `Reference` resolution (§20.2), is `Scalar` or
+  `Flag`.
+- A `SelectRef` is atom-assignable iff every variant of the referenced `SelectDefinition`, after
+  `Reference` resolution, has `Flag` type.
+
+A member with at least one non-atom-assignable position — a `Field` of `Struct` type, or a
+`SelectRef` whose referenced sum has any non-`Flag` variant — can only be filled by a compound
+child with an explicit keyword. This definition is used by the type-assignment algorithm
+(§20.2) and by the construct operation (§22.2); both refer to it rather than restating it.
 
 A `Scalar` type represents a leaf value constrained by zero or more validators.
 `Scalar.validators` is an ordered list of helper-method names; each is invoked on the value text
@@ -1386,13 +1524,13 @@ Validator semantics are defined in §21.
 Validators on scalars and validators on structs share a single namespace (§21.1): a validator
 name resolves to one helper method, which dispatches on the request kind at invocation time.
 
-**Serialising `Scalar.default`.** When a schema is written as a TEL document, the `default` field
-of a `Scalar` carries an arbitrary string and is serialised using the atom-form escalation rules
-of §22.2: an inline atom is used when the value contains no `LF` and no hard spaces in soft-space
-mode; a source atom is used for multi-line values that have no trailing spaces and require no
-byte-exact preservation; and a literal atom is used otherwise. This mirrors how any `Scalar` value
-is serialised at a use site, so a schema author writes a default exactly as they would write any
-other scalar value.
+**Serialising `Scalar.default`.** When a schema is written as a TEL document, the `default`
+field of a `Scalar` carries an arbitrary string and is serialised using the atom-form escalation
+algorithm of §22.3: an inline atom is used when the value contains no `LF` and no hard spaces
+in soft-space mode; a source atom is used for multi-line values that have no trailing spaces
+and require no byte-exact preservation; and a literal atom is used otherwise. This mirrors how
+any `Scalar` value is serialised at a use site, so a schema author writes a default exactly as
+they would write any other scalar value.
 
 A `Flag` type carries no value of its own. Its identity is entirely determined by its keyword
 (`Field.keyword` or `Variant.keyword`): in compound position, a `Flag`-typed node is written as
@@ -1426,9 +1564,10 @@ order", it means iterating `members[0]`, `members[1]`, …, `members[n−1]`.
 
 **Keyword order.** The **keyword order** of a `Struct` is a flat sequence of (keyword, type) pairs
 obtained by expanding each member in member order: a `Field` member contributes a single entry
-(its keyword and type); a `Select` member contributes one entry per variant, in the declaration order
-of `Select.variants`. Keywords are numbered from 0 in this sequence; the position of a keyword in
-keyword order is its **keyword index**.
+(its keyword and type); a `SelectRef` member contributes one entry per variant of its referenced
+`SelectDefinition`, in the declaration order of that SelectDefinition's `variants`. Keywords are
+numbered from 0 in this sequence; the position of a keyword in keyword order is its **keyword
+index**.
 
 **Identifier naming convention.** Programmatic identifiers defined by this specification — including
 helper method names in `Scalar.validators` and `Struct.validators` and the edit operation
@@ -1470,46 +1609,58 @@ TEL document:
 
 A schema is invalid if any of the following holds:
 
-- within a single `Struct`, the same keyword appears more than once across all members (considering
-  `Field.keyword` and every `Variant.keyword` within each `Select`) (**E201**)
-- a `Select` member has an empty `variants` list (**E202**)
-- a `Scalar` has a non-null `default` and appears in a `Member` with `required: false`
-  (**E204**). Absence of a non-required member always means the member is absent; defaults are only
-  meaningful for required members that may be elided in the source document.
+- within a single `Struct`, the same keyword appears more than once across all members
+  (considering `Field.keyword` and every `Variant.keyword` of the `SelectDefinition`s referenced
+  by `SelectRef`s) (**E201**)
+- a `SelectDefinition` has an empty `variants` list (**E202**)
+- a `Scalar` has a non-null `default` and appears in a `Member` whose effective `required` is
+  `false` (i.e. `Member.required == "loose"`) (**E204**). Absence of a non-required member
+  always means the member is absent; defaults are only meaningful for required members that may
+  be elided in the source document.
 - `Schema.sigil` is non-null and is a space, `LF`, `CR`, a letter, a control character, a digit, or
   a parenthetical symbol (§5) (**E208**)
-- the keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` (**E209**)
-- a `Reference` names an identifier that does not appear as a `Definition.name` in `Schema.types`
-  (after layer composition) (**E210**)
-- two or more `Definition`s in the *base* `Schema.types` share the same `name` (**E211**). In
-  layers, same-name `Definition`s merge per §20.3 rather than triggering E211.
-- an `exclude K` operation in a layer names a keyword that does not identify any `Select`
-  variant in the merged `Struct` (**E212**)
-- an `exclude K` operation would empty a `Select` declared with `required: true` (**E213**)
-- a layer adds a variant to an existing `Select` (rather than introducing a fresh Select with
-  fresh variant keywords) (**E214**)
+- the keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or
+  `SelectDefinition` (**E209**)
+- a `Reference` names a `TypeName` that does not appear among the Definitions of the composed
+  schema (**E210**); a `SelectRef.reference` not appearing as a `SelectDefinition.name` is also
+  E210
+- two or more Definitions in the *base*
+  `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name` (**E211**). Records,
+  scalars, and selects share a single namespace; cross-kind name collisions in the base are also
+  E211. Same-name Definitions across layers trigger Definition merge per §20.3 rather than
+  E211.
+- an `Exclude(K)` operation in a layer SelectDefinition body names a keyword K that does not
+  identify any variant of the base SelectDefinition (**E212**)
+- an `Exclude(K)` operation would empty a `SelectDefinition` referenced by any `SelectRef` whose
+  effective `required` is `true` (**E213**)
+- a layer's SelectDefinition contains a `variant` declaration whose keyword is absent from the
+  base SelectDefinition (variant addition is forbidden — would widen the sum) (**E214**)
+- a `Reference` resolves to a `SelectDefinition` (a sum at a position expecting a single typed
+  value), or a `SelectRef.reference` resolves to a `RecordDefinition` or `ScalarDefinition`
+  (a non-sum at a position expecting a sum) (**E218**)
 
 #### Schema Errors (E2xx)
 
 | Code | Description                                                                                                               | Span                                           |
 | ---- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| E201 | Duplicate keyword within a `Struct` (across `Field` keywords and `Select` variant keywords)                                | The second occurrence of the duplicate keyword |
-| E202 | `Select` member has an empty `variants` list                                                                                 | The `Select` member definition                    |
+| E201 | Duplicate keyword within a `Struct` (across `Field` keywords and the `Variant.keyword`s of `SelectRef`-referenced `SelectDefinition`s) | The second occurrence of the duplicate keyword |
+| E202 | `SelectDefinition` has an empty `variants` list                                                                            | The `SelectDefinition`'s name compound         |
 | E203 | Root struct has a `required` atom-assignable member (unreachable: the document root has no atoms)                         | The `required` member definition               |
-| E204 | `Scalar` has a non-null `default` but appears in a non-`required` member                                               | The `default` field of the `Scalar`         |
+| E204 | `Scalar` has a non-null `default` but appears in a non-`required` member                                                  | The `default` field of the `Scalar`            |
 | E205 | Two or more `Layer`s within a `Schema` share the same `name`                                                              | The second `Layer` with the duplicate `name`   |
-| E206 | A `Layer` `Select` member has a variant keyword that overlaps with an existing keyword in the base `Struct`                  | The overlapping variant keyword in the layer   |
-| E207 | A `Layer` `Field` member matches an existing keyword but the base or layer member is not a `Field` with `Struct` type | The layer member definition                    |
+| E206 | A `Layer`'s introduced `SelectDefinition` has a `name` colliding with an existing Definition in the composed namespace    | The overlapping `name` in the layer            |
+| E207 | A `Layer` `Field` member matches an existing keyword but the base or layer member is not a `Field` with `Struct` type     | The layer member definition                    |
 | E208 | `Schema.sigil` is non-null and is a space, `LF`, `CR`, a letter, a control character, a digit, or a parenthetical symbol  | The `sigil` field value                        |
-| E209 | The keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` (also §8)                           | The keyword definition containing `tel`        |
-| E210 | A `Reference` names an identifier that does not resolve to a `Definition` in the schema                                    | The `Reference.name` value                     |
-| E211 | Two or more `Definition`s in the *base* `Schema.types` share the same `name` (same-name Definitions across layers merge instead) | The second `Definition` with the duplicate name |
-| E212 | `exclude K` names a keyword K that does not identify any `Select` variant in the merged Struct                      | The `exclude` operation's variant keyword      |
-| E213 | `exclude K` would leave a `required` `Select` with no remaining variants                                             | The `exclude` operation's variant keyword      |
-| E214 | A layer attempts to add a variant to an existing `Select`, narrowing or widening the sum in a non-subtyping way              | The offending variant or member                |
-| E215 | A layer attempts to loosen `required: true` to `required: false` (declaring `optional` against a required base)                | The offending field/select declaration         |
-| E216 | A layer attempts to loosen `repeatable: false` to `repeatable: true` (declaring `repeatable` against an irrepeatable base)     | The offending field/select declaration         |
-| E217 | `exclude K` appears in `Schema.document` or in a `Schema.types` Definition (excluding is layer-only per §20.3)                  | The offending `exclude` compound               |
+| E209 | The keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or `SelectDefinition` (also §8)       | The keyword definition containing `tel`        |
+| E210 | A `Reference` or `SelectRef` names a `TypeName` that does not resolve to a Definition in the composed schema              | The `TypeName` atom                            |
+| E211 | Two or more Definitions in the *base* `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name` (any cross-kind name collision is also E211; same-name Definitions across layers merge instead) | The second Definition with the duplicate name |
+| E212 | `Exclude(K)` in a layer's SelectDefinition names a variant K not present in the base SelectDefinition                     | The `Exclude` operation's variant keyword      |
+| E213 | `Exclude(K)` would empty a `SelectDefinition` referenced by a `required` `SelectRef`                                      | The `Exclude` operation's variant keyword      |
+| E214 | A layer's SelectDefinition introduces a variant whose keyword is absent from the base SelectDefinition (variant addition widens the sum) | The offending variant declaration |
+| E215 | A layer declares `optional` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `required`) | The offending field/select declaration         |
+| E216 | A layer declares `repeatable` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `repeatable`) | The offending field/select declaration         |
+| E217 | `Exclude` appears outside a layer's `SelectDefinition` body — i.e. inside `Schema.document`, a `RecordDefinition`, or a base-side `SelectDefinition` | The offending `exclude` compound |
+| E218 | A `Reference` resolves to a `SelectDefinition`, or a `SelectRef.reference` resolves to a `RecordDefinition` / `ScalarDefinition` (kind mismatch between member shape and resolved Definition) | The offending `TypeName` atom |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -1518,15 +1669,23 @@ every atom and compound node in the tree. It proceeds as a recursive descent ove
 by the schema.
 
 **Reference resolution.** Wherever this algorithm asks "is T a Struct?", "is T a Scalar?", etc.,
-the question is asked of the type T after **reference resolution**: if T is a `Reference(N)`, T is
-replaced by the `Struct` formed from the `members` of the `Definition` in `Schema.types` whose
-`name` is `N`. Because `Definition.members` is always a list of `Member`s (never another
-`Reference`), resolution is a single step; no chasing of reference chains is required.
+the question is asked of the type T after **reference resolution**: if T is a `Reference(N)`, T
+is replaced by the `Struct` formed from the `members` of the matching `RecordDefinition`, or by
+the `Scalar` formed from the `validators` of the matching `ScalarDefinition`. A `Reference(N)`
+resolving to a `SelectDefinition` is **E218** (a sum cannot inhabit a single-typed position).
 
-**Recursive types and depth limit.** A `Definition` may contain `Reference`s to itself or to
-other `Definition`s that ultimately refer back to it (e.g., a `tree` Definition whose `children`
-Field is `Reference(tree)`). Such cycles are well-formed: the schema describes an arbitrarily
-deep tree structure, and any particular document instantiates it to finite depth. Type
+`SelectRef` resolution is parallel: a `SelectRef(N)` resolves to the `variants` of the matching
+`SelectDefinition`; a `SelectRef` resolving to a `RecordDefinition` or `ScalarDefinition` is
+**E218**. The polarity of the SelectRef remains attached to the use site; only the variants are
+drawn from the named SelectDefinition.
+
+Reference and SelectRef resolution are single-step (Definitions never name another
+Reference/SelectRef as their direct content); no chasing of resolution chains is required.
+
+**Recursive types and depth limit.** A Definition may contain `Reference`s or `SelectRef`s to
+itself or to other Definitions that ultimately refer back to it (e.g., a `Tree` RecordDefinition
+whose `children` Field is `Reference(Tree)`). Such cycles are well-formed: the schema describes
+an arbitrarily deep structure, and any particular document instantiates it to finite depth. Type
 assignment processes nodes lazily — each compound node descends one level before resolving the
 next Reference — so circularity is naturally bounded by the document's actual nesting depth.
 
@@ -1538,10 +1697,9 @@ reports it with a clear diagnostic (e.g., "document nesting exceeds the configur
 it is not a property of the document itself — a deeper limit would accept the same input.
 Implementations MAY expose the limit as a configurable parameter.
 
-**Atom-assignable members.** A `Field` member M is _atom-assignable_ if M.type (after reference
-resolution) is `Scalar` or `Flag`. A `Select` member is atom-assignable if and only if all of its
-variants, after reference resolution, have `Flag` type. A member that is not atom-assignable may
-only be satisfied by compound children (written with an explicit keyword), not by inline atoms.
+**Atom-assignable members.** The atom-assignable predicate used throughout this section is the
+one defined in §20 (after `Reference` resolution). A member that is not atom-assignable may only
+be satisfied by compound children (written with an explicit keyword), not by inline atoms.
 
 **Document root.** The document root is a virtual compound node with type `Schema.document`. It has
 no atoms; any `required` atom-assignable members of the root struct cannot be satisfied (**E203**).
@@ -1556,11 +1714,28 @@ no atoms; any `required` atom-assignable members of the root struct cannot be sa
 
 3. **Atom phase.** Let `pos` = 0. For each atom A in N.atoms, in order:
 
-   a. Advance `pos` while the following skip condition holds: `pos` < len(T.members), the member M
-   at `pos` is not `required`, and one of: (1) M is not atom-assignable, or (2) M is atom-assignable
-   and is an all-`Flag` `Select` or a `Field` with `Flag` type, and the text of A does not match any
-   keyword of M (i.e., M.keyword for a `Field`, or any variant's keyword for a `Select`). Each
-   advanced-past member is recorded as absent.
+   a. Advance `pos` while `pos` < len(T.members) AND the member M at `pos` has effective
+   `required` = `false` (i.e. M is non-required), AND at least one of the following holds:
+   - M is **not atom-assignable** (e.g. a `Field` whose type resolves to a `Struct`, or a
+     `SelectRef` whose referenced SelectDefinition has any non-`Flag` variant). Such a member
+     cannot consume any atom and so is always skipped.
+   - M is atom-assignable and is **Flag-shaped** (a `Field` of resolved type `Flag`, or a
+     `SelectRef` whose referenced SelectDefinition's variants all resolve to `Flag`), AND the
+     text of A does not match any of M's keywords (the `Field`'s `keyword` for a Field, any
+     variant's `keyword` for a SelectRef's referenced SelectDefinition). Skipping is permitted
+     because A clearly is not meant to fill M; A may match a later member.
+
+   A member with a `Scalar`-typed field is **never** skipped: a Scalar accepts any text, so
+   there is no "doesn't match" condition that would justify skipping. Each advanced-past member
+   is recorded as absent (subject to the required-member check in step 5).
+
+   Worked example. Suppose `T.members = [Field(Flag a), Field(Flag b, required=false),
+   Field(Scalar c)]` and `N.atoms = ["a", "xyz"]`:
+   - Atom `a` at `pos=0`: M is Field(Flag a). Effective `required` is the default ("default" →
+     true). No skipping. A matches `a`; assign; increment `pos` to 1.
+   - Atom `xyz` at `pos=1`: M is Field(Flag b, required=false). Atom-assignable Flag-shaped,
+     atom text doesn't match `b`. Skip M; `pos = 2`. Now M is Field(Scalar c); Scalar consumes
+     any text. Assign `xyz` to `c`.
 
    b. If `pos` ≥ len(T.members), the document is invalid (**E302**: more atoms than assignable
    member positions).
@@ -1569,8 +1744,9 @@ no atoms; any `required` atom-assignable members of the root struct cannot be sa
    (**E303**: atom in non-atom-assignable member position).
 
    d. Assign A to M:
-   - If M is a `Select`, the matched variant is the one whose keyword equals A's text; if no variant's
-     keyword matches, the document is invalid (**E304**).
+   - If M is a `SelectRef`, the matched variant is the one (from the referenced
+     SelectDefinition) whose keyword equals A's text; if no variant's keyword matches, the
+     document is invalid (**E304**).
    - If M is a `Field` with `Flag` type, A's text MUST equal M.keyword; if it does not, the
      document is invalid (**E305**).
    - If M is a `Field` with `Scalar` type, the type of A is M.type regardless of A's text
@@ -1621,58 +1797,73 @@ in prose.
 
 #### Permitted Operations
 
-A layer MAY apply the following operations to the base, each of which preserves subtyping:
+A layer MAY apply the following operations to the base, each of which preserves subtyping. The
+list is organised by the structural duality between records and selects.
 
-- **Add a Field** to a Struct. The new keyword MUST NOT collide with any keyword (Field or
-  variant) already present in the merged Struct (**E206**).
-- **Add a Select member** to a Struct. None of the new Select's variant keywords may collide
-  with any existing keyword in the merged Struct (**E206**).
-- **Add a Definition** to the composed type namespace, when the name does not already exist
-  in the merged namespace.
+**Record-side (product) operations:**
+
+- **Add a Field** to a Struct (root Struct or RecordDefinition body). The new keyword MUST NOT
+  collide with any keyword already present in the merged Struct (**E206**).
+- **Add a SelectRef** to a Struct. The referenced SelectDefinition's variant keywords MUST NOT
+  collide with any keyword already present in the merged Struct (**E206**).
 - **Refine a Struct in place** (Field merge). When a layer declares a `Field` whose keyword
   matches an existing `Field` and the types are structurally equal (or both `Struct`, which
-  are merged recursively), the layer's declaration MAY tighten `required` (from `false` to
-  `true`, by declaring `required`) and/or tighten `repeatable` (from `true` to `false`, by
-  declaring `irrepeatable`). The merge also re-runs at any nested Struct level (additional
-  Fields on the layer side are appended). A type mismatch is **E207**; an attempt to loosen
-  `required` is **E215**; an attempt to loosen `repeatable` is **E216**.
-- **Refine a Definition in place** (Definition merge). When a layer declares a `Definition`
-  whose name matches an existing `Definition`, the layer's members are merged into the existing
-  Definition's members using the same algorithm as Struct merge. This is the layer-level
-  mechanism by which a referenced Struct (typed via a `Reference`) is extended.
-- **Append validators** to a Struct or Definition. A layer's `validate K` lines are appended
-  (in source order, deduplicated) to the base's `validators` list; validators apply in
-  declaration order and AND-conjuncted (§21.1), so any layer-added validator runs *after* the
-  base's validators.
-- **Exclude a variant** from an existing Select. The layer carries a marker compound at the
-  position of the parent Struct of the form `exclude K`, where K is the keyword of the
-  variant to exclude. K MUST identify a variant of some Select in the merged Struct (**E212**),
-  and excluding K MUST leave at least one variant in the owning Select (**E213**).
+  are merged recursively), the layer's declaration MAY tighten the polarity on either axis by
+  declaring `required` (tightens the `required` axis from `"loose"` to `"tight"`) and/or
+  `irrepeatable` (tightens the `repeatable` axis from `"loose"` to `"tight"`). The merge also
+  re-runs at any nested Struct level (additional Fields on the layer side are appended). A
+  type mismatch is **E207**.
+- **Refine a SelectRef in place.** When a layer declares a SelectRef whose `reference` matches
+  an existing SelectRef in the same Struct, polarity is merged per `MergePolarity`; the
+  `reference` itself does not change.
+- **Refine a RecordDefinition in place** (RecordDefinition merge). When a layer declares a
+  `record` whose name matches an existing `RecordDefinition`, the layer's members are merged
+  into the existing Definition's members using the same algorithm as Struct merge.
+
+**Select-side (sum) operations:**
+
+- **Exclude a variant** from a SelectDefinition. Inside a layer's `select N` body, an
+  `Exclude(K)` operation removes the variant with keyword K from the merged SelectDefinition.
+  K MUST identify a variant of the base SelectDefinition (**E212**); the exclusion MUST leave
+  at least one variant present if any composed-schema `SelectRef` whose effective `required` is
+  `true` references the SelectDefinition (**E213**).
+- **Refine a SelectDefinition in place** (SelectDefinition merge). When a layer declares a
+  `select` whose name matches an existing `SelectDefinition`, the layer's `Exclude(K)`
+  operations and `validate` lines apply against the base. Variant additions in this position
+  are forbidden (**E214** — would widen the sum).
+
+**Common-to-both operations:**
+
+- **Add a Definition** (record, scalar, or select) to the composed namespace, when the name
+  does not already exist in the merged namespace.
+- **Refine a ScalarDefinition in place.** A same-name `scalar` in a layer appends validators to
+  the base's `validators` list (in source order, deduplicated).
+- **Append validators** to a Struct, RecordDefinition, or SelectDefinition. A layer's
+  `validate K` lines at any such position are appended (in source order, deduplicated) to the
+  base's `validators` list; validators apply in declaration order and AND-conjuncted (§21.1),
+  so any layer-added validator runs *after* the base's validators.
+
+The duality is: record-side adds members (extension; subtype-producing for products);
+select-side excludes variants (narrowing; subtype-producing for sums). Both refine the
+definition; the directions are mirror-image as type theory requires.
 
 #### Forbidden Operations
 
 The following operations break subtyping and are NOT permitted in a layer; an implementation
 detecting any of them MUST report the corresponding error:
 
-- Remove a Field from a Struct. (Would narrow the record type.)
-- Add a variant to an existing Select. (Would widen the sum type. Adding a *fresh* Select with
-  fresh variants is permitted; what is forbidden is adding a variant whose keyword targets a
-  Select already present.) (**E214**)
-- **Loosen `required`** — declaring `optional` for a member the base declared required.
-  (**E215**)
-- **Loosen `repeatable`** — declaring `repeatable` for a member the base declared
-  irrepeatable. (**E216**)
-- Remove a validator from a Struct or Scalar. (Validators are append-only across layers; a
-  layer's `validate K` declaration adds K, never removes an existing K.)
+- Remove a Field from a Struct (no syntax — structurally prevented).
+- Add a variant to an existing SelectDefinition (**E214** — would widen the sum). Introducing a
+  *fresh* SelectDefinition with a fresh name is permitted; what is forbidden is a `variant K`
+  appearing inside a layer's `select N` body when K is not already a base variant of N.
+- **Loosen `required`** — declaring `optional` for an axis whose merged polarity is `"default"`
+  or `"tight"` (**E215**).
+- **Loosen `repeatable`** — declaring `repeatable` for an axis whose merged polarity is
+  `"default"` or `"tight"` (**E216**).
+- Remove a validator from a Struct, Scalar, RecordDefinition, or SelectDefinition (validators
+  are append-only across layers; a layer's `validate K` adds K, never removes an existing K).
 - Change a `Scalar`'s `default`, or a `Field`'s declared `Type` to a structurally different
   type that is not a Struct-to-Struct refinement.
-
-#### Select Addressing
-
-Selects in TEL schemas are unnamed. To address a Select for variant exclusion, a layer references
-the **variant keyword**: per E201, every variant keyword is unique within a Struct, so the
-keyword unambiguously identifies its owning Select. An `exclude K` operation declared at
-the position of a Struct S excludes K from whichever Select of S declares it.
 
 #### Composed Schema Identity
 
@@ -1683,20 +1874,23 @@ semantically equivalent composed Struct: the BinTEL signature (BinTEL §8) encod
 order, so two compositions of the same set of layers in different orders have distinct
 signatures.
 
-#### Composed Type Namespace
+#### Composed Definition Namespace
 
-The composed schema's type namespace is built by walking the base schema's `Schema.types`
-followed by each `Layer.types` in layer order, applying Definition merge (above) whenever a
-later declaration shares a name with an earlier one. After composition, `Reference`s in the
-base, in any layer, or in any merged member may resolve to any `Definition` in the composed
-namespace.
+The composed schema's Definition namespace is built by walking, in order, the base schema's
+`Schema.records`, `Schema.scalars`, and `Schema.selects`, then for each layer in layer order
+its `Layer.records`, `Layer.scalars`, and `Layer.selects`. Definition merge (above) applies
+whenever a later declaration shares a name with an earlier one. Records, scalars, and selects
+share the namespace: a layer-introduced Definition whose name collides with an existing
+Definition of a *different kind* is **E211** in the composed schema. After composition,
+`Reference`s and `SelectRef`s in the base, in any layer, or in any merged member may resolve to
+any Definition (of the appropriate kind) in the composed namespace.
 
 #### Layer Body
 
-A `Layer` value has `name`, `types`, `scalars`, and `overlay` fields (see §20). In TEL source,
-a layer's `overlay` is OPTIONAL — a layer that introduces only definitions without modifying the
-document root MAY omit `overlay` entirely. When `overlay` is absent it is treated as an empty
-`Struct` (no members).
+A `Layer` value has `name`, `overlay`, `records`, `scalars`, and `selects` fields (see §20). In
+TEL source, a layer's `overlay` is OPTIONAL — a layer that introduces or refines only
+Definitions without modifying the document root MAY omit `overlay` entirely. When `overlay` is
+absent it is treated as an empty `Struct` (no members).
 
 #### Merge Algorithm
 
@@ -1706,64 +1900,118 @@ incorporates the layer's members into the base:
 1. Begin with a copy of `base.members` in member order.
 2. Construct the keyword map K for the base struct by iterating it in keyword order: for each
    entry `(keyword, type)` at member index i, map keyword → (i, members[i]).
-3. For each operation L declared by the layer at this Struct position, in source order:
+3. For each member L declared by the layer at this Struct position, in source order:
 
-   a. **Field members.** If L is a `Field` with keyword W and type T:
+   a. **Field members.** If L is a `Field` with keyword W:
       - Look up W in K.
-      - **Found:** Let `(i, M) = K[W]`. M MUST be a `Field` and both M.type and T (after
+      - **Found:** Let `(i, M) = K[W]`. M MUST be a `Field` and both M.type and L.type (after
         Reference resolution) MUST be `Struct`; if either is not, the layer is invalid
-        (**E207**). Replace M.type in the merged member list at index i with
-        `MergeStruct(M.type, T)`.
+        (**E207**). The merged Field at index i has:
+        - `keyword` = W (unchanged);
+        - `type` = `MergeStruct(M.type, L.type)`;
+        - per-axis polarities computed by `MergePolarity(M.required, L.required)` and
+          `MergePolarity(M.repeatable, L.repeatable)`;
+        - `default` = base's default (a layer may not change the default; see Forbidden
+          Operations).
       - **Not found:** Append L as a new member at the end of the member list. Add W → (new
-        index, L) to K.
+        index, L) to K. (Polarity merge does not apply: a freshly-introduced Field carries its
+        declared polarity directly.)
 
-   b. **Select members.** If L is a `Select`:
-      - Every variant keyword in L.variants MUST be absent from K (**E206**).
-      - Append L as a new member at the end of the member list. For each variant V in
-        L.variants, add V.keyword → (new index, L) to K.
+   b. **SelectRef members.** If L is a `SelectRef` referencing `N`:
+      - Resolve `N` in the composed Definition namespace to a SelectDefinition (E210/E218 if it
+        cannot be resolved to a SelectDefinition).
+      - For each variant keyword W of the referenced SelectDefinition, look up W in K. If any W
+        matches an existing entry that is *not* a SelectRef referencing the same `N`, the
+        layer is invalid (**E206**). If every matched W resolves to a SelectRef referencing
+        the same `N`, the layer's SelectRef refines the existing one: per-axis polarities are
+        merged via `MergePolarity`, and the merged SelectRef replaces the base member at that
+        position.
+      - Otherwise (no overlap at all), append L as a new member at the end of the member list.
+        For each variant V of `N`, add V.keyword → (new index, L) to K.
 
-   c. **Exclude operations.** If L is `exclude K`:
-      - Look up K in the current K. If K is not present, or names a `Field` rather than a
-        Select variant, the layer is invalid (**E212**).
-      - Let `(i, M) = K[K]`. Locate and remove the variant whose keyword is K from M.variants.
-      - If M was declared with `required: true` and M.variants is now empty, the layer is
-        invalid (**E213**). (When the Select becomes empty and was `required: false`, the
-        Select member itself is removed from the merged member list.)
-      - Remove K from the keyword map. Re-index remaining keyword-to-(i, M) entries as needed.
+   c. **Exclude in a Struct position.** An `Exclude(K)` member MUST NOT appear inside a Struct
+      (root or RecordDefinition body) — only inside a SelectDefinition body (**E217**).
 
 4. Return the resulting member list as the merged Struct's `members`. The merged Struct's
    `validators` is the concatenation of the base's `validators` with any new validator names
    contributed by the layer at this Struct position (in source order, deduplicated). Validators
    are append-only across layers; a layer MUST NOT remove a base validator.
 
-`MergeDefinition(base: Definition, layer: Definition): Definition` is identical to
-`MergeStruct` applied to the Definitions' member lists, with `Definition.validators` merged by
-the same append-and-deduplicate rule.
+**`MergePolarity(base: Polarity, layer: Polarity): Polarity`** is defined per axis:
+
+| base \ layer  | `"default"` | `"loose"`            | `"tight"`   |
+| ------------- | ----------- | -------------------- | ----------- |
+| `"default"`   | `"default"` | **E215 / E216**      | `"tight"`   |
+| `"loose"`     | `"loose"`   | `"loose"` (redundant) | `"tight"`   |
+| `"tight"`     | `"tight"`   | **E215 / E216**      | `"tight"`   |
+
+The error code is E215 when the axis is `required`, E216 when it is `repeatable`. The rule
+captures the subtyping direction: tightening (or restating) the cardinality is always allowed;
+loosening an already-tight or default cardinality is rejected.
+
+**`MergeRecord(base, layer): RecordDefinition`** applies `MergeStruct` to the Definitions'
+member lists and merges `validators` by the append-and-deduplicate rule.
+
+**`MergeScalar(base, layer): ScalarDefinition`** merges the `validators` lists by the
+append-and-deduplicate rule.
+
+**`MergeSelect(base, layer): SelectDefinition`** merges a layer's SelectDefinition body into the
+base SelectDefinition:
+
+1. Begin with a copy of `base.variants` in declaration order.
+2. For each member L in the layer's SelectDefinition body, in source order:
+   - If L is a `variant` declaration with keyword W: W MUST identify an existing variant in the
+     current variant list; if not, the layer is invalid (**E214** — variant addition is
+     forbidden). If W is present and the layer's `Variant.type` is structurally equal to the
+     base variant's type, the operation is a no-op restatement (permitted); a type mismatch is
+     **E207**.
+   - If L is `Exclude(W)`: W MUST identify an existing variant in the current variant list; if
+     not, the layer is invalid (**E212**). Remove the variant from the list.
+3. After all layer operations apply, the variant list MUST be non-empty *if* any
+   composed-schema SelectRef whose effective `required` is `true` references this
+   SelectDefinition; otherwise **E213**. (A SelectDefinition referenced only by non-required
+   SelectRefs MAY be emptied; the referencing SelectRefs are then effectively unreachable in
+   composed documents.)
+4. The merged SelectDefinition's `validators` is the concatenation of the base's `validators`
+   with any new validator names contributed by the layer's `validate` lines (in source order,
+   deduplicated).
+
+A layer attempting to merge a Definition of one kind onto a Definition of another kind (e.g. a
+layer's `select N` onto a base `record N`) is **E211**.
 
 #### Composing Layers
 
-To apply a sequence of layers `[L₁, L₂, …, Lₙ]` to a base schema with root Struct R and
-Definition list D:
+To apply a sequence of layers `[L₁, L₂, …, Lₙ]` to a base schema with root Struct R, record
+list T (for `records`), scalar list S, and select list U:
 
-1. Let `R₀ = R` and `D₀ = D`.
+1. Let `R₀ = R`, `T₀ = T`, `S₀ = S`, `U₀ = U`.
 2. For each `Lₖ` in turn:
-   - For each `def` in `Lₖ.types`, in source order:
-     - If `def.name` exists in `Dₖ₋₁`, replace that Definition with
-       `MergeDefinition(existing, def)`.
-     - Otherwise append `def` to `Dₖ`.
-   - Set `Rₖ = MergeStruct(Rₖ₋₁, Lₖ.root)`.
-3. The final `Rₙ` is the root Struct of the composed schema, and `Dₙ` is its Definition list.
+   - For each `record def` in `Lₖ.records`, in source order:
+     - If `def.name` matches a name in `Tₖ₋₁`, replace that RecordDefinition with
+       `MergeRecord(existing, def)`. If it matches a name in `Sₖ₋₁` or `Uₖ₋₁`, the schema is
+       invalid (**E211**). Otherwise append `def` to `Tₖ`.
+   - For each `scalar def` in `Lₖ.scalars`, in source order:
+     - If `def.name` matches a name in `Sₖ₋₁`, replace that ScalarDefinition with
+       `MergeScalar(existing, def)`. If it matches a name in `Tₖ₋₁` or `Uₖ₋₁`, the schema is
+       invalid (**E211**). Otherwise append `def` to `Sₖ`.
+   - For each `select def` in `Lₖ.selects`, in source order:
+     - If `def.name` matches a name in `Uₖ₋₁`, replace that SelectDefinition with
+       `MergeSelect(existing, def)`. If it matches a name in `Tₖ₋₁` or `Sₖ₋₁`, the schema is
+       invalid (**E211**). Otherwise append `def` to `Uₖ`.
+   - Set `Rₖ = MergeStruct(Rₖ₋₁, Lₖ.overlay)`.
+3. The final `Rₙ` is the root Struct of the composed schema; `Tₙ`, `Sₙ`, `Uₙ` are its
+   Definition lists.
 
 #### Layer Validity Constraints
 
 A schema is invalid if any of the following holds:
 
 - Two or more layers within the same schema share the same `name` (**E205**).
-- A layer's operation triggers any of **E206**, **E207**, **E212**, **E213**, or **E214** at
-  composition time.
-- Within the base schema's own `Schema.types`, two or more Definitions share the same `name`
-  (**E211**). (Within layers, same-name Definitions trigger Definition merge per the rules
-  above, not E211.)
+- A layer's operation triggers any of **E206**, **E207**, **E211**, **E212**, **E213**,
+  **E214**, **E215**, **E216**, **E217**, or **E218** at composition time.
+- Within the base schema's own `Schema.records ∪ Schema.scalars ∪ Schema.selects`, two or more
+  Definitions share the same `name` (**E211**). (Within layers, same-name Definitions trigger
+  Definition merge per the rules above, not E211.)
 
 ### 20.4 BinTEL
 
@@ -1784,95 +2032,109 @@ by `Schema.name = tel-schema`. The full document is supplied as the file
 [`tel-schema.tel`](tel-schema.tel) at the root of this repository; this subsection specifies the
 keyword vocabulary used by that document and states the self-describing closure property.
 
-**Vocabulary.** The following kebab-case keywords are used in a schema TEL document. Each maps
-one-to-one to a field or interface in the §20 type model:
+**Vocabulary.** The following keywords are used in a schema TEL document. The keywords are
+themselves kebab-case identifiers (they appear in user-written TEL source); the `name` of each
+top-level Definition (a `record`, `scalar`, or `select`) is a **PascalCase `TypeName`** (§20.7),
+not a kebab-case identifier. The `name` of a `record`, `scalar`, `select`, or `layer`, and the
+`name` of the top-level `Schema`, are typically written **implicitly** — i.e. as the first
+inline atom of the parent compound (`record Field`, `scalar Email`, `select Status`,
+`layer auth`, …) rather than as an explicit `name <value>` child — by the atom/compound
+interchangeability rule of §19.1. The explicit `name <value>` child compound form is also
+accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Definition.
+`tel-schema.tel` uses the implicit form throughout.
 
 | TEL keyword     | §20 construct                                  |
 | --------------- | ---------------------------------------------- |
-| `name`          | `Schema.name`, `Layer.name`, `RecordDefinition.name`, `ScalarDefinition.name` (parent context determines which) |
+| `name`          | `Schema.name`, `Layer.name`, or a Definition's `name` (parent context determines which). |
 | `document`      | `Schema.document`                              |
 | `layer`         | `Schema.layers[i]`                             |
 | `sigil`         | `Schema.sigil`                                 |
-| `record`        | A named struct definition: `Schema.types[i]` at schema root, or `Layer.types[i]` inside a `layer` compound. The first inline atom is the record's name. |
-| `scalar`        | A named scalar definition: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the name; the body is one or more `validate <name>` lines. |
+| `record`        | A `RecordDefinition`: `Schema.records[i]` at schema root, or `Layer.records[i]` inside a `layer` compound. The first inline atom is the record's `TypeName`. |
+| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is one or more `validate <name>` lines. |
+| `select`        | At top level (or inside `layer`): a `SelectDefinition` — `Schema.selects[i]` or `Layer.selects[i]`. First inline atom is the `TypeName`; body is `variant`, `validate`, and (in layers only) `exclude` lines. **At a member position** (inside a `record` body, the `document` block, or a layer's `overlay` block): a `SelectRef` — the first inline atom is the `TypeName` of the referenced SelectDefinition; polarity is per use site. There is no inline-anonymous form; every select is named. |
 | `overlay`       | `Layer.overlay` — the struct whose members are merged into the composed document root by the algorithm in §20.3. |
-| `field`         | `Member` variant: `Field`. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
-| `select`        | `Member` variant: `Select` (same positions as `field`). |
-| `optional`      | Loosens to `Field.required = false` / `Select.required = false` (Flag, base-side). |
-| `required`      | Tightens to `Field.required = true` / `Select.required = true` (Flag, layer-side override of `optional`). Redundant in a base since `required: true` is the default. |
-| `repeatable`    | Loosens to `Field.repeatable = true` / `Select.repeatable = true` (Flag, base-side). |
-| `irrepeatable`  | Tightens to `Field.repeatable = false` / `Select.repeatable = false` (Flag, layer-side override of `repeatable`). Redundant in a base since `repeatable: false` is the default. |
-| `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). |
-| `variant`       | `Select.variants[i]`                          |
-| `type`          | The type-name field of `field-body` / `variant-body`. The value is a kebab-case identifier resolving (via §20.2 reference resolution) to either a user-declared `record` or `scalar`, or a built-in type (`flag`, `string`, `identifier`, `sigil`). |
-| `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, `document`, or `overlay`, names a struct-level validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in both contexts. |
+| `field`         | A `Field` member. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
+| `optional`      | Loosens to `required: "loose"` (Flag, base-side). |
+| `required`      | Tightens to `required: "tight"` (Flag, layer-side override of `optional`). Permitted but redundant in a base, since the default is already tight. |
+| `repeatable`    | Loosens to `repeatable: "loose"` (Flag, base-side). |
+| `irrepeatable`  | Tightens to `repeatable: "tight"` (Flag, layer-side override of `repeatable`). Permitted but redundant in a base, since the default is already tight. |
+| `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). Kebab-case. |
+| `variant`       | A `Variant` of a `SelectDefinition`. First inline atom is the variant's kebab-case `keyword`; second inline atom is the `TypeName` of its `type`. |
+| `type`          | The type-name field of a `Field`, a `Variant`, or a `SelectRef`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`). |
+| `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E204 otherwise). |
-| `exclude`       | A layer-only operation (§20.3) that excludes a `Select` variant from the merged Struct. Its inline atom is the keyword K of the variant to exclude. Permitted only inside `overlay`. |
+| `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E217 otherwise). |
 
-**Predefined type names.** The names `flag`, `string`, `identifier`, and
-`sigil` are predefined and resolve to the built-in `Flag` type and the three
-built-in scalar validators (§21.5). User schemas MAY NOT `record` or `scalar`
-any of these names (collision is **E211**).
+**Predefined type names.** The names `Flag`, `String`, `Identifier`, and `Sigil` are predefined
+(in `TypeName` form, i.e. PascalCase) and resolve to the built-in `Flag` type and the three
+built-in scalar validators (§21.5). User schemas MAY NOT declare a Definition with any of these
+names (collision is **E211**).
 
 **Reserved keywords.** Only `tel` is universally reserved across all TEL documents (**E209**, §8).
-The other keywords listed above are part of the tel-schema vocabulary and have meaning only when a
-TEL document is being parsed as a *schema document* — i.e. when its schema is the tel-schema. They
-do not constrain user-defined schemas: a user schema may freely define `Field.keyword` or
-`Variant.keyword` values such as `name`, `document`, `layer`, `record`, `scalar`, etc., because the
-validity check applied to a user document is against the user schema's keyword set, not against
-the schema-language vocabulary.
+The other keywords listed above are part of the tel-schema vocabulary and have meaning only when
+a TEL document is being parsed as a *schema document* — i.e. when its schema is the tel-schema.
+They do not constrain user-defined schemas: a user schema may freely define `Field.keyword` or
+`Variant.keyword` values such as `name`, `document`, `layer`, `record`, `scalar`, `select`, etc.,
+because the validity check applied to a user document is against the user schema's keyword set,
+not against the schema-language vocabulary.
 
-**Member ordering and inline syntax.** Member order in `field-body` is
-`keyword`, `type` (both required Scalars), then the four loosen/tighten
-flags (`optional`, `required`, `repeatable`, `irrepeatable`), then
-`default` (optional Scalar). The atom-phase rules of §20.2 / §20.8 let a
-typical field declaration fit a single line: the first atom is the
-keyword, the second atom is the type-name, each subsequent flag-matching
-atom toggles its flag, and any remaining non-flag atom fills `default`.
-For example,
+**Member ordering and inline syntax.** Member order in `Field` is `keyword`, `type` (both
+required Scalars; `type` carries a `TypeName`), then the four loosen/tighten flags (`optional`,
+`required`, `repeatable`, `irrepeatable`), then `default` (optional Scalar). The atom-phase
+rules of §20.2 / §20.8 let a typical field declaration fit a single line: the first atom is the
+keyword, the second atom is the type-name, each subsequent flag-matching atom toggles its flag,
+and any remaining non-flag atom fills `default`. For example,
 
 ```tel
-field country string optional unknown
+field country String optional unknown
 ```
 
-declares an optional `country` field of type `string` (the built-in scalar)
-with default value `unknown`. The convention is **flags before default**:
-`default` is the last optional Scalar and so consumes the first non-flag
-atom after the type-name. Variants follow the same pattern but carry only
-`keyword` and `type`, e.g. `variant active flag`. There are no marker
-keywords: position determines meaning.
+declares an optional `country` field of type `String` (the built-in scalar) with default value
+`unknown`. The convention is **flags before default**: `default` is the last optional Scalar and
+so consumes the first non-flag atom after the type-name. Variants follow the same pattern but
+carry only `keyword` and `type`, e.g. `variant active Flag`. There are no marker keywords:
+position determines meaning.
 
-**References.** A `Field` or `Variant` type-name resolves through the
-composed namespace described above. If the name is `flag`, `string`,
-`identifier`, or `sigil` it short-circuits to the built-in. Otherwise it
-must match a `record` or `scalar` declared somewhere in the composed schema
-(base or any layer); failing that, the schema is invalid with **E210**.
-References may form cycles via `record` definitions in their resolved
-bodies — the natural case for recursive data.
+A `SelectRef` at a member position has the inline shape `select <TypeName> [polarity]`:
 
-**Self-describing closure.** [`tel-schema.tel`](tel-schema.tel) MUST be a valid TEL document when
-parsed under the schema it itself defines. Implementations MUST produce a byte-identical BinTEL
-encoding of `tel-schema.tel`, and a single SHA-256 value hash (§3 of the BinTEL Specification) as
-the schema identifier (§8.1 of this Specification). This hash is normative — two conforming
-implementations MUST agree on it.
+```tel
+select Status optional
+```
+
+introduces a non-required SelectRef referencing the `Status` SelectDefinition.
+
+**References.** A `Field.type`, `Variant.type`, or `SelectRef.reference` resolves through the
+composed namespace described above. If the name is `Flag`, `String`, `Identifier`, or `Sigil`
+it short-circuits to the built-in. Otherwise it must match a `record`, `scalar`, or `select`
+declared somewhere in the composed schema (base or any layer); failing that, the schema is
+invalid with **E210**, or with **E218** if the kind doesn't match the position (a `Field.type`
+resolving to a `SelectDefinition`, or a `SelectRef.reference` resolving to a `RecordDefinition`
+or `ScalarDefinition`). References may form cycles via `record` or `select` definitions in
+their resolved bodies — the natural case for recursive data.
+
+**Self-describing closure and bootstrap.** [`tel-schema.tel`](tel-schema.tel) MUST be a valid TEL
+document when parsed under the schema it itself defines. To break the regress that would
+otherwise prevent a schema document from being parsed at all, **every conforming TEL parser MUST
+embed the `tel-schema` schema as a built-in**, available before any external schema has been
+resolved. When a TEL document's pragma identifies `tel-schema` as its schema, the parser uses
+the built-in form rather than performing schema retrieval. The built-in MUST produce the same
+`Schema` model that would result from parsing the canonical `tel-schema.tel` under itself, and
+MUST produce a byte-identical BinTEL encoding of that schema and the same SHA-256 value hash
+(§3 of the BinTEL Specification). The hash is normative — two conforming implementations MUST
+agree on it.
 
 The pinned value, computed against the canonical
 [`tel-schema.tel`](tel-schema.tel) in this repository, is:
 
 | Form     | Value                                                                |
 | -------- | -------------------------------------------------------------------- |
-| SHA-256  | `15075381a17c781436717e2ff12ca75e4ba6503b8c47b6f6b26fa8fb0e831866`   |
-| BASE-256 | `ȕćSẁơżxД6qžįñЬƧŞKΦPĻẌGζǶβoƨûĎẃĘf`                                   |
+| SHA-256  | `9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd`   |
+| BASE-256 | `Ґ3ϏąNǑOτŠϏÐEЂҢζΞȚψŀύȐ5ỲГIЫtίṽỲƨӝ`                                  |
 
-The BinTEL document root encoding of `tel-schema.tel` is 970 bytes; the raw bytes are recorded in
-[`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex).
-
-**Bootstrap requirement.** A schema document cannot itself be parsed without a schema, and the
-schema for schemas is `tel-schema.tel`. To break this regress, **every conforming TEL parser MUST
-embed the `tel-schema` schema as a built-in**, available before any external schema has been
-resolved. When a TEL document's pragma identifies `tel-schema` as its schema, the parser uses the
-built-in form rather than performing schema retrieval. The built-in MUST produce the same
-`Schema` model that would result from parsing the canonical `tel-schema.tel` under itself.
+The BinTEL document root encoding of `tel-schema.tel` is 887 bytes; the raw bytes are recorded
+in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
+[`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
+Specification.
 
 ### 20.6 Schema Construction from the Semantic Model
 
@@ -1882,68 +2144,102 @@ fields of the `Schema` model:
 
 1. **Schema root.** Create a `Schema` value. Iterate the root element's children **in source order**
    (the order in which they appear in the document):
-   - For the `name` child (a `Value` whose type is `Scalar` with `validator = "identifier"`),
-     set `Schema.name` to its `text`.
+   - For the `name` child (Scalar with validator `identifier`), set `Schema.name` to its `text`.
    - For the `sigil` child, set `Schema.sigil` to its `text` (or leave `null` if absent).
-   - For each `define` child, append a `Definition` to `Schema.types` constructed per step 2. The
-     resulting list preserves source order: `Schema.types[0]` is the first `define` encountered.
+   - For each `record` child, append a `RecordDefinition` to `Schema.records` constructed per
+     step 2. The resulting list preserves source order.
+   - For each `scalar` child, append a `ScalarDefinition` to `Schema.scalars` constructed per
+     step 2b. The resulting list preserves source order.
+   - For each `select` child (at schema root, i.e. **outside** any `record`/`document`/`overlay`
+     body), append a `SelectDefinition` to `Schema.selects` constructed per step 2c. The
+     resulting list preserves source order.
    - For the `document` child, set `Schema.document` to the `Struct` built from the `document`
      element's children per step 6.
    - For each `layer` child, append a `Layer` to `Schema.layers` constructed per step 4. The
-     resulting list preserves source order: `Schema.layers[0]` is the first `layer` encountered.
-     This ordering is significant — layer composition (§20.3) applies layers in `Schema.layers`
-     order, so two documents that differ only in layer ordering produce distinct composed schemas.
-2. **`Definition` construction.** From a `define` element: take the `name` child as
-   `Definition.name`; build `Definition.members` and `Definition.validators` from the element's
-   remaining children per step 6.
-3. **Member construction.** A `field` element becomes a `Field`; a `select` element becomes a
-   `Select`. The four loosen/tighten Flag children (`optional`, `required`, `repeatable`,
-   `irrepeatable`) collectively determine the two internal booleans:
-   - `Field.required = required-flag-present OR NOT optional-flag-present` (default `true`;
-     the tightening `required` flag wins when both are present).
-   - `Field.repeatable = repeatable-flag-present AND NOT irrepeatable-flag-present` (default
-     `false`; the tightening `irrepeatable` flag wins when both are present).
+     resulting list preserves source order — layer composition (§20.3) applies layers in this
+     order.
+2. **`RecordDefinition` construction.** From a `record` element: take the `name` child (or first
+   inline atom, which MUST be a `TypeName`) as `RecordDefinition.name`; build
+   `RecordDefinition.members` and `RecordDefinition.validators` from the element's remaining
+   children per step 6.
+2b. **`ScalarDefinition` construction.** From a `scalar` element: take the `name` child (or
+   first inline atom, a `TypeName`) as `ScalarDefinition.name`; for each `validate` child within
+   the element, append the child's inline-atom text to `ScalarDefinition.validators`, in source
+   order.
+2c. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
+   (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
+   append a `Variant` to `SelectDefinition.variants` per step 3; for each `validate` child,
+   append the child's inline-atom text to `SelectDefinition.validators`; for each `exclude`
+   child (permitted only inside a layer's `select` body — otherwise **E217**), append a
+   `Member::Exclude(K)` entry to the SelectDefinition body that will be consumed by
+   `MergeSelect` during layer composition.
+3. **Member construction.** A `field` element becomes a `Field`; a `select` element at a member
+   position (inside a `record` body, `document`, or `overlay`) becomes a `SelectRef`; a
+   `variant` element (inside a top-level `select`) becomes a `Variant`. The four loosen/tighten
+   Flag children (`optional`, `required`, `repeatable`, `irrepeatable`), where applicable,
+   collectively determine the two `Polarity` fields:
+   - `required` =
+     - `"tight"` if the `required` Flag is present;
+     - else `"loose"` if the `optional` Flag is present;
+     - else `"default"`.
+   - `repeatable` =
+     - `"tight"` if the `irrepeatable` Flag is present;
+     - else `"loose"` if the `repeatable` Flag is present;
+     - else `"default"`.
+
+   The tightening flag (`required`, `irrepeatable`) wins when both flags on an axis are present
+   — redundant declarations are benign no-ops.
 
    Within a `Field`:
-   - `keyword` child → `Field.keyword`.
-   - The four loosen/tighten Flag children compute `Field.required` and `Field.repeatable` per
-     the rules above.
-   - The `type` Scalar child or atom → `Field.type` as a `Reference` (per step 5).
-   - The optional `default` Scalar child or atom → `Field.default` (a string), or `null` if absent.
+   - `keyword` child → `Field.keyword` (kebab-case identifier).
+   - The four loosen/tighten Flag children compute `Field.required` and `Field.repeatable`.
+   - The `type` Scalar child or atom → `Field.type` as a `Reference(TypeName)` (per step 5).
+   - The optional `default` Scalar child or atom → `Field.default` (a string), or `null` if
+     absent.
 
-   Within a `Select`:
-   - The four loosen/tighten Flag children compute `Select.required` and `Select.repeatable`
-     by the same rules.
-   - Each `variant` child → an entry in `Select.variants`, in source order. A `Variant` has a
-     `keyword` child or first inline atom for `Variant.keyword`, and a `type` child or second
-     inline atom for `Variant.type` (a `Reference`).
-4. **`Layer` construction.** From a `layer` element: take the `name` child as `Layer.name`; build
-   `Layer.overlay` from the `overlay` element's children per step 6 (treating an absent `overlay`
-   as an empty Struct); construct `Layer.types` from each `record` child within the layer, in
-   source order; construct `Layer.scalars` from each `scalar` child within the layer, in source
-   order.
-5. **`Type` construction.** Every `Field.type` and `Variant.type` is a `Reference` whose `name` is
-   the inline-atom (or `type` child-compound) text. Resolution of a `Reference` happens at type
-   assignment time (§20.2) and selects either a record's `Struct`, a scalar definition's `Scalar`,
-   or one of the four built-in types (`flag`, `string`, `identifier`, `sigil`).
+   Within a `SelectRef`:
+   - The four loosen/tighten Flag children compute `SelectRef.required` and
+     `SelectRef.repeatable`.
+   - The first inline atom (or the `name` / `type` child compound; the schema-of-schemas uses
+     the first inline atom) is a `TypeName` and becomes `SelectRef.reference`.
+
+   Within a `Variant`:
+   - `keyword` child or first inline atom → `Variant.keyword` (kebab-case).
+   - `type` child or second inline atom → `Variant.type` as a `Reference(TypeName)`.
+4. **`Layer` construction.** From a `layer` element: take the `name` child as `Layer.name`;
+   build `Layer.overlay` from the `overlay` element's children per step 6 (treating an absent
+   `overlay` as an empty Struct); construct `Layer.records` from each `record` child within
+   the layer (step 2); `Layer.scalars` from each `scalar` child (step 2b); `Layer.selects` from
+   each `select` child at the layer's top level (step 2c, which inside a `layer` body permits
+   `exclude` children).
+5. **`Type` construction.** Every `Field.type` and `Variant.type` is a `Reference` whose `name`
+   is the inline-atom (or `type` child-compound) text, a `TypeName`. Resolution of a `Reference`
+   happens at type assignment time (§20.2) and selects either a `RecordDefinition`'s `Struct`,
+   a `ScalarDefinition`'s `Scalar`, or one of the four built-in types (`Flag`, `String`,
+   `Identifier`, `Sigil`). A `Reference` resolving to a `SelectDefinition` is **E218**.
 6. **`Struct` construction.** Given the children of a Struct-shaped compound (the `document`
    element, a `layer` element's `overlay`, or a `record` element's body), produce a `Struct`
-   (or, for `record`, a `RecordDefinition` whose members and validators are taken from this step):
+   (or, for `record`, a `RecordDefinition` whose members and validators are taken from this
+   step):
    - Each `field` child contributes one `Member::Field` constructed per step 3.
-   - Each `select` child contributes one `Member::Select` constructed per step 3.
-   - Each `validate` child contributes its inline-atom text to the resulting `validators` list, in
-     source order.
-   - Each `exclude` child (permitted only inside an `overlay` per §20.3) contributes one
-     `Member::Exclude(K)`, where K is the child's inline-atom text.
+   - Each `select` child at this position contributes one `Member::SelectRef` constructed per
+     step 3.
+   - Each `validate` child contributes its inline-atom text to the resulting `validators` list,
+     in source order.
+   - An `exclude` child is **not** permitted in this position (**E217**); `exclude` lives only
+     inside a layer's `select` body, where it is consumed by `MergeSelect` (§20.3).
 
 Schema construction MUST be deterministic: two implementations applied to the same input MUST
-produce identical `Schema` values. After construction, the resulting schema is checked against the
-validity constraints of §20.1 and §20.3; any failure is reported as the corresponding **E2xx**
-error.
+produce identical `Schema` values. After construction, the resulting schema is checked against
+the validity constraints of §20.1 and §20.3; any failure is reported as the corresponding
+**E2xx** error.
 
-### 20.7 Kebab-Case Identifier
+### 20.7 Identifier Grammars
 
-Throughout this specification, a **kebab-case identifier** has the grammar:
+This specification uses two ASCII identifier kinds, distinguished by initial-letter case.
+
+**Kebab-case identifier.** Used for non-type names: schema names, layer names, field keywords,
+variant keywords, and validator names.
 
 ```
 identifier ::= lower-letter ( '-'? lower-letter-or-digit )*
@@ -1959,7 +2255,28 @@ That is:
 - Hyphens MUST NOT appear at the start or end of the identifier.
 - The empty string is not a valid identifier.
 
-This grammar is enforced by the built-in `identifier` validator (§21.5).
+This grammar is enforced by the built-in `Identifier` validator (§21.5).
+
+**PascalCase `TypeName`.** Used for the `name` of every Definition (record, scalar, select) and
+for every `Reference` / `SelectRef` target.
+
+```
+type-name        ::= upper-letter ( letter-or-digit )*
+upper-letter     ::= [A-Z]
+letter-or-digit  ::= [A-Z] | [a-z] | [0-9]
+```
+
+That is:
+
+- A `TypeName` MUST begin with an uppercase ASCII letter.
+- It MAY contain uppercase letters, lowercase letters, and digits.
+- It MUST NOT contain hyphens, underscores, or non-ASCII characters.
+- The empty string is not a valid `TypeName`.
+
+This grammar is enforced by the built-in `TypeName` validator (§21.5). The two grammars are
+disjoint: every well-formed identifier begins with a lowercase letter, every well-formed
+TypeName begins with an uppercase letter, so a single atom's lexical form tells the reader
+which kind it is.
 
 ### 20.8 Footnote: Inline-Atom Position Constraints
 
@@ -1982,12 +2299,17 @@ schema.
 ### 21.1 Validators
 
 A **validator** is a named helper method that examines a value and returns `Valid` or
-`Invalid`. A validator can be applied to either a `Scalar` value (in which case it inspects
-the atom's text) or to a `Struct` element (in which case it inspects the struct's children).
+`Invalid`. A validator can be applied to a `Scalar` value (in which case it inspects the atom's
+text), a `Struct` element (in which case it inspects the struct's children), or a
+`SelectDefinition` instance (in which case it inspects the chosen variant). Struct and
+SelectDefinition requests share the `kind = "struct"` shape (§21.2) — they are the same wire
+form, distinguished by the parent type at the call site.
 
 - A `Scalar` member's `validators` list (§20) names the validators applied to that scalar's
   value.
 - A `Struct`'s `validators` list (§20) names the validators applied to that struct.
+- A `SelectDefinition`'s `validators` list (§20) names the validators applied to instances of
+  that sum (whichever variant is chosen).
 
 When a value or struct has more than one validator, they apply in **AND-conjunction**: every
 validator MUST return `Valid` for the value to be accepted. The validators are invoked in the
@@ -2131,54 +2453,84 @@ raised). All other parsing and validation proceeds normally.
 ### 21.5 Built-in Validators
 
 This specification does not mandate a portable validator library — applications choose which
-validators they implement. However, three validators are referenced by the `tel-schema`
-schema itself and therefore MUST be implemented by any TEL parser that wishes to parse schema
-documents at all. All three are **scalar** validators (kind = `"scalar"`); they return
-`Invalid` with `Diagnostic::Scalar` on failure.
+validators they implement. However, four validators are referenced by the `tel-schema` schema
+itself (via the four built-in `TypeName`s `Flag`, `String`, `Identifier`, `Sigil`, and the
+internal `TypeName` validator used by Definition-name fields) and therefore MUST be implemented
+by any TEL parser that wishes to parse schema documents at all. All are **scalar** validators
+(kind = `"scalar"`); they return `Invalid` with `Diagnostic::Scalar` on failure.
+
+The validator names defined by this specification are kebab-case (per §20.7 / §21.1's shared
+namespace), even where they share a base lexeme with a capitalized `TypeName`. The
+correspondence is:
+
+| Built-in `TypeName` | Validator name (`identifier` kind) | Meaning at a use site |
+| ------------------- | ---------------------------------- | --------------------- |
+| `String`            | `string`                           | Unconstrained scalar value |
+| `Identifier`        | `identifier`                       | Kebab-case identifier (§20.7) |
+| `Sigil`             | `sigil`                            | Single sigil character |
+| `Flag`              | n/a (Flag is a Type, not a Scalar) | Flag-typed member     |
+
+A fifth, **`type-name`**, is required to validate `TypeName` atoms (Definition names and
+`Reference` / `SelectRef` targets). It does not have a corresponding built-in `TypeName` in the
+schema-of-schemas, because `TypeName` is meta-circular: the field that carries a TypeName
+itself uses the built-in `type-name` validator. Schemas MAY use `type-name` directly to
+validate any user-defined scalar that must carry a type name.
 
 **`identifier`.** Accepts a string that conforms to the kebab-case identifier grammar of §20.7
-— optionally including leading prime (`'`) characters. On failure, returns a
-`Diagnostic::Scalar` whose `message` describes the first violation encountered (e.g. "leading
-hyphen", "consecutive hyphens", "empty identifier", "non-ASCII or uppercase character") and
-whose `span` covers the offending portion of the input (`[0, len)` if the input is malformed
-end-to-end).
+— optionally including leading prime (`'`) characters. On failure, returns a `Diagnostic::Scalar`
+whose `message` describes the first violation encountered (e.g. "leading hyphen", "consecutive
+hyphens", "empty identifier", "non-ASCII or uppercase character") and whose `span` covers the
+offending portion of the input (`[0, len)` if the input is malformed end-to-end).
 
-**`sigil`.** Accepts a single-character string whose character satisfies the constraints in
-§8: it MUST NOT be `U+0020` SPACE, `U+000A` LINE FEED, `U+000D` CARRIAGE RETURN, an ASCII
-letter, an ASCII control character, an ASCII digit, or a parenthetical symbol (§5). On
-failure, returns a `Diagnostic::Scalar` covering the offending input.
+**`type-name`.** Accepts a string that conforms to the PascalCase `TypeName` grammar of §20.7.
+On failure, returns a `Diagnostic::Scalar` whose `message` describes the first violation (e.g.
+"leading lowercase letter", "hyphen in TypeName", "empty TypeName", "non-ASCII character") and
+whose `span` covers the offending portion of the input.
+
+**`sigil`.** Accepts a single-character string whose character satisfies the constraints in §8:
+it MUST NOT be `U+0020` SPACE, `U+000A` LINE FEED, `U+000D` CARRIAGE RETURN, an ASCII letter, an
+ASCII control character, an ASCII digit, or a parenthetical symbol (§5). On failure, returns a
+`Diagnostic::Scalar` covering the offending input.
 
 **`string`.** Accepts any input string without further constraint; equivalent to "no
 validation". The `string` validator MUST always return `Valid`. It exists so a schema can
 declare a field whose validator is the unconstrained string type without the application
 needing to define a custom validator.
 
-Implementations MAY provide additional validators beyond these three. The three above are the
-minimum required for `tel-schema` parsing to function. None of the three supports the
-`struct` kind; invoked on a struct request, they return `Invalid` with
+Implementations MAY provide additional validators beyond these. The four above are the minimum
+required for `tel-schema` parsing to function. None of the four supports the `struct` kind;
+invoked on a struct request, they return `Invalid` with
 `Diagnostic::Struct { message: "validator not applicable to struct values", fields: {} }`.
 
-### 21.6 Struct Validators
+### 21.6 Struct and Select Validators
 
-A `Struct` MAY carry a `validators` list (§20). When the struct appears in a document,
-validation invokes each named validator AFTER all of the struct's children have themselves
-been validated. This sequencing means a struct validator can rely on its children having
-well-typed values and on any per-child validators having already passed; if any child
-validator returned `Invalid`, the struct validator MAY still be invoked (the implementation
-chooses — see §21.4).
+A `Struct` (whether it is the root, a `RecordDefinition`'s body, or an `overlay`'s body) MAY
+carry a `validators` list (§20). A `SelectDefinition` MAY likewise carry a `validators` list,
+for cross-cutting checks over which variant has been chosen. When the struct or select appears
+in a document, validation invokes each named validator AFTER all of the element's children
+have themselves been validated. This sequencing means a struct/select validator can rely on
+its children having well-typed values and on any per-child validators having already passed;
+if any child validator returned `Invalid`, the struct/select validator MAY still be invoked
+(the implementation chooses — see §21.4).
 
 Struct validators are particularly useful for **cross-field constraints**: rules that span
 multiple members of a struct, such as "postcode required when country is UK", "start date
 must precede end date", or "at most one of A, B, C is present". Such constraints cannot be
 expressed by scalar validators alone, because each scalar validator sees only its own value.
 
-A `Diagnostic::Struct` returned by a struct validator MUST satisfy the structural rules of
-§21.2: spans are forbidden at the struct level; per-field detail is conveyed via the
+Select validators inspect the chosen variant: rules such as "this variant is only valid when
+the surrounding context X is true" or "variant K requires capability Y". A select validator
+sees only one variant per invocation (the one the document chose); its `Diagnostic::Struct`'s
+`fields` map (if present) is keyed by variant keywords, addressing the chosen variant's
+content.
+
+A `Diagnostic::Struct` returned by a struct or select validator MUST satisfy the structural
+rules of §21.2: spans are forbidden at the struct level; per-field detail is conveyed via the
 recursive `fields` map. The implementation translates the diagnostic per §21.3.
 
-The error code raised for a failing struct validator is the same **E310** used for scalar
-validators (one code, two shapes of diagnostic) — the `kind` of the diagnostic distinguishes
-the two cases.
+The error code raised for a failing struct or select validator is the same **E310** used for
+scalar validators (one code, three shapes of diagnostic) — the `kind` of the diagnostic and
+the parent type distinguish the cases.
 
 #### Validation Errors (E3xx)
 
@@ -2187,7 +2539,7 @@ the two cases.
 | E301 | Compound's type is not a `Struct`                                                                     | The compound's keyword                                                                                   |
 | E302 | More atoms on a compound than there are assignable member positions                                   | The first excess atom                                                                                    |
 | E303 | Atom appears at a member position that is not atom-assignable                                         | The atom                                                                                                 |
-| E304 | Atom text matches no variant keyword of a `Select` member                                              | The atom                                                                                                 |
+| E304 | Atom text matches no variant keyword of the SelectDefinition referenced by a `SelectRef` member        | The atom                                                                                                 |
 | E305 | Atom text does not match a `Field` member's `Flag` keyword                                            | The atom                                                                                                 |
 | E306 | Compound keyword is not recognized for its parent type                                                | The compound's keyword                                                                                   |
 | E307 | Required member absent, and member is not a `Field` with a `Scalar` type with non-null `default`      | Zero-width span at the end of the parent compound's last child (or at the parent keyword if no children) |
@@ -2235,13 +2587,19 @@ all retained unless the operation explicitly targets them.
 **Operation addressing.** Operations identify their target by a **path**. Two path kinds exist:
 
 - A **compound path** is a sequence of `(block_index, compound_index)` pairs descending from the
-  document root to a specific `Compound`. Used by `update-value`, `attach-remark`, `remove-remark`,
-  `delete`, `replace`, `set-flag`, `unset-flag`, `insert-before`, `insert-after`, and
-  `reorder-within-group`. An empty compound path refers to the (virtual) document root.
+  document root to a specific `Compound`. Used by `update-value`, `attach-remark`,
+  `remove-remark`, `delete`, `replace`, `set-flag`, `unset-flag`, `insert`, `insert-before`,
+  `insert-after`, `reorder-within-group`, and `reorder-groups`. An empty compound path refers to
+  the (virtual) document root.
 - A **block path** is a compound path of length 0 or more (locating the parent compound, or the
   document root when empty) plus a `block_index` selecting one of that parent's child blocks.
-  Used by `insert-into-block` and `resize-tabulation`, which target an entire block rather than a
-  compound within it.
+  Used by `insert-into-block` and `resize-tabulation`, which target an entire block rather than
+  a compound within it.
+
+`construct` is a constructor rather than a tree-mutation operation: it produces a fresh compound
+from semantic data, with no path argument; the caller subsequently uses `insert`, `insert-before`,
+`insert-after`, or `insert-into-block` to place the result. `reorder-groups` takes a compound
+path identifying the parent struct plus two member indices identifying the groups to swap.
 
 Operations that move or remove a compound MUST update any in-flight paths that referenced that
 compound's position; the caller is responsible for invalidating cached paths after a mutation.
@@ -2250,10 +2608,25 @@ compound's position; the caller is responsible for invalidating cached paths aft
 document was parsed is preserved exactly in any reserialized output.
 
 **Literal atom delimiter invariant.** The delimiter of a literal atom MUST NOT appear as a line
-within the atom's payload. When a machine updates the value of a literal atom, it MUST check whether
-the existing delimiter appears verbatim as a line in the new payload. If it does, the editor MUST
-choose a new delimiter that does not appear as a line in the new payload before writing the updated
-atom.
+within the atom's payload. When a machine updates the value of a literal atom, it MUST check
+whether the existing delimiter appears verbatim as a line in the new payload. If it does, the
+editor MUST choose a new delimiter that does not appear as a line in the new payload before
+writing the updated atom.
+
+This specification does not mandate a delimiter-selection algorithm for editor use. Two common
+strategies are:
+
+- **Dash-extension.** Start from a short fixed delimiter such as `---`; if it appears as a line
+  in the payload, lengthen by one `-` (try `----`, `-----`, …) until no collision remains. This
+  is the strategy used by canonical serialization (§22.3) and is RECOMMENDED for any tool that
+  values diff-stability.
+- **High-entropy token.** Generate a random or UUID-derived ASCII identifier and use it as the
+  delimiter (after verifying the no-collision invariant). This single-pass option suits writers
+  that have no need for short, human-readable delimiters.
+
+Any other deterministic strategy that respects the no-collision invariant is also conforming.
+The choice is an application concern; only canonical serialization (§22.3) is normatively bound
+to the dash-extension algorithm.
 
 **`delete`** — Remove a compound that is not `required`. Any remark attached to the compound is
 removed with it. If the compound's block becomes empty (no remaining compounds), the block and its
@@ -2281,41 +2654,22 @@ by iterating the struct's members in member order:
 
 1. Starting from the first member, each non-repeatable `Field` member whose type is `Scalar` is
    serialized as an inline atom, in member order, for as long as consecutive members satisfy this
-   condition and the value can be represented as an inline atom (see atom form escalation below).
+   condition and the value can be represented as an inline atom (see the atom-form escalation
+   algorithm in §22.3).
 2. If the next member after the initial run of non-repeatable scalars is an all-`Flag` `Select`,
    each present flag is serialized as an inline atom.
 3. Otherwise, if the next member is a `repeatable` `Field` whose type is `Scalar`, each
-   occurrence is serialized as an inline atom (if representable; see atom form escalation below).
+   occurrence is serialized as an inline atom (if representable per §22.3).
 4. All remaining children — including any `Field` members whose type is `Struct`, mixed-variant
    `Select` members, and any members beyond the first repeatable scalar — are serialized as compound
    children with explicit keywords.
 
-**Atom form escalation.** When serializing a `Scalar` value, the atom form is selected by
-evaluating the following predicates in the order given. The **first** predicate the value
-satisfies determines the form; predicates further down the list are not consulted. This makes
-the choice deterministic across implementations even when a value would technically be
-representable in more than one form.
-
-1. **Inline atom** — used if **all** of the following hold:
-   - the value contains no `LF` character;
-   - the value contains no run of two or more consecutive `U+0020` SPACE characters (no hard
-     space embedded in the value);
-   - the value does not begin or end with `U+0020` SPACE;
-   - the value contains no occurrence of the sigil character preceded by `U+0020` SPACE
-     (which would be parsed as the start of a remark).
-2. **Source atom** — used if the value fails the inline predicate **and** all of the
-   following hold:
-   - no line of the value ends with `U+0020` SPACE (no trailing spaces on any line);
-   - the value contains no blank line (no run of two or more consecutive `U+000A` LF
-     characters), which would terminate the source atom prematurely;
-   - the value does not require byte-exact preservation (source atoms strip indentation).
-3. **Literal atom** — used in every other case. The delimiter is chosen per §22.3's
-   delimiter rule (`---` by default; lengthened with additional `-` characters if `---`
-   appears as a line in the payload).
-
-**Tie-breaking note.** When more than one form might technically carry a value, the ordering
-above always picks the earliest. The serialization is therefore a deterministic function of
-the value's text alone.
+**Atom form escalation.** When serializing a `Scalar` value to TEL source, the atom form is
+selected by the deterministic algorithm defined in §22.3 (the canonical-serialization atom-form
+rule). `construct` MUST apply that algorithm exactly, so that two implementations producing the
+same compound from the same semantic value emit byte-identical text. The §22.3 algorithm picks
+the **first** form among inline → source → literal that the value can faithfully carry; the
+tie-breaking choice is therefore a function of the value's text alone.
 
 If a value cannot be an inline atom, the Scalar is serialized as a compound child with an
 explicit keyword and the appropriate atom body, rather than as an inline atom on the parent
@@ -2397,7 +2751,11 @@ This procedure is deterministic and produces byte-identical offsets across imple
 ### 22.3 Canonical Document Serialization
 
 A **canonical serialization** of a semantic model produces a single, deterministic TEL text
-representation. Canonical serialization follows the same conventions as the `construct` operation
+representation. Canonical serialization is defined only for documents that carry a schema — i.e.
+those whose semantic model exists. An untyped document (§8.2) has no semantic model and
+therefore no canonical form; its presentation model is its only stable representation.
+
+Canonical serialization follows the same conventions as the `construct` operation
 (§22.2) for individual compounds, extended to the entire document:
 
 - The document margin is zero.
@@ -2415,14 +2773,34 @@ representation. Canonical serialization follows the same conventions as the `con
 - No blank lines appear between children at any level.
 - The root node has no inline atoms (the document root is a virtual struct with no atom positions),
   so every root-level member is serialized as a compound child.
-- At every non-root level, the atom form escalation rules from the `construct` operation apply:
-  inline atoms are preferred, falling back to source atoms for values containing `LF` characters,
-  and to literal atoms as a last resort for values that source atom form cannot faithfully
-  represent.
+- At every non-root level, the **atom form escalation algorithm** below is applied to each
+  Scalar value:
+
+  1. **Inline atom** — used if **all** of the following hold:
+     - the value contains no `LF` character;
+     - the value contains no run of two or more consecutive `U+0020` SPACE characters (no hard
+       space embedded in the value);
+     - the value does not begin or end with `U+0020` SPACE;
+     - the value contains no occurrence of the document's sigil character preceded by `U+0020`
+       SPACE (which would be parsed as the start of a remark).
+  2. **Source atom** — used if the inline predicate fails **and** all of the following hold:
+     - no line of the value ends with `U+0020` SPACE (no trailing spaces on any line);
+     - the value contains no blank line (no run of two or more consecutive `U+000A` LF
+       characters), which would terminate the source atom prematurely;
+     - the value does not require byte-exact preservation of any character that source atoms
+       cannot losslessly carry (notably leading SPACE on a line beyond the indentation).
+  3. **Literal atom** — used in every other case.
+
+  The **first** predicate the value satisfies determines the form; predicates further down
+  the list are not consulted. This makes the choice deterministic across implementations even
+  when a value would technically be representable in more than one form.
 - Each inline atom uses a single preceding space (`precedingSpaces = 1`).
 - Each compound child is indented by one level (two spaces) relative to its parent.
-- Literal atoms use the delimiter `---` unless the payload contains that string as a line, in which
-  case a unique delimiter is chosen.
+- Literal atoms use the delimiter `---` unless the payload contains that string as a line. In
+  that case, the delimiter is lengthened by one `-` at a time (`----`, `-----`, …) until the
+  delimiter no longer appears as a line in the payload. This dash-extension algorithm is
+  normative for canonical serialization; it is what makes property P3 (canonical determinism)
+  hold for payloads that contain `---`.
 - Line endings use LF mode.
 
 Two documents with identical semantic models, serialized canonically by the same version of the
@@ -2519,14 +2897,30 @@ each derived from `B₀`, the merge produces `(D, R)`:
 attached to the target compound:
 
 ```
-# Merge conflict (agent <agent_id>, ts=<timestamp>): <operation summary>
+<sigil> Merge conflict (agent <agent_id>, ts=<timestamp>): <operation summary>
 ```
 
 When the target has been removed by a prior operation in the merge, a comment is attached
 to the nearest surviving block:
 
 ```
-# Merge conflict (agent <agent_id>, ts=<timestamp>): <operation summary> — target was removed
+<sigil> Merge conflict (agent <agent_id>, ts=<timestamp>): <operation summary> — target was removed
+```
+
+In both formats, `<sigil>` is the document's effective sigil as determined by §8.3 — not a
+hard-coded `#`. Merge engines MUST use the document's sigil when writing conflict markers; using
+`#` against a document whose sigil is (say) `;` would emit a compound keyword `#` and trigger
+**E306** at parse time rather than producing a valid remark. For example, if a document's sigil
+is `;`, a conflict remark attached to a compound at indent 1 is written as:
+
+```
+  keyword atoms  ; Merge conflict (agent alice, ts=42): update-value attempted
+```
+
+and a free-standing conflict comment whose target was removed appears as:
+
+```
+  ; Merge conflict (agent alice, ts=42): update-value — target was removed
 ```
 
 **Properties.**
@@ -2569,20 +2963,18 @@ specification is triggered. A schema is invalid if any **E2xx** condition is tri
 taxonomy of all error conditions, their trigger sections, and their recovery strategies are given in
 §19.3 and §19.5 respectively.
 
-## 24. Formal Type System and Subtyping
+## 24. Formal Type System and Subtyping (Informative)
 
-This section gives a formal account of TEL's type system. It defines a subtype relation
-`<:` over the types of §20, states the inference rules for that relation, proves that the
-layer composition rules of §20.3 produce subtypes of the base schema, and shows that the
-**Liskov Substitution Principle** holds: a document valid under a subtype is, after
-projection, a valid document under the supertype.
+This section is **informative**, not normative. It gives a formal account of TEL's type system,
+defines a subtype relation `<:` over the types of §20, states the inference rules for that
+relation, sketches that the layer composition rules of §20.3 produce subtypes of the base
+schema, and shows that the **Liskov Substitution Principle** holds: a document valid under a
+subtype is, after projection, a valid document under the supertype.
 
-The treatment here is normative for the subtype relation and the LSP theorem, but is
-written at the level of detail of a programming-language semantics — proofs are sketched,
-not formalised in a proof assistant. Implementations are not required to compute the
-subtype relation explicitly (none of the existing algorithms in §20.2 / §20.3 / §21
-do so); the relation is defined to give schema authors and tool builders a precise
-shared vocabulary for what "compatible schemas" means.
+Conformance to this specification does not require an implementation to compute `<:`
+explicitly: §20.2, §20.3, and §21 are stated as concrete algorithms and discharge every
+constraint a conforming parser must check. §24 exists to give schema authors and tool builders a
+precise shared vocabulary for what "compatible schemas" means.
 
 ### 24.1 Type Grammar
 
@@ -2610,9 +3002,10 @@ A **schema context** Δ is a finite map from Definition names to Definition bodi
 Δ : N → (M*, V*)
 ```
 
-So `Δ(N) = (members, validators)` when the schema has `define N\n  …\n  validate …`. The
-composed schema's Δ is the merge of the base schema's `Schema.types` with each layer's
-`Layer.types`, per §20.3.
+So `Δ(N) = (members, validators)` when the schema has `record N\n  …\n  validate …` (or
+analogously the `validators` list alone for a `scalar N` Definition). The composed Δ is the
+merge of the base schema's `Schema.types ∪ Schema.scalars` with each layer's
+`Layer.types ∪ Layer.scalars`, per §20.3.
 
 The `Exclude(K)` member of §20.3 is a layer-only construct that operates on Δ during
 composition; it does not appear in a composed type and so is not part of T.
@@ -2846,8 +3239,10 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Specification Status
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy (E101–E123 parsing, E201–E214 schema, E301–E311 validation) is contiguous. Worked
-examples — including TEL documents shown with their presentation model, semantic model, and
-BinTEL byte sequence — are recorded in [`demo/`](demo/). Round-trip properties
-(P1–P4) are stated in §22.4. Concurrent-edit composition is stated in §22.5. Schema
-compatibility is defined by the subtype relation of §24 and decided on signatures per §8.2.
+taxonomy (**E101–E123** parsing, **E201–E217** schema, **E301–E311** validation) is contiguous;
+every code is referenced at the point in the body where its trigger condition is defined and
+appears exactly once in the diagnostic tables of §19.3, §20.1, and §21.6. Worked examples —
+including TEL documents shown with their presentation model, semantic model, and BinTEL byte
+sequence — are recorded in [`demo/`](demo/). Round-trip properties (P1–P4) are stated in §22.4.
+Concurrent-edit composition is stated in §22.5. Schema compatibility is defined by the subtype
+relation of §24 and decided on signatures per §8.2.

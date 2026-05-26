@@ -1,7 +1,7 @@
 tel 1.0 https://tel-lang.org/schema/tel-schema
 
 # A small schema demonstrating struct validators (§21.6 of the TEL
-# Specification). The `event` record carries a struct-level validator
+# Specification). The `Event` record carries a struct-level validator
 # `start-precedes-end` that examines the `start-date` and `end-date`
 # fields together — a cross-field rule that no scalar validator could
 # express alone.
@@ -26,11 +26,11 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name event-log
 
-record event
-  field title string
-  field start-date string
-  field end-date string
+record Event
+  field title String
+  field start-date String
+  field end-date String
   validate start-precedes-end
 
 document
-  field entry event optional repeatable
+  field entry Event optional repeatable

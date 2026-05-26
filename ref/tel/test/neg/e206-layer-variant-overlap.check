@@ -161,5 +161,7 @@ Document {
     ],
 }
 errors:
-  E206 [0,0): Layer Select variant keyword overlaps existing keyword in base Struct: layer `extension` adds Select variant `name` which collides with an existing keyword in the composed schema
-  E206 [0,0): Layer Select variant keyword overlaps existing keyword in base Struct: layer `extension` Select variant `name` in overlay collides with an existing Field keyword
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E306 [0,0): Compound keyword is not recognized for its parent type: unrecognized keyword `variant` in `select`
+  E306 [0,0): Compound keyword is not recognized for its parent type: unrecognized keyword `variant` in `select`
+  E307 [0,0): Required member absent and no default available: required member `reference` is absent and has no default

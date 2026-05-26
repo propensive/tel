@@ -4,17 +4,19 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 #
 # Demonstrates the constructs an everyday schema author will reach for:
 #
-#   - required and optional `field`s of named scalar types (`string`)
+#   - required and optional `field`s of named scalar types (`String`)
 #   - a `repeatable` field (`phone`)
-#   - named `record`s (`phone-number`, `address`) referenced from
+#   - named `record`s (`PhoneNumber`, `Address`) referenced from
 #     multiple positions
-#   - a `select` member with all-`flag` variants for an enumerated status,
-#     which can be set inline as an atom on the parent compound
+#   - a named top-level `select` (`Status`) with all-`Flag` variants,
+#     placed as a `SelectRef` at the use site so it can also be set
+#     inline as an atom on the parent compound
 #   - a per-field `default` value (`country`)
 #
 # Every `field` and `variant` carries its type as an inline atom after
-# any flags; types are named with `record`/`scalar` or one of the
-# predefined names `flag`, `string`, `identifier`, `sigil`.
+# any flags; type names are PascalCase and resolve to either a user-
+# declared `record`/`scalar`/`select` or one of the predefined names
+# `Flag`, `String`, `Identifier`, `Sigil`.
 #
 # To see what a document conforming to this schema looks like, see the
 # accompanying `contact-document.tel`. This schema document is itself
@@ -22,21 +24,23 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 
 name contact
 
-record phone-number
-  field country-code string
-  field number string
+record PhoneNumber
+  field country-code String
+  field number String
 
-record address
-  field street string
-  field city string
-  field country string unknown
+record Address
+  field street String
+  field city String
+  field country String unknown
+
+select Status
+  variant active Flag
+  variant archived Flag
 
 document
-  field name string
-  field email string optional
-  field phone phone-number optional repeatable
-  field home address optional
-  field work address optional
-  select
-    variant active flag
-    variant archived flag
+  field name String
+  field email String optional
+  field phone PhoneNumber optional repeatable
+  field home Address optional
+  field work Address optional
+  select Status optional

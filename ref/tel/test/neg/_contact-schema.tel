@@ -7,5 +7,5 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 name contact-schema
 
 document
-  field name string
-  field email string
+  field name String
+  field email String

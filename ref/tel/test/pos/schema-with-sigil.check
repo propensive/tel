@@ -64,7 +64,7 @@ Document {
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "string",
+                                            text: "String",
                                             preceding_spaces: 1,
                                         },
                                     ],

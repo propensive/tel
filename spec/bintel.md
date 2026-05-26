@@ -28,30 +28,38 @@ described in RFC 2119 and RFC 8174 when, and only when, they appear in all capit
 
 ## 3. Value Hash
 
-The **value hash** of a TEL document is the SHA-256 digest of its BinTEL representation excluding
-the magic number and schema signature — that is, the hash is computed over only the document root
-encoding (as defined in the Node Encoding section). This is the general method for hashing any
+The **value hash** of a TEL document is the SHA-256 digest of its BinTEL document-root encoding
+(§7.1) — that is, the bytes produced by the recursive node encoding of the document root, with
+the magic number and schema signature of §6 excluded. This is the general method for hashing any
 semantic TEL value, including schema documents (which are themselves TEL documents).
 
-When used in a schema identifier (see §8.1 of the TEL Specification), one or more value hashes —
-one per component of the composed schema (the base plus each layer in order) — are combined into
-a **schema signature** per §8 below. The signature is encoded as [BASE-256](base256.md) for
-textual representation. A schema with no layers has a single-component signature whose bytes are
-exactly the 32-byte value hash, encoded as 32 BASE-256 characters.
+The value hash of a schema document — the SHA-256 over its full document-root encoding,
+including any `layer` children — is distinct from the **component hashes** used in a schema
+signature. A schema signature decomposes the schema into a base component (the schema document
+with all `layer` children removed) and one component per layer; each component is encoded as a
+standalone BinTEL document root and hashed separately. The two procedures and their distinct
+purposes are described in §8.1.
+
+When used in a schema identifier (see §8.1 of the TEL Specification), the ordered sequence of
+component hashes (the base hash followed by each layer hash) is combined into a **schema
+signature** per §8 below. The signature is encoded as [BASE-256](base256.md) for textual
+representation. A schema with no layers has a single-component signature whose bytes are exactly
+the 32-byte base-component hash, encoded as 32 BASE-256 characters.
 
 ### Normative Test Vector
 
-The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas defined in §20.5 of
-the TEL Specification — is:
+The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas defined in §20.5
+of the TEL Specification — is:
 
 ```
-SHA-256:  df50abce267dc79106d4320f0879fb054236e8dce9efa04872fb5e2a6560fc52
-BASE-256: ӟPΫώȦṽÇґĆÔ2ďȈyûąB6ǨӜῩӯƠHrûŞЪeŠǼR
+SHA-256:  9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd
+BASE-256: Ґ3ϏąNǑOτŠϏÐEЂҢζΞȚψŀύȐ5ỲГIЫtίṽỲƨӝ
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` (980 BinTEL bytes; raw
-bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes
-the resulting document-root encoding MUST produce this value byte-for-byte.
+A conforming implementation that encodes the canonical `tel-schema.tel` (887 BinTEL bytes; raw
+bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
+resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
+in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
 
 ## 4. Integer Encoding
 
@@ -97,27 +105,35 @@ keyword and the resolved child type, and proceeds with the corresponding type-sp
 
 ## 6. File Layout
 
-A BinTEL stream represents **exactly one** TEL semantic model. A stream consisting of two or more
-concatenated BinTEL encodings is not a conforming BinTEL stream; a producer MUST NOT emit such a
-sequence and a decoder MUST treat the bytes following a complete BinTEL document root as a
-framing error (§10) rather than as a second document.
+A BinTEL document is a self-contained byte sequence whose total length is determined by parsing
+its fields; there is no top-level length prefix. A BinTEL document represents **exactly one** TEL
+semantic model and is **schema-bound**: every BinTEL document carries a non-empty schema
+signature that identifies the schema used to interpret its keyword indices. Untyped TEL
+documents (the absent-schema row of §8.2 of the TEL Specification) cannot be encoded as BinTEL.
+A byte sequence consisting of two or more concatenated BinTEL documents is not a conforming
+BinTEL document; a producer MUST NOT emit such a sequence and a decoder MUST treat any bytes
+following a complete document root as a framing error (§10) rather than as a second document.
+Any embedding that needs to multiplex BinTEL documents over a shared channel is responsible for
+framing at its own layer.
 
-A BinTEL stream consists of the following fields in order:
+A BinTEL document consists of the following fields in order:
 
 1. **Magic number**: the 4 bytes `B2 C4 B5 BB`. When the document is carried in BASE-256
    textual form (§9), these bytes appear as the four Greek letters at positions `0xB2`, `0xC4`,
    `0xB5`, and `0xBB` of the BASE-256 alphabet defined in the
    [BASE-256 Specification](base256.md) — namely the characters `β` (`U+03B2` Greek small
    beta), `τ` (`U+03C4` Greek small tau), `ε` (`U+03B5` Greek small epsilon), and `λ`
-   (`U+03BB` Greek small lambda). A BinTEL stream therefore begins with the literal string
+   (`U+03BB` Greek small lambda). A BinTEL document therefore begins with the literal string
    `βτελ` in BASE-256 textual form — visually evocative of "binary TEL" (`β` for binary, `τελ`
    the Greek root for *tel*-) and, because none of the bytes is below `0x80`, unlikely to be
    mistaken for the start of an ASCII or UTF-8 text file.
 2. **Schema signature**: the byte length of the signature (integer), followed by the signature
    bytes. The schema signature (whose construction is defined in the Schema Signature section
    below) identifies the composed schema (base plus layers) used to type the document. The byte
-   length MUST satisfy `length ≥ 32` and `(length − 30) mod 2 == 0` (so that the signature
-   describes a valid palimpsest at cadence k = 2, per §8.2).
+   length MUST satisfy `length ≥ 32` and `(length − 30) mod 2 == 0` — equivalently, `length =
+   30 + 2n` for some `n ≥ 1`, so that the signature describes a valid palimpsest at cadence
+   `k = 2` over at least one component (the base schema). A length of zero or any length not
+   matching this pattern is a framing error (B03).
 3. **Document root**: encoded using the node encoding described in the Node Encoding section
    below (root form). The encoding terminates exactly when the recursive procedure of §7.8 has
    consumed the last byte of the document root; there is no trailing tag or length.
@@ -135,7 +151,10 @@ compound that fill the same schema member.
 
 ### 7.1 Encoding by Element Type
 
-**Document root.** The root is a virtual struct with no parent keyword. It is encoded as:
+**Document root.** The root is a virtual struct with no parent keyword. Its keyword order is the
+keyword order of `Schema.document` (the root Struct of the composed schema, §20 of the TEL
+Specification); every keyword index appearing among the root's children is a position in that
+keyword order. The root is encoded as:
 
 1. The number of root child nodes (integer).
 2. Each root child node, in canonical order (§7.2), using the struct, scalar, or flag encoding
@@ -234,15 +253,16 @@ document, and BinTEL never encodes an invalid document.
 BinTEL encodes the semantic model, in which a required `Scalar` member with a non-null default
 is semantically present even when it was absent from the source document. Therefore, when
 encoding a document to BinTEL, a missing required scalar whose default is used MUST be encoded
-as a scalar node with the default value string. The encoded **value string** is the semantic
-value of the schema's `Scalar.default` — that is, the post-atom-form-decoding text: the same
-string that would be returned by reading the default scalar's `text` field from the parsed
-schema. Equivalent schemas that declare the default via different atom forms (inline atom,
+as a scalar node with the default value string. The encoded **value string** is the
+post-atom-form-decoded text — the `string` value returned by reading the default scalar's `text`
+field from the parsed schema, *not* any atom-form bytes used to express it in the schema
+source. Equivalent schemas that declare the default via different atom forms (inline atom,
 source atom, or literal atom containing identical textual content) MUST therefore produce
 byte-identical BinTEL encodings for the same missing-required-scalar case. This ensures the
 BinTEL encoding is identical regardless of whether the member was explicitly written in the
 document or filled by its default, and regardless of the atom form used by the schema author
-to declare the default.
+to declare the default. The same principle applies to every Scalar value encoded by §7.1:
+BinTEL preserves only the post-atom-decoded text, never atom-form presentation details.
 
 ### 7.7 Framing
 
@@ -253,12 +273,15 @@ determine the child's type (Struct, Scalar, or Flag) from the next-read keyword 
 
 ### 7.8 Decoding
 
-A BinTEL decoder consumes the byte stream defined in §6 and produces the semantic model defined
+A BinTEL decoder consumes the byte sequence defined in §6 and produces the semantic model defined
 in §18 of the TEL Specification. The decoder MUST have access to the resolved composed schema
 before it begins reading the document root (§6 fields 1–2 supply the magic number and the schema
 signature; the composed schema is obtained per §8.2 of the TEL Specification).
 
-The decoding algorithm is recursive:
+The decoding algorithm is recursive. The pseudocode below treats `bytes` as a **stateful byte
+cursor**: each `next N bytes`, `decode-varint(bytes)`, and similar operation advances the cursor;
+reading past end-of-input raises B09, and any input bytes remaining when the document root
+completes raise B08.
 
 ```
 decode-document(bytes, schema):
@@ -268,6 +291,7 @@ decode-document(bytes, schema):
   // Resolution to a composed schema is handled at the §8.2 (TEL spec) layer;
   // this algorithm assumes the schema is already composed.
   root = decode-struct-body(bytes, schema.document.members)
+  if bytes-remaining(): report error (B08)
   return Document { signature: signature-bytes, root }
 
 decode-struct-body(bytes, members):
@@ -279,7 +303,7 @@ decode-struct-body(bytes, members):
 
 decode-element(bytes, parent-members):
   kidx = decode-varint(bytes)
-  if kidx >= keyword-count(parent-members): report error
+  if kidx >= keyword-count(parent-members): report error (B05)
   (keyword, type) = lookup-by-index(parent-members, kidx)
   resolved-type = resolve(type, schema)   // Reference resolution per §20.2
   switch resolved-type:
@@ -288,8 +312,8 @@ decode-element(bytes, parent-members):
       return Struct-element { kidx, keyword, children: sub-children }
     Scalar:
       value-length = decode-varint(bytes)
-      value-bytes = next value-length bytes
-      value-text = UTF-8-decode(value-bytes)         // §4.1 of TEL spec applies
+      value-bytes = next value-length bytes        // B06 if cursor advances past EOI
+      value-text = UTF-8-decode(value-bytes)       // B07 if not valid UTF-8
       return Scalar-element { kidx, keyword, text: value-text }
     Flag:
       return Flag-element { kidx, keyword }
@@ -316,30 +340,30 @@ over that root encoding alone, without the magic number or schema signature.
 
 ### 8.1 Per-Component Encoding
 
-The base schema and each layer are encoded as standalone BinTEL document roots using §7. The
-construction differs slightly between the two cases because a base schema is a complete
-tel-schema document while a layer is only a sub-tree.
+The base schema and each layer are encoded as standalone BinTEL document roots using §7. Both
+cases reuse the entire composed `tel-schema` namespace (every Definition reachable from
+`Schema.records ∪ Schema.scalars ∪ Schema.selects`); only the root Struct differs:
 
-**Base-schema component.** The base schema's BinTEL encoding is produced by encoding the schema
-document **with all `layer` compounds removed**, as a `tel-schema` document. That is: the
-encoded element list at the root contains the `name`, `sigil`, `define`, and `document`
-children, but no `layer` children, even when the original schema document declared layers. The
-base schema is the schema-without-layers.
-
-**Layer component.** A layer's BinTEL encoding is produced by treating the `layer` compound's
-children as the document root of a virtual schema whose `document` Struct is the `layer-body`
-Definition from tel-schema. Concretely: the encoded element list at the root contains the
-layer's `name` (Scalar), each of its `define`-compound children, and its `root` child (if
-present), in canonical order per §7.2 (which, by member-order convention, matches the order
-listed). The layer's `Struct` is the `layer-body` Definition, so keyword indices are computed
-against that Definition's keyword order.
+- **Base-schema component** uses `Schema.document = Document` (the full schema-document root,
+  per the tel-schema `Document` RecordDefinition). The base schema's BinTEL encoding is
+  produced by encoding the schema document **with all `layer` compounds removed**. That is:
+  the encoded element list at the root contains the `name`, `sigil`, `record`, `scalar`,
+  `select`, and `document` children, but no `layer` children, even when the original schema
+  document declared layers. The base schema is the schema-without-layers.
+- **Layer component** uses `Schema.document = Layer` (the tel-schema `Layer` RecordDefinition).
+  The layer's BinTEL encoding treats the `layer` compound's children as the document root of a
+  virtual schema whose `document` Struct is the `Layer` Definition from tel-schema and whose
+  Definition namespace is inherited unchanged from the surrounding schema. Concretely: the
+  encoded element list at the root contains the layer's `name`, each of its `record` /
+  `scalar` / `select` children, and its `overlay` child (if present), in canonical order per
+  §7.2. Keyword indices are computed against `Layer`'s keyword order.
 
 A conforming implementation of `schema-signature(schema-document)` therefore:
 
 1. Constructs the base-schema document (the schema document minus its `layer` compounds) and
    computes h₀ = SHA-256 of its document-root BinTEL encoding.
-2. For each `layer` compound L_i in source order, computes h_{i+1} = SHA-256 of the document-root
-   BinTEL encoding of L_i's children under the `layer-body` Definition.
+2. For each `layer` compound L_i in source order, computes h_{i+1} = SHA-256 of the
+   document-root BinTEL encoding of L_i's children under the `Layer` Definition.
 3. Combines the sequence (h₀, h₁, …, h_n) into the palimpsest signature per §8.2 below.
 
 ### 8.2 Signature Construction
@@ -387,8 +411,13 @@ hashes of all components defined in the schema file):
    with S = S′ and the candidate h appended to the front of the output sequence.
 4. When n steps have been completed, S MUST be zero. If S ≠ 0, the candidate path is invalid;
    backtrack and try the next candidate.
-5. Exactly one valid sequence MUST exist. If no valid sequence is found, or if more than one is
-   found, the signature is malformed.
+5. A conforming decoder MUST return the unique valid sequence if one exists. If no valid
+   sequence is found against the candidate library, the signature is malformed (B04). The
+   "more than one valid sequence" case requires a SHA-256 collision among components — a
+   second-preimage attack on SHA-256 — and is computationally infeasible under the security
+   assumptions of §7 of the [Palimpsest Specification](palimpsest.md); a decoder that
+   nevertheless encounters multiple satisfying sequences MUST also report B04 (treating it as
+   a corruption or integrity failure rather than as a regular decoding outcome).
 
 The decoded sequence gives the component hashes in order: h₀ (base schema), h₁ (first layer), …,
 h_{n−1} (last layer). A BinTEL decoder uses this sequence to locate and compose the schema before
@@ -438,15 +467,10 @@ Specification.
 | B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
 | B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E210 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
 
-A decoder SHOULD distinguish a recoverable error (e.g., a malformed scalar at a known position
-where the schema permits an absent value) from a fatal error (e.g., a bad magic number that
-invalidates the rest of the stream). For the codes above, the following are RECOMMENDED behaviour:
-
-- **B01, B02 (when decoding magic/signature length), B03, B04**: fatal — abort decoding.
-- **B05, B06, B07, B09**: fatal at the point of detection — abort decoding. (A scalar with a
-  bad UTF-8 sequence cannot be recovered; downstream callers cannot rely on partial decoding.)
-- **B08**: fatal — the stream is malformed and any prior decoding output should be discarded.
-- **B10**: fatal — the schema is malformed; report the configuration error and abort.
+All BinTEL error codes (B01–B10) are **fatal**: on any such error a conforming decoder MUST
+abort decoding and MUST NOT emit any partial result. BinTEL is the authoritative serialisation
+of the semantic model — once any byte is found inconsistent with §6 / §7, no remaining bytes
+can be trusted to convey their nominal types and lengths. No recovery is specified for BinTEL.
 
 A decoder MAY perform additional consistency checks beyond those above (for example, checking
 that a Struct-typed child's claimed type is actually a Struct after Reference resolution); these

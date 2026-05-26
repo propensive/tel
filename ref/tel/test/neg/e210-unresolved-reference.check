@@ -71,4 +71,4 @@ Document {
     ],
 }
 errors:
-  E210 [0,0): Reference does not resolve to a Definition in the schema: Reference `does-not-exist` does not resolve to any Definition
+  E310 [0,14): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

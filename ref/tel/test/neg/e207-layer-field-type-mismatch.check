@@ -132,4 +132,5 @@ Document {
     ],
 }
 errors:
-  E207 [0,0): Layer Field merge requires both base and layer types to be Struct: layer `extension` field `foo` in overlay: type mismatch (base and layer must declare the same type, or both be Struct)
+  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
+  E310 [0,10): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter
