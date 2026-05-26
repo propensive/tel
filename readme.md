@@ -1,4 +1,4 @@
-<p align="center"><img src="/doc/logo.svg" height="300"></p>
+<p align="center"><img src="logo.svg" height="300"></p>
 
 # TEL, the Typed Element Language
 
