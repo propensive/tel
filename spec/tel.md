@@ -616,9 +616,14 @@ subsequent line until either:
 
 Blank lines are permitted within a source atom.
 
-The captured lines are joined with a single `LF` between each pair into a single `text` string.
-The trailing `LF` of the last captured line is NOT included in `text`. The array of captured
-lines therefore yields a `text` field of the form `line_0 LF line_1 LF … LF line_{n-1}`.
+The captured lines (in order) are converted to a single `text` string by appending `LF` after
+each line, including the last. The array of captured lines therefore yields a `text` field of
+the form `line_0 LF line_1 LF … LF line_{n-1} LF` — every captured line is `LF`-terminated. A
+source atom that ends at end-of-file inherits the file's trailing `LF` as the terminator of its
+final captured line; a source atom that ends at a dedent likewise inherits the `LF` of the
+preceding non-blank line. A blank line within a source atom contributes a zero-length captured
+line; consecutive blank lines yield consecutive empty captured lines, each contributing one
+`LF`.
 
 For each non-blank captured line, exactly the indentation of the first source-atom line is stripped
 from the start of the line. Any surplus leading spaces are preserved.
@@ -920,10 +925,12 @@ TEL defines both a presentation model and a semantic model.
 
 ### 18.1 Presentation Model
 
-The presentation model is constructed during parsing. When a schema is available, parsing and type
-assignment proceed together: the schema informs error recovery decisions (particularly for
-indentation errors, whose recovery algorithm is defined in §19.5) that cannot be resolved from
-syntax alone.
+The presentation model is constructed during parsing. When a schema is available, parsing and
+type assignment proceed together — the result is a presentation model and a semantic model
+produced in a single pass — and the schema is consulted to disambiguate odd-indented lines
+(the schema-aware **E107 recovery** of §19.5). When no schema is available, the parser falls
+back to the schema-independent **shallower-wins** rule on E107; the rest of the recovery
+table of §19.5 is schema-independent in either case.
 
 It preserves:
 
@@ -1034,11 +1041,13 @@ algorithm (§20.2).
 
 In addition to parsing errors, a TEL document may be structurally invalid with respect to a schema.
 
-When a schema is available, it is applied during parsing rather than as a separate post-processing
-stage. This is necessary because the schema informs certain error recovery decisions — in
-particular, indentation recovery uses keyword validity at candidate indent levels to resolve
-ambiguous lines (§19.5). The result is a presentation model and semantic model constructed
-together in a single pass.
+When a schema is available, it is applied during parsing rather than as a separate
+post-processing stage. This is necessary because the schema is consulted to disambiguate
+odd-indented lines (the schema-aware **E107 recovery** of §19.5): for a line whose relative
+indentation is odd, the parser picks the candidate depth at which the line's keyword is a
+valid member of the parent struct. The result is a presentation model and a semantic model
+constructed together in a single pass. When no schema is available, indentation recovery
+falls back to the schema-independent shallower-wins rule of §19.5.
 
 ### 19.1 Atom and Compound Interchangeability
 
@@ -1194,21 +1203,58 @@ most plausible available type. Specific recovery notes:
 
 #### Indentation Recovery (E107, E111)
 
-When a line's relative indentation after the margin is odd (E107), the line sits between two valid
-indentation positions: one space deeper and one space shallower. The normative recovery in v1.0 is
-the **shallower-wins rule**:
+When a line's relative indentation after the margin is odd (E107), the line sits between two
+valid indentation positions: one space shallower and one space deeper. v1.0 specifies two
+recovery rules, selected by whether a schema is available at parse time.
+
+**Schema-aware recovery (when a schema is available).** Let `s` be the number of spaces after
+the margin. Let `shallower = ⌊s / 2⌋` and `deeper = shallower + 1`. The two candidate depths
+correspond to two candidate parent structs: at `shallower`, the parent is the most recent
+compound (or the document root if `shallower = 0`) that would accommodate a peer at that
+depth; at `deeper`, the parent is the compound at depth `shallower` (the most recent open
+compound at that depth).
+
+For each candidate, the parser computes a **validity bit** for the line's keyword `K`:
+
+- A candidate is **valid** if the parent compound exists, its resolved type (after
+  `Reference` resolution per §20.2) is a `Struct`, and `K` appears in that `Struct`'s
+  keyword order (Field keywords plus the variant keywords of any `SelectRef` member, per
+  §20).
+- A candidate is **invalid** otherwise. This subsumes the cases where the parent doesn't
+  exist (e.g. the line is at the very start of the document and the deeper candidate would
+  require an open compound that isn't there); the parent is a comment, tabulation, or row
+  (which cannot have children, by §13 and §16); the parent's resolved type is `Scalar` or
+  `Flag` (also cannot have children); or `K` is not declared at that position.
+
+The recovery then proceeds:
 
 1. Record an E107 error whose span covers the line's leading whitespace.
-2. Treat the line as if its relative indentation were `⌊spaces / 2⌋` (integer division), i.e. the
-   shallower of the two adjacent even levels.
+2. Choose the placement:
+   - if only `shallower` is valid: place the line at `shallower`;
+   - if only `deeper` is valid: place the line at `deeper`;
+   - if both are valid OR both are invalid: place the line at `shallower` (shallower-wins
+     tiebreak).
+3. Parsing continues from the next line at the chosen depth.
+
+This procedure is deterministic: a given (line, ancestor-stack, composed schema) triple
+always produces the same placement.
+
+**Schema-independent recovery (when no schema is available).** When the parser has no schema
+(an untyped document, per the absent-invocation-and-document-schema row of §8.2), the
+schema-aware validity check cannot be performed. The parser falls back to the **shallower-wins
+rule**:
+
+1. Record an E107 error whose span covers the line's leading whitespace.
+2. Treat the line as if its relative indentation were `⌊spaces / 2⌋` (integer division), i.e.
+   the shallower of the two adjacent even levels.
 3. Parsing continues from the next line as if the recovery had not occurred.
 
-This rule is deterministic, schema-independent, and handles every plausible single-line slip
-(e.g. an extra or missing leading space). A schema-aware variant — consulting the keyword's
-validity at each candidate indent — was considered and is deliberately deferred: the shallower
-interpretation is correct in all realistic mis-indentations a human or agent would produce, and
-the schema-aware path would require parser-level lookahead. A future revision MAY introduce full
-backtracking; conformance against v1.0 only requires the shallower-wins rule.
+The schema-independent rule is also the fallback embedded in step 2 of the schema-aware rule:
+when both candidates are invalid (or both valid), the line is placed at `shallower`. A parser
+that prefers a single code path may implement only the schema-independent rule; the
+schema-aware rule is then a strict refinement that picks `deeper` only when `shallower` would
+necessarily mis-place the line (the keyword is not declared at `shallower`'s parent but IS
+declared at `deeper`'s parent).
 
 **E111 over-indentation.** When a line is indented more than one level deeper than the previous
 compound line, the over-indented line is recorded as an **E111** error and omitted from the
@@ -2135,6 +2181,22 @@ The BinTEL document root encoding of `tel-schema.tel` is 887 bytes; the raw byte
 in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
 [`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
 Specification.
+
+**Verifying the built-in.** An implementation's built-in `tel-schema` Schema value (the
+"axiom") is a hand-written construction; it is easy to introduce silent drift between the
+axiom and the canonical [`tel-schema.tel`](tel-schema.tel). Conforming implementations
+SHOULD therefore include two self-consistency checks:
+
+- **Structural-equality check.** Parse `tel-schema.tel` against the axiom and run
+  `construct_schema` (§20.6) on the result; assert that the constructed `Schema` is
+  structurally equal to the axiom (modulo the built-in scalars `Identifier`, `TypeName`,
+  `Sigil`, `String`, which an implementation may inject into the axiom but which
+  `construct_schema` will not produce from the document).
+- **Value-hash check.** Encode the axiom (or, equivalently, the parsed-and-constructed
+  document) as BinTEL and compute its SHA-256; assert that the result equals the pinned
+  value above. This is the content-addressed counterpart to the structural check.
+
+Pinning both invariants in tandem makes axiom drift very hard to introduce undetected.
 
 ### 20.6 Schema Construction from the Semantic Model
 

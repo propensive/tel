@@ -11,17 +11,15 @@ Document {
                     keyword: "code",
                     atoms: [
                         Literal {
-                            delimiter: "EOF",
-                            text: "this literal is never closed",
+                            delimiter: "END",
+                            text: "first\r\nsecond\nthird\r",
                         },
                     ],
                     remark: None,
                     children: [],
                 },
             ],
-            trailing_blank_lines: 0,
+            trailing_blank_lines: 1,
         },
     ],
 }
-errors:
-  E115 [5,14): Unclosed literal atom

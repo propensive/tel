@@ -2425,8 +2425,23 @@ pub struct ParseResult {
 }
 
 pub fn parse(input: &str) -> ParseResult {
+    parse_inner(input, None)
+}
+
+/// Parse with schema-aware E107 (odd-indentation) recovery enabled.
+/// Per §19.5: when a schema is available, the parser disambiguates a line
+/// whose relative indentation is odd by picking the candidate depth at
+/// which the line's keyword is a valid member of the parent struct. With
+/// no schema (or via `parse`), the parser falls back to the
+/// schema-independent shallower-wins rule. All other behaviour is
+/// identical.
+pub fn parse_with_schema(input: &str, schema: &Schema) -> ParseResult {
+    parse_inner(input, Some(schema))
+}
+
+fn parse_inner(input: &str, schema: Option<&Schema>) -> ParseResult {
     let mut p = ParserState::new(input);
-    let doc = p.run();
+    let doc = p.run(schema);
     ParseResult { document: doc, errors: p.errors }
 }
 
@@ -2447,7 +2462,7 @@ impl ParserState {
         }
     }
 
-    fn run(&mut self) -> Document {
+    fn run(&mut self, schema: Option<&Schema>) -> Document {
         let mut start = 0;
 
         // E101: BOM
@@ -2529,7 +2544,7 @@ impl ParserState {
         }
 
         // Build the tree from remaining lines
-        let children = self.build_tree(&raw_lines, line_idx);
+        let children = self.build_tree(&raw_lines, line_idx, schema);
 
         Document { interpreter_directive, pragma, line_endings, children }
     }
@@ -2733,16 +2748,21 @@ impl ParserState {
 
     // ── Tree builder ────────────────────────────────────────────────────────
 
-    fn build_tree(&mut self, raw_lines: &[RawLine], start_idx: usize) -> Vec<Block> {
+    fn build_tree<'a>(&'a mut self, raw_lines: &'a [RawLine], start_idx: usize, schema: Option<&'a Schema>) -> Vec<Block> {
+        let all_chars: &[char] = &self.all_chars;
         let mut bld = TreeCtx {
             raw: raw_lines,
+            all_chars,
             idx: start_idx,
             margin: self.margin,
             sigil: self.sigil,
             errors: Vec::new(),
+            schema,
+            ancestors: Vec::new(),
         };
         let blocks = bld.parse_blocks(-1); // -1 = accept indent 0
-        self.errors.append(&mut bld.errors);
+        let errs = std::mem::take(&mut bld.errors);
+        self.errors.extend(errs);
         blocks
     }
 }
@@ -2750,10 +2770,21 @@ impl ParserState {
 /// Tree-building context. Works directly on raw lines.
 struct TreeCtx<'a> {
     raw: &'a [RawLine],
+    /// The full document character buffer. Needed to recover bytes that
+    /// `split_lines` strips (specifically, CR before LF) for literal-atom
+    /// payloads, which preserve all bytes between structural LFs per §15.
+    all_chars: &'a [char],
     idx: usize,
     margin: usize,
     sigil: char,
     errors: Vec<TelError>,
+    /// Schema used for schema-aware E107 recovery. `None` falls back to the
+    /// schema-independent shallower-wins rule (§19.5).
+    schema: Option<&'a Schema>,
+    /// Stack of keywords of currently-open ancestor compounds, indexed by
+    /// depth. `ancestors[d]` is the keyword of the compound at depth `d`,
+    /// for `d` in `0..ancestors.len()`. Empty at the document root.
+    ancestors: Vec<String>,
 }
 
 /// What kind of line is this?
@@ -2795,13 +2826,82 @@ impl<'a> TreeCtx<'a> {
 
         let after = &chars[margin..];
         let spaces = after.iter().take_while(|&&c| c == ' ').count();
-        if spaces % 2 != 0 {
-            // E107: odd indentation. §19.5's shallower-wins rule: record E107
-            // and treat the line as if its indent were ⌊spaces / 2⌋ (integer
-            // division), the shallower of the two adjacent even levels.
-            self.errors.push(TelError::new(ErrorCode::E107, line.start, line.start + margin + spaces));
+        if spaces % 2 == 0 {
+            return Some(spaces / 2);
         }
-        Some(spaces / 2)
+
+        // E107: odd indentation. §19.5 specifies schema-aware recovery when a
+        // schema is available, falling back to the schema-independent
+        // shallower-wins rule otherwise.
+        self.errors.push(TelError::new(ErrorCode::E107, line.start, line.start + margin + spaces));
+        let shallower = spaces / 2;
+        let deeper = shallower + 1;
+
+        // Schema-aware path: check which candidate's parent admits the line's
+        // keyword. Defaults to shallower when both are valid or both invalid.
+        if self.schema.is_some() {
+            let keyword = self.line_keyword(ri);
+            let shallower_valid = self.is_keyword_admissible_at_depth(&keyword, shallower);
+            let deeper_valid    = self.is_keyword_admissible_at_depth(&keyword, deeper);
+            match (shallower_valid, deeper_valid) {
+                (true, false) => return Some(shallower),
+                (false, true) => return Some(deeper),
+                _ => {} // both valid or both invalid — fall through to shallower-wins
+            }
+        }
+
+        Some(shallower)
+    }
+
+    /// Extract the line's keyword: the first non-space sequence after the
+    /// margin + leading spaces, up to the next space or end-of-line.
+    fn line_keyword(&self, ri: usize) -> String {
+        let line = &self.raw[ri];
+        if line.is_blank() { return String::new(); }
+        let chars = &line.chars;
+        let margin = self.margin.min(chars.len());
+        let mut i = margin;
+        while i < chars.len() && chars[i] == ' ' { i += 1; }
+        let start = i;
+        while i < chars.len() && chars[i] != ' ' { i += 1; }
+        chars[start..i].iter().collect()
+    }
+
+    /// Is `keyword` a valid member-keyword for a compound placed at
+    /// `target_depth`? Used by schema-aware E107 recovery. Returns `false`
+    /// if there's no schema, no parent at `target_depth - 1`, the parent's
+    /// type can't be resolved to a Struct, or the keyword doesn't appear
+    /// in the parent's keyword order.
+    fn is_keyword_admissible_at_depth(&self, keyword: &str, target_depth: usize) -> bool {
+        let schema = match self.schema { Some(s) => s, None => return false };
+        // Parent depth = target_depth - 1. Resolved struct's members
+        // determine admissibility.
+        let parent_members = match self.resolved_members_at_depth(target_depth, schema) {
+            Some(m) => m,
+            None => return false,
+        };
+        keyword_in_members(keyword, &parent_members, schema)
+    }
+
+    /// Walk the schema from the document root through `ancestors[0..depth-1]`
+    /// keywords to find the resolved member list at `depth - 1` (i.e. the
+    /// parent of a compound at `depth`). Returns `None` if any step fails
+    /// to resolve (missing ancestor, non-Struct resolved type, unknown
+    /// keyword on the way down). For `depth == 0` returns the document
+    /// root's members directly.
+    fn resolved_members_at_depth(&self, depth: usize, schema: &Schema) -> Option<Vec<Member>> {
+        // Need ancestors[0..depth-1] to walk down; if depth > ancestors.len()
+        // there's no compound at depth-1, so admissibility is false.
+        if depth > self.ancestors.len() { return None; }
+        let mut current: Vec<Member> = schema.document.members.clone();
+        for d in 0..depth {
+            let kw = &self.ancestors[d];
+            // Find the member or variant whose keyword is `kw`, then
+            // resolve its type to a Struct's members.
+            let resolved = lookup_keyword_struct(&current, kw, schema)?;
+            current = resolved;
+        }
+        Some(current)
     }
 
     /// Get content after margin+indent for a non-blank line.
@@ -3035,7 +3135,13 @@ impl<'a> TreeCtx<'a> {
                             }
                         }
                     } else {
+                        // Push this compound's keyword onto the ancestor
+                        // stack so that schema-aware E107 recovery in any
+                        // nested parse_blocks call can resolve the parent
+                        // struct correctly. Pop on the way out.
+                        self.ancestors.push(compound.keyword.clone());
                         self.parse_compound_body(&mut compound, expected as i32);
+                        self.ancestors.pop();
                     }
 
                     cur.compounds.push(compound);
@@ -3255,27 +3361,70 @@ impl<'a> TreeCtx<'a> {
 
         self.idx += 1; // consume delimiter line
 
-        // Scan raw lines for closing delimiter
-        let mut payload_lines: Vec<String> = Vec::new();
-        let mut found = false;
-
+        // Scan raw lines for the closing-delimiter match: a line whose
+        // content (after CR-stripping) equals the delimiter exactly.
+        let mut close_idx: Option<usize> = None;
         while self.idx < self.raw.len() {
             let line_text = self.raw[self.idx].text();
-            self.idx += 1;
             if line_text == delimiter {
-                found = true;
+                close_idx = Some(self.idx);
+                self.idx += 1; // consume closing delimiter line
                 break;
             }
-            payload_lines.push(line_text);
+            self.idx += 1;
         }
 
-        if !found {
-            self.errors.push(TelError::new(
-                ErrorCode::E115, self.raw[ri].start, self.raw[ri].start + self.raw[ri].chars.len(),
-            ));
-        }
-
-        let text = payload_lines.join("\n");
+        let text = match close_idx {
+            Some(ci) if ci > ri => {
+                // Per §15: every byte between the opening LF and the
+                // closing-delimiter LF — including any CR, bare LF, or CR
+                // LF sequence — is payload content. We reconstruct the
+                // payload by slicing the raw character buffer between the
+                // opening LF (just before raw[ri+1].start) and the LF
+                // immediately preceding the closing delimiter (at
+                // raw[ci].start - 1). If a CR precedes the closing LF
+                // (CRLF source), the CR is included as a payload byte —
+                // it is the line terminator of the last payload line, not
+                // a structural marker.
+                if ri + 1 > self.raw.len() {
+                    String::new()
+                } else {
+                    let payload_start = self.raw[ri + 1].start;
+                    // P_close = position of the LF right before the closing
+                    // delimiter content. The closing delimiter line starts
+                    // at self.raw[ci].start; the LF that precedes it is at
+                    // self.raw[ci].start - 1 (always present because a
+                    // closing-delimiter match requires LF + delim + LF).
+                    let payload_end = self.raw[ci].start.saturating_sub(1);
+                    if payload_end >= payload_start && payload_end <= self.all_chars.len() {
+                        self.all_chars[payload_start..payload_end].iter().collect()
+                    } else {
+                        String::new()
+                    }
+                }
+            }
+            Some(_) => String::new(), // closing delim on the same line as opener (degenerate)
+            None => {
+                // E115: unclosed literal atom. Per §19.5's E115 recovery,
+                // treat the payload as everything from the opening
+                // delimiter line to end of file (excluding the final LF).
+                self.errors.push(TelError::new(
+                    ErrorCode::E115, self.raw[ri].start, self.raw[ri].start + self.raw[ri].chars.len(),
+                ));
+                if ri + 1 < self.raw.len() {
+                    let payload_start = self.raw[ri + 1].start;
+                    // To EOF: take the entire remaining buffer, stripping
+                    // a single trailing LF if present.
+                    let mut end = self.all_chars.len();
+                    if end > payload_start && self.all_chars.get(end - 1) == Some(&'\n') {
+                        end -= 1;
+                    }
+                    self.all_chars[payload_start..end].iter().collect()
+                } else {
+                    String::new()
+                }
+            }
+        };
         Some((delimiter, text))
     }
 }
@@ -3284,6 +3433,57 @@ impl<'a> TreeCtx<'a> {
 enum PrevKind { Start, Blank, Comment, Tabulation, Compound }
 
 /// Find the position of a remark introducer in content, if any.
+/// Schema-aware-recovery helper: does `keyword` appear as a Field's keyword
+/// or as a variant keyword of any SelectRef-referenced SelectDefinition
+/// within `members`?
+fn keyword_in_members(keyword: &str, members: &[Member], schema: &Schema) -> bool {
+    for m in members {
+        match m {
+            Member::Field(f) => if f.keyword == keyword { return true; },
+            Member::SelectRef(s) => {
+                if let Some(variants) = resolve_select_ref(&s.reference, schema) {
+                    if variants.iter().any(|v| v.keyword == keyword) {
+                        return true;
+                    }
+                }
+            }
+            Member::Exclude(_) => {}
+        }
+    }
+    false
+}
+
+/// Schema-aware-recovery helper: look up `keyword` in `members` and return
+/// the resolved member-list of the matching struct type (after Reference
+/// resolution). Returns `None` if the keyword isn't found or doesn't
+/// resolve to a Struct.
+fn lookup_keyword_struct(members: &[Member], keyword: &str, schema: &Schema) -> Option<Vec<Member>> {
+    for m in members {
+        match m {
+            Member::Field(f) if f.keyword == keyword => {
+                return match resolve(&f.r#type, schema) {
+                    ResolvedType::Struct(ms) => Some(ms.to_vec()),
+                    _ => None,
+                };
+            }
+            Member::SelectRef(s) => {
+                if let Some(variants) = resolve_select_ref(&s.reference, schema) {
+                    for v in variants {
+                        if v.keyword == keyword {
+                            return match resolve(&v.r#type, schema) {
+                                ResolvedType::Struct(ms) => Some(ms.to_vec()),
+                                _ => None,
+                            };
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn find_remark_pos(content: &[char], sigil: char) -> Option<usize> {
     let mut i = 0;
     let mut hard_space_seen = false;
@@ -4840,6 +5040,165 @@ mod tests {
             .map(|c| c.keyword.as_str()).collect();
         assert!(root_keywords.contains(&"a"), "got: {:?}", root_keywords);
         assert!(root_keywords.contains(&"c"), "got: {:?}", root_keywords);
+    }
+
+    /// Schema-aware E107 recovery (§19.5): when a schema is supplied and
+    /// the line's keyword is valid only at the deeper candidate depth, the
+    /// parser places the line at deeper rather than the default shallower.
+    /// Schema: root has `field outer Outer`; `Outer` has `field inner String`.
+    /// Document: `outer` at indent 0, then a 3-space-indented `inner foo`.
+    /// `inner` is NOT valid at indent 1 against the document root (which
+    /// only knows `outer`), but IS valid at indent 1 against `outer`'s
+    /// `Outer` struct. Schema-aware recovery picks deeper.
+    #[test]
+    fn recovery_e107_schema_aware_picks_deeper_when_only_deeper_valid() {
+        let schema = Schema {
+            name: "demo".to_string(),
+            document: Struct {
+                members: vec![Member::Field(Field {
+                    required: Polarity::Default,
+                    repeatable: Polarity::Default,
+                    keyword: "outer".to_string(),
+                    r#type: Type::Reference("Outer".to_string()),
+                    default: None,
+                })],
+                validators: vec![],
+            },
+            layers: vec![],
+            sigil: None,
+            records: vec![RecordDefinition {
+                name: "Outer".to_string(),
+                members: vec![Member::Field(Field {
+                    required: Polarity::Default,
+                    repeatable: Polarity::Default,
+                    keyword: "inner".to_string(),
+                    r#type: Type::Reference("String".to_string()),
+                    default: None,
+                })],
+                validators: vec![],
+            }],
+            scalars: Vec::new(),
+            selects: Vec::new(),
+        };
+        // `inner foo` has 3 leading spaces — odd. Shallower=1 (peer of outer
+        // at root) would attach `inner` to the root, which has no `inner`
+        // member. Deeper=2 (child of outer) DOES have `inner`. Schema-aware
+        // recovery should pick deeper.
+        let src = "tel 1.0\n\nouter\n   inner foo\n";
+        let parsed = parse_with_schema(src, &schema);
+        assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E107),
+                "expected E107 with schema-aware recovery, got: {:?}", parsed.errors);
+        // The `inner` compound should appear as a child of `outer`, not as
+        // a root-level peer.
+        let root: Vec<&Compound> = parsed.document.children.iter()
+            .flat_map(|b| b.compounds.iter()).collect();
+        assert_eq!(root.len(), 1, "expected one root compound, got {:?}",
+                   root.iter().map(|c| &c.keyword).collect::<Vec<_>>());
+        assert_eq!(root[0].keyword, "outer");
+        let outer_children: Vec<&Compound> = root[0].children.iter()
+            .flat_map(|b| b.compounds.iter()).collect();
+        assert!(outer_children.iter().any(|c| c.keyword == "inner"),
+                "expected `inner` to be a child of `outer` under schema-aware \
+                recovery; got: {:?}",
+                outer_children.iter().map(|c| &c.keyword).collect::<Vec<_>>());
+    }
+
+    /// Schema-aware E107 recovery: when both candidates are valid, the
+    /// parser uses the shallower-wins tiebreaker. The test schema has the
+    /// keyword `shared` admissible at two depths (3 and 4 in this
+    /// document's structure): `shared` is a member of B (depth-2 parent)
+    /// and of C (depth-3 parent). A line at 5 spaces (between indent 2
+    /// and 3) within a 3-deep stack `[a, b, c]` has both candidates valid
+    /// — shallower=2 (peer of c, child of b) and deeper=3 (child of c).
+    /// Shallower wins.
+    #[test]
+    fn recovery_e107_schema_aware_prefers_shallower_on_tie() {
+        let schema = Schema {
+            name: "demo".to_string(),
+            document: Struct {
+                members: vec![Member::Field(Field {
+                    required: Polarity::Default, repeatable: Polarity::Default,
+                    keyword: "a".to_string(),
+                    r#type: Type::Reference("A".to_string()),
+                    default: None,
+                })],
+                validators: vec![],
+            },
+            layers: vec![],
+            sigil: None,
+            records: vec![
+                RecordDefinition {
+                    name: "A".to_string(),
+                    members: vec![Member::Field(Field {
+                        required: Polarity::Default, repeatable: Polarity::Default,
+                        keyword: "b".to_string(),
+                        r#type: Type::Reference("B".to_string()),
+                        default: None,
+                    })],
+                    validators: vec![],
+                },
+                RecordDefinition {
+                    name: "B".to_string(),
+                    members: vec![
+                        Member::Field(Field {
+                            required: Polarity::Loose, repeatable: Polarity::Default,
+                            keyword: "shared".to_string(),
+                            r#type: Type::Reference("String".to_string()),
+                            default: None,
+                        }),
+                        Member::Field(Field {
+                            required: Polarity::Default, repeatable: Polarity::Default,
+                            keyword: "c".to_string(),
+                            r#type: Type::Reference("C".to_string()),
+                            default: None,
+                        }),
+                    ],
+                    validators: vec![],
+                },
+                RecordDefinition {
+                    name: "C".to_string(),
+                    members: vec![Member::Field(Field {
+                        required: Polarity::Loose, repeatable: Polarity::Default,
+                        keyword: "shared".to_string(),
+                        r#type: Type::Reference("String".to_string()),
+                        default: None,
+                    })],
+                    validators: vec![],
+                },
+            ],
+            scalars: Vec::new(),
+            selects: Vec::new(),
+        };
+        // `     shared foo` has 5 spaces — odd. shallower=2 (peer of `c`,
+        // child of `b`), deeper=3 (child of `c`). Both parents admit
+        // `shared`. Shallower wins → the line becomes b's child, NOT c's.
+        let src = "tel 1.0\n\na\n  b\n    c\n     shared foo\n";
+        let parsed = parse_with_schema(src, &schema);
+        assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E107),
+                "expected E107, got: {:?}", parsed.errors);
+        // Walk a → b. b's children should include `shared` (peer of c),
+        // and c's children should NOT include `shared`.
+        let root: &Compound = &parsed.document.children[0].compounds[0];
+        assert_eq!(root.keyword, "a");
+        let b: &Compound = &root.children[0].compounds[0];
+        assert_eq!(b.keyword, "b");
+        let b_children: Vec<&str> = b.children.iter()
+            .flat_map(|bk| bk.compounds.iter())
+            .map(|c| c.keyword.as_str()).collect();
+        assert!(b_children.contains(&"shared"),
+                "expected `shared` as a child of `b` (shallower-wins tiebreak); got: {:?}",
+                b_children);
+        // Find c among b's children and check it has no `shared` child.
+        let c: &Compound = b.children.iter()
+            .flat_map(|bk| bk.compounds.iter())
+            .find(|c| c.keyword == "c").expect("c is present under b");
+        let c_children: Vec<&str> = c.children.iter()
+            .flat_map(|bk| bk.compounds.iter())
+            .map(|cc| cc.keyword.as_str()).collect();
+        assert!(!c_children.contains(&"shared"),
+                "expected `shared` NOT to be a child of `c` under tie-break; \
+                got c's children: {:?}",
+                c_children);
     }
 
     /// E111 (over-indentation) is recorded as an error, and the parser
