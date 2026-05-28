@@ -52,21 +52,17 @@ as 33 BASE-256 characters.
 ### Normative Test Vector
 
 The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas defined in §20.5
-of the TEL Specification — is to be pinned to the 256-bit BLAKE3 digest of the canonical
-document-root encoding once the reference implementation is updated to BLAKE3. The SHA-256 / 
-BASE-256 pair previously pinned here is stale under this revision and is intentionally omitted
-to prevent accidental use:
+of the TEL Specification — is:
 
 ```
-BLAKE3-256: (to be computed by the reference implementation)
-BASE-256:   (to be computed by the reference implementation)
+BLAKE3-256: a9d3e1ed5843888b8c077a12609252e81e62dcccaf9d2cc074bd4d5ec10613ba
+BASE-256:   ΩǓῡíXCẈẋẌćzĒŠƒRǨḞbӜỌίƝЬπtẽMŞӁĆГκ
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` and hashes the resulting
-document-root encoding MUST produce the pinned BLAKE3-256 value byte-for-byte. The same value
-appears in §20.5 of the TEL Specification; the two specifications are pinned to this single
-vector. Until the reference implementation supplies the value, no conformance can be claimed for
-this normative vector; the format rules of §3, §6 and §8 are nevertheless normative.
+A conforming implementation that encodes the canonical `tel-schema.tel` (887 BinTEL bytes; raw
+bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
+resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
+in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
 
 ## 4. Integer Encoding
 

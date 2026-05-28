@@ -2173,20 +2173,18 @@ MUST produce a byte-identical BinTEL encoding of that schema and the same 256-bi
 hash (§3 of the BinTEL Specification). The hash is normative — two conforming implementations
 MUST agree on it.
 
-The pinned value will be computed against the canonical
-[`tel-schema.tel`](tel-schema.tel) in this repository once the reference implementation is
-updated to BLAKE3. The SHA-256 value previously pinned here is stale under this revision and
-is intentionally omitted to prevent accidental use:
+The pinned value, computed against the canonical
+[`tel-schema.tel`](tel-schema.tel) in this repository, is:
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | (to be computed by the reference implementation)                     |
-| BASE-256   | (to be computed by the reference implementation)                     |
+| BLAKE3-256 | `a9d3e1ed5843888b8c077a12609252e81e62dcccaf9d2cc074bd4d5ec10613ba`   |
+| BASE-256   | `ΩǓῡíXCẈẋẌćzĒŠƒRǨḞbӜỌίƝЬπtẽMŞӁĆГκ`                                  |
 
-The BinTEL document root encoding of `tel-schema.tel`, the raw bytes (recorded in
-[`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and the hash (recorded in
-[`demo/tel-schema.hash`](demo/tel-schema.hash)) are likewise to be regenerated under BLAKE3.
-The same value will be pinned in §3 of the BinTEL Specification.
+The BinTEL document root encoding of `tel-schema.tel` is 887 bytes; the raw bytes are recorded
+in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
+[`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
+Specification.
 
 **Verifying the built-in.** An implementation's built-in `tel-schema` Schema value (the
 "axiom") is a hand-written construction; it is easy to introduce silent drift between the

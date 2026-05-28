@@ -17,7 +17,7 @@ machine operations.
 | [`atom-forms-schema.tel`](atom-forms-schema.tel) | A schema for a document carrying three Scalar values, one in each atom form (inline, source, literal). |
 | [`atom-forms-document.tel`](atom-forms-document.tel) | A document showing the three atom forms in use, including a literal atom with a `#`-prefixed line and a source atom carrying embedded JSON. |
 | [`tel-schema.bintel.hex`](tel-schema.bintel.hex) | The BinTEL document root encoding of `/tel-schema.tel`, used to recompute the normative value hash pinned in §20.5 of the TEL Specification. |
-| [`tel-schema.hash`](tel-schema.hash) | The SHA-256 and BASE-256 forms of the `tel-schema.tel` value hash. |
+| [`tel-schema.hash`](tel-schema.hash) | The BLAKE3-256 and BASE-256 forms of the `tel-schema.tel` value hash. |
 
 ## Validation
 

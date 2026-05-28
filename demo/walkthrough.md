@@ -91,11 +91,11 @@ in `src/lib.rs`.)
 
 ## 6. Value hash (§3)
 
-The SHA-256 digest of the 16-byte sequence above is the **value hash** of
-this semantic model. Two implementations that produce different presentation
-encodings of the same semantic content (for example, putting `bold` before
-`text`, or using a literal atom for the value) MUST produce the same value
-hash.
+The 256-bit BLAKE3 digest of the 16-byte sequence above is the **value hash**
+of this semantic model. Two implementations that produce different
+presentation encodings of the same semantic content (for example, putting
+`bold` before `text`, or using a literal atom for the value) MUST produce
+the same value hash.
 
 ## 7. Complete BinTEL document (§6)
 
@@ -103,13 +103,14 @@ The complete byte stream is:
 
 ```
 C0 D1                           # magic number
-20 <signature bytes…>           # signature: length (varint) + bytes
+21 <signature bytes…>           # signature: length 33 (varint 0x21) + bytes
 02 00 0c …                      # document root (as above)
 ```
 
-The signature for a no-layer schema is the schema's own 32-byte value hash
-(see BinTEL §8). The pragma's schema identifier carries the same 32 bytes
-encoded as 32 BASE-256 characters.
+The signature for a no-layer schema is a 33-byte palimpsest: the schema's
+32-byte BLAKE3-256 value hash followed by a one-byte cadence trailer
+(see BinTEL §8). The pragma's schema identifier carries the same 33 bytes
+encoded as 33 BASE-256 characters.
 
 ## See also
 
@@ -118,5 +119,5 @@ encoded as 32 BASE-256 characters.
 - [`contact-document.tel`](contact-document.tel) — a document conforming
   to that schema, with hard-space multi-token values.
 - [`tel-schema.bintel.hex`](tel-schema.bintel.hex) — the BinTEL document
-  root encoding of `tel-schema.tel`, whose SHA-256 is normatively pinned
-  in §20.5 of the TEL Specification.
+  root encoding of `tel-schema.tel`, whose BLAKE3-256 hash is normatively
+  pinned in §20.5 of the TEL Specification.

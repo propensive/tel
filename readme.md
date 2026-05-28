@@ -159,7 +159,7 @@ typing, so the byte stream encodes only keyword indices and scalar values. A Bin
 begins with the four bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in
 BASE-256 textual form.
 
-The SHA-256 hash of a BinTEL document root is the document's **value hash**: a stable,
+The BLAKE3-256 hash of a BinTEL document root is the document's **value hash**: a stable,
 schema-aware identifier suitable for content addressing. Composed schemas (base + layers)
 are identified by a **palimpsest** of component hashes, encoded as a single BASE-256 token
 on the pragma line.

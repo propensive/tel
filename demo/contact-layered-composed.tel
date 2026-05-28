@@ -11,10 +11,12 @@ tel 1.0 https://tel-lang.org/schema/tel-schema
 # version's identity is the (n+1)-component signature comprising the
 # base hash followed by each layer hash in declared order.
 #
-# Concretely: this file's signature is `30 + 2*1 = 32` bytes (a single
-# value hash). The layered version's signature is `30 + 2*7 = 44` bytes
-# (base + 6 layers). The two signatures are not byte-equal even though
-# the schemas describe the same document shape.
+# Concretely: this file's signature is 33 bytes (a 32-byte BLAKE3-256
+# value hash plus the one-byte cadence trailer). The layered version's
+# signature is `37 + 2*(7 − 2) = 47` bytes (base + 6 layers, palimpsest
+# at k_i = 4, k_r = 2 with trailing cadence byte). The two signatures
+# are not byte-equal even though the schemas describe the same document
+# shape.
 #
 # Note: the `Status` SelectDefinition only contains `active` — the
 # `archived` variant was excluded by the `read-only-status` layer

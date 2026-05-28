@@ -6,4 +6,4 @@ edition = "2021"
 [dependencies]
 palimpsest = { path = "../palimpsest" }
 base256 = { path = "../base256" }
-sha2 = "0.10"
+blake3 = "1.5"

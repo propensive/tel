@@ -2736,13 +2736,17 @@ impl ParserState {
     fn is_valid_schema_id(&self, s: &str) -> bool {
         if s.contains("://") { return true; }
         // Bare BASE-256-encoded schema signature: one Unicode character per
-        // signature byte. A single-component (no-layer) signature is 32 bytes
-        // → 32 characters; with `n` components, 30 + 2n bytes → 30 + 2n
-        // characters. Length therefore MUST be ≥ 32 and `(length − 32)` MUST
-        // be a non-negative even number. Every character MUST be a member of
-        // the BASE-256 alphabet (validated by base256::decode_strict).
+        // signature byte. Under the BinTEL-pinned palimpsest parameters
+        // (k_i = 4, k_r = 2, 32-byte BLAKE3 hashes), a single-component
+        // (no-layer) signature is 33 bytes → 33 characters; with n ≥ 2
+        // components, `37 + 2·(n − 2)` bytes → same character count.
+        // Length is therefore either 33, or ≥ 37 with `(length − 37)` an
+        // even non-negative number. Every character MUST be a member of the
+        // BASE-256 alphabet (validated by base256::decode_strict).
         let char_count = s.chars().count();
-        if char_count < 32 || (char_count - 32) % 2 != 0 { return false; }
+        let length_ok = char_count == 33
+            || (char_count >= 37 && (char_count - 37) % 2 == 0);
+        if !length_ok { return false; }
         crate::base256::decode_strict(s).is_ok()
     }
 
@@ -3807,7 +3811,11 @@ mod tests {
             let name = path.file_stem().unwrap().to_string_lossy().to_string();
             let (passed, output) = run_test_with_timeout(path.to_str().unwrap(), expect_errors);
             if !passed {
-                let short = if output.len() > 200 { &output[..200] } else { &output };
+                let short = if output.len() > 200 {
+                    let mut cut = 200;
+                    while cut > 0 && !output.is_char_boundary(cut) { cut -= 1; }
+                    &output[..cut]
+                } else { &output };
                 failures.push(format!("  FAIL {}/{}: {}", dir, name, short));
             }
         }
@@ -4911,17 +4919,27 @@ mod tests {
                 "expected no errors with Reference resolution, got: {:?}", ta.errors);
     }
 
-    /// The normative BinTEL value hash of `tel-schema.tel` under itself, as
-    /// pinned in §20.5 of the TEL Specification and §3 of the BinTEL
-    /// Specification. Two conforming implementations MUST agree on this
-    /// value.
-    pub const TEL_SCHEMA_VALUE_HASH_HEX: &str =
-        "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd";
-
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i+2], 16).unwrap())
             .collect()
+    }
+
+    /// Read the pinned BLAKE3-256 value hash of `tel-schema.tel` from
+    /// `demo/tel-schema.hash`, which lists both the BLAKE3 hex and the
+    /// BASE-256 form. Returns the 32 raw bytes.
+    fn pinned_tel_schema_hash() -> [u8; 32] {
+        let body = fs::read_to_string("../../demo/tel-schema.hash")
+            .expect("demo/tel-schema.hash must exist");
+        let hex_line = body.lines()
+            .find(|l| l.starts_with("blake3:"))
+            .expect("demo/tel-schema.hash must contain a `blake3:` line");
+        let hex = hex_line.trim_start_matches("blake3:").trim();
+        let bytes = hex_decode(hex);
+        assert_eq!(bytes.len(), 32, "blake3 hex must be 64 chars");
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        arr
     }
 
     #[test]
@@ -4933,18 +4951,26 @@ mod tests {
         let schema = builtin_tel_schema();
         let hash = bintel::value_hash(&parsed.document, &schema);
         let bytes = bintel::encode_root(&parsed.document, &schema);
-        // When DUMP_TEL_SCHEMA_BINTEL is set, write the canonical hex to
-        // demo/tel-schema.bintel.hex. Useful for regenerating the pinned
-        // artefacts after schema changes.
+        // When DUMP_TEL_SCHEMA_BINTEL is set, write the canonical BinTEL
+        // hex and the pinned hash (both BLAKE3 hex and BASE-256) to the
+        // demo/ directory. Useful for regenerating the pinned artefacts
+        // after schema changes.
         if std::env::var("DUMP_TEL_SCHEMA_BINTEL").is_ok() {
             let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
             fs::write("../../demo/tel-schema.bintel.hex", &hex).ok();
+            let blake3_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+            let base256_text = base256::encode(&hash);
+            let hash_file = format!("blake3:  {}\nbase256: {}\n", blake3_hex, base256_text);
+            fs::write("../../demo/tel-schema.hash", &hash_file).ok();
             eprintln!("wrote {} bytes to demo/tel-schema.bintel.hex", bytes.len());
+            eprintln!("wrote BLAKE3 hash to demo/tel-schema.hash");
+            return;
         }
-        let expected = hex_decode(TEL_SCHEMA_VALUE_HASH_HEX);
-        assert_eq!(hash.to_vec(), expected,
-                   "tel-schema.tel value hash does not match the normative \
-                   value pinned in spec/tel.md §20.5; computed hex={} (bytes={})",
+        let expected = pinned_tel_schema_hash();
+        assert_eq!(hash.to_vec(), expected.to_vec(),
+                   "tel-schema.tel value hash does not match the value \
+                   pinned in demo/tel-schema.hash; computed hex={} (bintel bytes={}). \
+                   Re-run with DUMP_TEL_SCHEMA_BINTEL=1 to regenerate the demo artefacts.",
                    hash.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
                    bytes.len());
     }

@@ -6,8 +6,9 @@
 //! - §6 file layout (magic number `B2 C4 B5 BB` / BASE-256 `βτελ`, schema signature, document root).
 //! - §7 node encoding (struct / scalar / flag, with default-value
 //!   canonicalization).
-//! - §3 value hash (SHA-256 of the document root encoding alone).
-//! - §8 schema signature as a palimpsest at byte cadence `k = 2`.
+//! - §3 value hash (BLAKE3-256 of the document root encoding alone).
+//! - §8 schema signature as a palimpsest at the pinned parameters
+//!   `(H, k_i, k_r) = (32, 4, 2)`.
 //!
 //! See also `base256.rs` for the textual form (§9) and the `palimpsest` crate
 //! for the underlying construction.
@@ -18,7 +19,6 @@ use crate::{
 };
 #[cfg(test)]
 use crate::Polarity;
-use sha2::{Sha256, Digest};
 
 /// The BinTEL magic number: four bytes `B2 C4 B5 BB`. In BASE-256 textual
 /// form (§9 of the spec) these render as the four Greek letters `βτελ`
@@ -27,7 +27,14 @@ use sha2::{Sha256, Digest};
 /// start of an ASCII or UTF-8 text file.
 pub const MAGIC: [u8; 4] = [0xB2, 0xC4, 0xB5, 0xBB];
 pub const HASH_LEN: usize = 32;
-pub const SIGNATURE_CADENCE: usize = 2;
+
+/// BinTEL pins its schema-signature palimpsest at `(H, k_i, k_r) = (32, 4, 2)`
+/// per spec/bintel.md §8.
+pub const SIGNATURE_INITIAL_CADENCE: u8 = 4;
+pub const SIGNATURE_REGULAR_CADENCE: u8 = 2;
+/// Cadence byte value for the BinTEL-pinned palimpsest parameters
+/// (s=7, k_i-k_r=2, k_r-1=1 → bits 0111_10_01 = 0x79).
+pub const SIGNATURE_CADENCE_BYTE: u8 = 0x79;
 
 // ── Integer encoding (§4) ────────────────────────────────────────────────────
 
@@ -377,27 +384,23 @@ fn encode_element<'a>(
 
 // ── Value hash (§3) ──────────────────────────────────────────────────────────
 
-/// Compute the value hash (§3): SHA-256 of the document root encoding alone,
-/// excluding magic number and schema signature.
+/// Compute the value hash (§3): 256-bit BLAKE3 of the document root encoding
+/// alone, excluding magic number and schema signature.
 pub fn value_hash(doc: &Document, schema: &Schema) -> [u8; 32] {
     let bytes = encode_root(doc, schema);
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let result: [u8; 32] = hasher.finalize().into();
-    result
+    *blake3::hash(&bytes).as_bytes()
 }
 
 // ── Schema signature (§8) ────────────────────────────────────────────────────
 
 /// Compute the schema signature for a schema with `component_hashes` ordered
-/// `[base, layer_0, layer_1, …]`. This is the palimpsest at cadence
-/// `SIGNATURE_CADENCE` (= 2 per BinTEL §8).
+/// `[base, layer_0, layer_1, …]`. This is the palimpsest at the BinTEL-pinned
+/// parameters `(H, k_i, k_r) = (32, 4, 2)` per BinTEL §8.
 pub fn schema_signature_from_hashes(component_hashes: &[[u8; 32]]) -> Vec<u8> {
     assert!(!component_hashes.is_empty(), "schema signature requires at least one component");
-    let palimp = palimpsest::encode(
-        component_hashes.iter().map(|h| palimpsest::Hash::new(*h)).collect::<Vec<_>>().as_slice(),
-        SIGNATURE_CADENCE,
-    );
+    let hashes: Vec<palimpsest::Hash> = component_hashes.iter()
+        .map(|h| palimpsest::Hash::from(*h)).collect();
+    let palimp = palimpsest::encode(&hashes, SIGNATURE_INITIAL_CADENCE, SIGNATURE_REGULAR_CADENCE);
     palimp.bytes().to_vec()
 }
 
@@ -443,8 +446,9 @@ pub enum BCode {
     /// B02: A variable-length integer extends beyond end of input, or
     /// its accumulator overflows.
     B02,
-    /// B03: Schema signature length is less than 32 bytes or is not
-    /// `30 + 2n` for any `n ≥ 1`.
+    /// B03: Schema signature length is not `33` (n=1) and not
+    /// `37 + 2·(n − 2)` for any `n ≥ 2`, or the XOR of every signature
+    /// byte does not equal the BinTEL-pinned cadence byte `0x79`.
     B03,
     /// B04: Schema signature does not decode against the available
     /// hash library. (Currently surfaced only when a layered signature
@@ -519,19 +523,25 @@ pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeE
         .ok_or_else(|| DecodeError::new(BCode::B02, "malformed schema-signature length varint"))?;
     cur += n;
     let sig_len = sig_len as usize;
-    // §6 / §8.2: length ≥ 32 and (length − 30) mod 2 == 0
-    if sig_len < 32 || (sig_len < 30 + 2) || (sig_len.saturating_sub(30)) % 2 != 0 {
-        // sig_len == 32 (n=1) is allowed; check separately.
-        if sig_len != 32 {
-            return Err(DecodeError::new(BCode::B03,
-                format!("signature length {} is not 30 + 2n for any n ≥ 1", sig_len)));
-        }
+    // §6 / §8.2: length is 33 (n=1) or 37 + 2*(n − 2) for some n ≥ 2.
+    let valid_length = sig_len == 33 || (sig_len >= 37 && (sig_len - 37) % 2 == 0);
+    if !valid_length {
+        return Err(DecodeError::new(BCode::B03,
+            format!("signature length {} is not 33 (n=1) or 37 + 2·(n-2) for n ≥ 2", sig_len)));
     }
     let end = cur + sig_len;
     if end > bytes.len() {
         return Err(DecodeError::new(BCode::B09, "schema-signature bytes truncated"));
     }
     let signature = bytes[cur..end].to_vec();
+    // §8.2 step 1: XOR of every signature byte must equal the
+    // BinTEL-pinned cadence byte 0x79.
+    let sig_xor = signature.iter().fold(0u8, |acc, &b| acc ^ b);
+    if sig_xor != SIGNATURE_CADENCE_BYTE {
+        return Err(DecodeError::new(BCode::B03,
+            format!("signature byte XOR {:#04x} does not equal pinned cadence byte {:#04x}",
+                sig_xor, SIGNATURE_CADENCE_BYTE)));
+    }
     cur = end;
 
     // Document root: child_count + children
@@ -808,8 +818,11 @@ mod tests {
         let hash = value_hash(&doc, &schema);
         let bytes = encode_document_with_signature(&doc, &schema, &[hash]);
         let decoded = decode_document(&bytes, &schema).expect("decode should succeed");
-        assert_eq!(decoded.signature.len(), 32);
-        assert_eq!(decoded.signature, hash.to_vec());
+        // BinTEL §6: n=1 signature is 33 bytes (32-byte hash + cadence trailer).
+        assert_eq!(decoded.signature.len(), 33);
+        // First 32 bytes are the value hash; trailing byte is the cadence
+        // selector chosen so the XOR of every signature byte = 0x79.
+        assert_eq!(&decoded.signature[..32], &hash[..]);
         assert_eq!(decoded.document.children.len(), 1);
         assert_eq!(decoded.document.children[0].compounds.len(), 1);
         assert_eq!(decoded.document.children[0].compounds[0].keyword, "name");
@@ -909,7 +922,8 @@ mod tests {
         let hash = value_hash(&doc, &schema);
         let bytes = encode_document_with_signature(&doc, &schema, &[hash]);
         let decoded = decode_document(&bytes, &schema).expect("decode round-trips");
-        assert_eq!(decoded.signature, hash.to_vec());
+        assert_eq!(decoded.signature.len(), 33);
+        assert_eq!(&decoded.signature[..32], &hash[..]);
         let person = &decoded.document.children[0].compounds[0];
         assert_eq!(person.keyword, "person");
         assert_eq!(person.children[0].compounds[0].keyword, "first");
@@ -917,18 +931,33 @@ mod tests {
     }
 
     #[test]
-    fn schema_signature_single_component_is_the_hash() {
-        // Per BinTEL §8, n=1 signature is exactly the 32-byte value hash.
+    fn schema_signature_single_component_carries_hash_and_cadence_byte() {
+        // Per BinTEL §8.2, n=1 signature is the 32-byte value hash followed
+        // by the trailing cadence byte (33 bytes total). The trailing byte
+        // is chosen so that XOR(every byte) == 0x79.
         let h = [0xABu8; 32];
         let sig = schema_signature_from_hashes(&[h]);
-        assert_eq!(sig, h.to_vec());
+        assert_eq!(sig.len(), 33);
+        assert_eq!(&sig[..32], &h[..]);
+        let xor = sig.iter().fold(0u8, |a, &b| a ^ b);
+        assert_eq!(xor, SIGNATURE_CADENCE_BYTE);
     }
 
     #[test]
     fn schema_signature_two_components_length() {
-        // Per BinTEL §8, n=2 signature is 30 + 2*2 = 34 bytes.
+        // Per BinTEL §8.2 with (H, k_i, k_r) = (32, 4, 2), n=2 signature is
+        // 32 + 4 + 1 = 37 bytes.
         let sig = schema_signature_from_hashes(&[[0x11u8; 32], [0x22u8; 32]]);
-        assert_eq!(sig.len(), 34);
+        assert_eq!(sig.len(), 37);
+        let xor = sig.iter().fold(0u8, |a, &b| a ^ b);
+        assert_eq!(xor, SIGNATURE_CADENCE_BYTE);
+    }
+
+    #[test]
+    fn schema_signature_three_components_length() {
+        // n=3: 32 + 4 + 2 + 1 = 39 bytes.
+        let sig = schema_signature_from_hashes(&[[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]]);
+        assert_eq!(sig.len(), 39);
     }
 
     fn trivial_schema() -> crate::Schema {
@@ -957,24 +986,45 @@ mod tests {
 
     #[test]
     fn bcode_b03_bad_signature_length() {
-        // Magic + a signature length of 31 (less than the minimum 32)
-        // → B03. We need a varint for 31: that's a single byte 0x1F.
+        // Magic + a signature length of 35 (not a valid n=1 or n≥2 length
+        // under the BinTEL-pinned parameters) → B03. Varint for 35 is 0x23.
         let mut bytes = MAGIC.to_vec();
-        bytes.push(0x1F);                  // sig_len = 31
-        bytes.extend_from_slice(&[0u8; 31]);
+        bytes.push(0x23);                  // sig_len = 35
+        bytes.extend_from_slice(&[0u8; 35]);
         bytes.push(0x00);                  // root child_count = 0
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B03,
-                   "expected B03 for sig_len 31, got: {:?}", err);
+                   "expected B03 for sig_len 35, got: {:?}", err);
+    }
+
+    #[test]
+    fn bcode_b03_bad_signature_cadence_xor() {
+        // Magic + 33-byte signature whose byte-XOR is NOT 0x79 → B03.
+        let mut bytes = MAGIC.to_vec();
+        bytes.push(0x21);                  // sig_len = 33
+        bytes.extend_from_slice(&[0u8; 33]); // XOR = 0x00, expected 0x79
+        bytes.push(0x00);                  // root child_count = 0
+        let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
+        assert_eq!(err.code, BCode::B03,
+                   "expected B03 for bad signature XOR, got: {:?}", err);
+    }
+
+    /// Build a hand-crafted 33-byte BinTEL signature whose first 32 bytes are
+    /// `hash` and whose trailing byte is chosen so XOR(all 33 bytes) == 0x79.
+    fn craft_signature(hash: [u8; 32]) -> Vec<u8> {
+        let body_xor = hash.iter().fold(0u8, |a, &b| a ^ b);
+        let mut sig = hash.to_vec();
+        sig.push(body_xor ^ SIGNATURE_CADENCE_BYTE);
+        sig
     }
 
     #[test]
     fn bcode_b05_keyword_index_out_of_range() {
-        // Magic + minimal 32-byte signature + root child_count=1 +
+        // Magic + minimal 33-byte signature + root child_count=1 +
         // child keyword_index=99 (out of range).
         let mut bytes = MAGIC.to_vec();
-        bytes.push(0x20);                       // sig_len = 32
-        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(0x21);                       // sig_len = 33
+        bytes.extend_from_slice(&craft_signature([0u8; 32]));
         bytes.push(0x01);                       // root child_count = 1
         bytes.push(0x63);                       // keyword_index = 99 (varint)
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
@@ -1031,12 +1081,12 @@ mod tests {
 
     #[test]
     fn bcode_b06_scalar_length_overruns_input() {
-        // Magic + valid 32-byte signature + root child_count=1 +
+        // Magic + valid 33-byte signature + root child_count=1 +
         // keyword_index=0 (the only `name` field, Scalar string) +
         // value_length = 99, but no value bytes follow → B06.
         let mut bytes = MAGIC.to_vec();
-        bytes.push(0x20);                       // sig_len = 32
-        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(0x21);                       // sig_len = 33
+        bytes.extend_from_slice(&craft_signature([0u8; 32]));
         bytes.push(0x01);                       // root child_count = 1
         bytes.push(0x00);                       // keyword_index = 0 (`name`)
         bytes.push(0x63);                       // value_length = 99 (varint)
@@ -1048,11 +1098,11 @@ mod tests {
 
     #[test]
     fn bcode_b07_scalar_invalid_utf8() {
-        // Magic + 32-byte sig + root child_count=1 + keyword_index=0 +
+        // Magic + 33-byte sig + root child_count=1 + keyword_index=0 +
         // value_length=2 + two invalid UTF-8 bytes → B07.
         let mut bytes = MAGIC.to_vec();
-        bytes.push(0x20);                       // sig_len = 32
-        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(0x21);                       // sig_len = 33
+        bytes.extend_from_slice(&craft_signature([0u8; 32]));
         bytes.push(0x01);                       // root child_count = 1
         bytes.push(0x00);                       // keyword_index = 0 (`name`)
         bytes.push(0x02);                       // value_length = 2
@@ -1084,8 +1134,8 @@ mod tests {
         // dangling Reference). Simpler: hand-craft a minimal stream that
         // reaches the Reference resolution path.
         let mut bytes = MAGIC.to_vec();
-        bytes.push(0x20);                       // sig_len = 32
-        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(0x21);                       // sig_len = 33
+        bytes.extend_from_slice(&craft_signature([0u8; 32]));
         bytes.push(0x01);                       // root child_count = 1
         bytes.push(0x00);                       // keyword_index = 0 (child)
         // The decoder will look up `child`'s type, see Reference("missing-definition"),

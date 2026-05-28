@@ -23,6 +23,30 @@ use crate::{
 use crate::bintel;
 use crate::base256;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// The canonical `tel-schema.tel` source, baked into the binary so the
+/// resolver can recognise the built-in signature without depending on the
+/// file's runtime location.
+const TEL_SCHEMA_SOURCE: &str = include_str!("../../../tel-schema.tel");
+
+/// Lazily-computed BLAKE3-256 value hash of the canonical tel-schema.
+fn builtin_tel_schema_value_hash() -> [u8; 32] {
+    static CACHE: OnceLock<[u8; 32]> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let parsed = parse(TEL_SCHEMA_SOURCE);
+        bintel::value_hash(&parsed.document, &builtin_tel_schema())
+    })
+}
+
+/// Lazily-computed full schema signature for the built-in tel-schema
+/// (33 bytes: 32-byte BLAKE3-256 hash of tel-schema.tel + cadence trailer).
+fn builtin_tel_schema_signature() -> Vec<u8> {
+    static CACHE: OnceLock<Vec<u8>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        bintel::schema_signature_from_hashes(&[builtin_tel_schema_value_hash()])
+    }).clone()
+}
 
 /// A signature identifies a composed schema as carried by the pragma:
 /// either a URL (with or without a BASE-256 fragment) or a bare BASE-256
@@ -143,9 +167,10 @@ impl<F: SchemaFetcher> Resolver<F> {
     /// Add a schema to the library, decomposing it into its base schema
     /// and any layers; each component is stored keyed by its own BinTEL
     /// value hash (§8.1). Returns the composed schema's full signature
-    /// (palimpsest of base + layer hashes, per BinTEL §8.2). For a
-    /// schema with no layers this is 32 bytes; with `n` layers it is
-    /// `30 + 2(n+1)` bytes.
+    /// (palimpsest of base + layer hashes at the BinTEL-pinned parameters
+    /// `(H, k_i, k_r) = (32, 4, 2)`, per BinTEL §8.2). For a schema with no
+    /// layers this is 33 bytes; with `n` layers it is `37 + 2·(n − 1)` bytes
+    /// (37, 39, 41, … for n = 1, 2, 3 layers).
     pub fn add_to_library(&mut self, source: &str) -> Result<Vec<u8>, ResolutionError> {
         let parsed = parse(source);
         if !parsed.errors.is_empty() {
@@ -212,13 +237,12 @@ impl<F: SchemaFetcher> Resolver<F> {
     /// Resolve an identifier to a `Schema`, applying §8.2's five-step
     /// protocol.
     pub fn resolve(&mut self, identifier: &SchemaIdentifier) -> Result<Schema, ResolutionError> {
-        // Step 1: built-in lookup.
+        // Step 1: built-in lookup. The tel-schema built-in is identified by
+        // its single-component signature (33 bytes: 32-byte BLAKE3-256 hash
+        // of the canonical tel-schema.tel + cadence trailer).
         if let Some(sig) = &identifier.signature {
-            let builtin = builtin_tel_schema();
-            let builtin_hash = hex_decode_const(
-                "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd");
-            if sig == &builtin_hash {
-                return Ok(builtin);
+            if sig.len() == 33 && sig == &builtin_tel_schema_signature() {
+                return Ok(builtin_tel_schema());
             }
         }
 
@@ -231,19 +255,20 @@ impl<F: SchemaFetcher> Resolver<F> {
 
         // Step 3: library lookup.
         if let Some(sig) = &identifier.signature {
-            if sig.len() == 32 {
-                // Single-component signature: the signature is the base
-                // schema's value hash.
+            if sig.len() == 33 {
+                // Single-component signature: 32-byte base hash + cadence
+                // trailer. Strip the trailer and look up the base hash.
                 let mut arr = [0u8; 32];
-                arr.copy_from_slice(sig);
+                arr.copy_from_slice(&sig[..32]);
                 if let Some(s) = self.base_library.get(&arr) {
                     return Ok(s.clone());
                 }
-            } else if sig.len() >= 34 && (sig.len() - 30) % 2 == 0 {
-                // Multi-component palimpsest signature at cadence k=2.
-                // Decompose against the combined bibliography.
+            } else if sig.len() >= 37 && (sig.len() - 37) % 2 == 0 {
+                // Multi-component palimpsest signature at the BinTEL-pinned
+                // parameters (k_i=4, k_r=2). Decompose against the combined
+                // bibliography indexed at both 4-byte and 2-byte prefixes.
                 let bib = self.build_bibliography();
-                let palimp = palimpsest::Palimpsest::from_bytes(sig.to_vec(), 2);
+                let palimp = palimpsest::Palimpsest::from_bytes(sig.to_vec());
                 if let Some(components) = palimpsest::decode(&palimp, &bib) {
                     if let Some(composed) = self.compose_from_components(&components) {
                         // Cache the composed result keyed by the full
@@ -264,8 +289,9 @@ impl<F: SchemaFetcher> Resolver<F> {
             if let Some(expected_sig) = &identifier.signature {
                 // Compute the actual signature by composing per-component
                 // hashes from the fetched body. For a no-layer schema this
-                // is a 32-byte single-component signature; for layered
-                // schemas it is a 30 + 2n-byte palimpsest (BinTEL §8).
+                // is a 33-byte single-component signature; for layered
+                // schemas it is a `37 + 2·(n − 2)`-byte palimpsest at the
+                // BinTEL-pinned parameters (k_i = 4, k_r = 2) (BinTEL §8).
                 let parsed = parse(&body);
                 let actual_sig = compute_full_signature(&parsed.document);
                 if expected_sig.as_slice() == actual_sig.as_slice() {
@@ -290,10 +316,16 @@ impl<F: SchemaFetcher> Resolver<F> {
     /// surfaces errors.
     fn compose_from_components(&self, components: &[palimpsest::Hash]) -> Option<Schema> {
         if components.is_empty() { return None; }
-        let base = self.base_library.get(components[0].bytes())?.clone();
+        let mut arr = [0u8; 32];
+        if components[0].len() != 32 { return None; }
+        arr.copy_from_slice(components[0].bytes());
+        let base = self.base_library.get(&arr)?.clone();
         let mut layers: Vec<Layer> = Vec::new();
         for h in &components[1..] {
-            let layer = self.layer_library.get(h.bytes())?;
+            if h.len() != 32 { return None; }
+            let mut larr = [0u8; 32];
+            larr.copy_from_slice(h.bytes());
+            let layer = self.layer_library.get(&larr)?;
             layers.push(layer.clone());
         }
         let mut staged = base;
@@ -304,12 +336,15 @@ impl<F: SchemaFetcher> Resolver<F> {
     }
 
     fn build_bibliography(&self) -> palimpsest::Bibliography {
-        let mut bib = palimpsest::Bibliography::new(2);
+        let mut bib = palimpsest::Bibliography::for_cadences(
+            bintel::SIGNATURE_INITIAL_CADENCE,
+            bintel::SIGNATURE_REGULAR_CADENCE,
+        );
         for h in self.base_library.keys() {
-            bib.add(palimpsest::Hash::new(*h));
+            bib.add(palimpsest::Hash::from(*h));
         }
         for h in self.layer_library.keys() {
-            bib.add(palimpsest::Hash::new(*h));
+            bib.add(palimpsest::Hash::from(*h));
         }
         bib
     }
@@ -317,8 +352,8 @@ impl<F: SchemaFetcher> Resolver<F> {
 
 /// Compute the full composed signature (BinTEL §8.2 palimpsest) of a parsed
 /// schema document: the base hash followed by each layer hash, in source
-/// order. Returns 32 bytes for a no-layer schema, 30 + 2*n bytes for an
-/// n-component schema (base + n-1 layers).
+/// order. Returns 33 bytes for a no-layer schema, `37 + 2·(n − 2)` bytes for
+/// an n-component schema with n ≥ 2 (base + n−1 layers).
 fn compute_full_signature(doc: &Document) -> Vec<u8> {
     let mut component_hashes: Vec<[u8; 32]> = vec![compute_base_hash(doc)];
     for block in &doc.children {
@@ -394,12 +429,6 @@ fn parse_schema_body(body: &str) -> Result<Schema, ResolutionError> {
     Ok(construct_schema(&parsed.document))
 }
 
-fn hex_decode_const(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i+2], 16).unwrap())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,11 +463,12 @@ mod tests {
 
     #[test]
     fn resolver_library_lookup_after_add_to_library() {
-        // Schema with no layers: signature is exactly the base hash (32 bytes).
+        // Schema with no layers: signature is 33 bytes (32-byte base hash +
+        // cadence trailer).
         let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x String\n";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(src).expect("add_to_library should succeed");
-        assert_eq!(sig.len(), 32, "no-layer signature is 32 bytes");
+        assert_eq!(sig.len(), 33, "no-layer signature is 33 bytes");
         let id = SchemaIdentifier { url: None, signature: Some(sig) };
         let s = r.resolve(&id).expect("library lookup should succeed");
         assert_eq!(s.name, "my-schema");
@@ -446,8 +476,11 @@ mod tests {
 
     #[test]
     fn resolver_returns_builtin_for_tel_schema_hash() {
-        let pinned_hex = "9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd";
-        let sig = hex_decode_const(pinned_hex);
+        // Construct the expected signature dynamically (the BLAKE3-256 hash
+        // of tel-schema.tel is computed at runtime; once pinned, callers can
+        // copy it into a const).
+        let sig = super::builtin_tel_schema_signature();
+        assert_eq!(sig.len(), 33);
         let id = SchemaIdentifier { url: None, signature: Some(sig) };
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let s = r.resolve(&id).unwrap();
@@ -486,9 +519,11 @@ mod tests {
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/x", body);
         let mut r = Resolver::with_fetcher(fetcher);
+        // 33-byte all-zero signature: well-formed length but unlikely to
+        // match any real BLAKE3 hash.
         let id = SchemaIdentifier {
             url: Some("https://example.org/x".to_string()),
-            signature: Some(vec![0u8; 32]),
+            signature: Some(vec![0u8; 33]),
         };
         let err = r.resolve(&id).unwrap_err();
         assert!(matches!(err, ResolutionError::SignatureMismatch { .. }));
@@ -514,7 +549,7 @@ layer
 ";
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(layered_src).expect("add_to_library succeeds");
-        assert_eq!(sig.len(), 34, "one-layer signature is 34 bytes (30 + 2*2)");
+        assert_eq!(sig.len(), 37, "two-component signature is 37 bytes (32 + 4 + 1)");
         let id = SchemaIdentifier { url: None, signature: Some(sig) };
         let s = r.resolve(&id).expect("layered signature resolves");
         // compose_schema flattens layers into the document; no residual layers.
@@ -551,7 +586,7 @@ layer
         // afterwards. We're only using it to get the signature bytes.
         let mut sig_resolver: Resolver<InMemoryFetcher> = Resolver::new();
         let expected_sig = sig_resolver.add_to_library(layered_src).unwrap();
-        assert_eq!(expected_sig.len(), 34, "one-layer signature is 34 bytes");
+        assert_eq!(expected_sig.len(), 37, "two-component signature is 37 bytes");
 
         let mut fetcher = InMemoryFetcher::new();
         fetcher.add("https://example.org/layered", layered_src);
