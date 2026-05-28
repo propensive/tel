@@ -4,50 +4,92 @@
 
 A _palimpsest_ is a compact binary encoding of an ordered sequence of fixed-length cryptographic
 hashes, drawn from a larger known set. By exploiting the fact that both sender and receiver share
-access to the same hash library, a palimpsest encodes a sequence of `n` hashes in `32 + k*(n-1)`
-bytes rather than the naive `32*n` bytes, where `k` is the _cadence_, a small integer (typically
-1–3) chosen relative to the library size. The space saving comes at the cost of additional
-computation during decoding: the receiver must search its hash library to reconstruct the original
-sequence.
+access to the same hash library, a palimpsest encodes a sequence of `n` hashes in
+`H + k_i + k_r·(n − 2) + 1` bytes (for `n ≥ 2`) or `H + 1` bytes (for `n = 1`), rather than the
+naive `H·n` bytes, where `H` is the hash length in bytes, `k_i` is the _initial cadence_ (the
+offset between the first and second hashes), and `k_r` is the _regular cadence_ (the offset
+between subsequent hashes). The space saving comes at the cost of additional computation during
+decoding: the receiver must search its hash library to reconstruct the original sequence.
 
-The name _palimpsest_ is used because the encoding layers the hashes over one another (each offset
-by `k` bytes — the cadence — from the previous), so each hash is partially overwritten by its
-neighbours in the XOR superposition — echoing the palimpsests of manuscript tradition where earlier
-writing shows through later layers.
+The palimpsest is **self-describing**: its trailing byte encodes the hash length and both
+cadences, and is selected so that the XOR of every byte of the palimpsest equals that same
+byte's encoded value. A receiver therefore needs no out-of-band parameters to decode a
+palimpsest beyond access to the shared hash library; the trailing byte also serves as a one-byte
+integrity check.
+
+The name _palimpsest_ is used because the encoding layers the hashes over one another (each
+offset from the previous by `k_i` or `k_r` bytes — the cadence), so each hash is partially
+overwritten by its neighbours in the XOR superposition — echoing the palimpsests of manuscript
+tradition where earlier writing shows through later layers.
 
 ---
 
 ## 2. Definitions
 
-| Symbol | Meaning                                                                                              |
-| ------ | ---------------------------------------------------------------------------------------------------- |
-| `H`    | Hash length in bytes. For SHA-256, `H = 32`.                                                         |
-| `n`    | Number of hashes in the sequence to encode. `n ≥ 1` (the empty sequence is not encodable).           |
-| `k`    | _Cadence_: the byte offset between successive hashes in the palimpsest. `1 ≤ k < H`. See note below. |
-| `hᵢ`   | The i-th hash in the sequence (0-indexed), a byte array of length `H`.                               |
-| `N`    | The total number of hashes in the receiver's library.                                                |
-| `L`    | Length of the palimpsest in bytes: `L = H + k*(n-1)`.                                                |
+| Symbol | Meaning                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------- |
+| `H`    | Hash length in bytes. Determined by the hash-size index `s` (see §2.1). `H ∈ {8, 10, 12, 16, 20, 24, 28, 32, 48, 64}`. |
+| `n`    | Number of hashes in the sequence to encode. `n ≥ 1` (the empty sequence is not encodable).               |
+| `k_r`  | _Regular cadence_: the byte offset between hashes `hᵢ` and `hᵢ₊₁` for `i ≥ 1`. `1 ≤ k_r ≤ 4`.            |
+| `k_i`  | _Initial cadence_: the byte offset between `h₀` and `h₁`. `k_r ≤ k_i ≤ k_r + 3` (i.e. `k_i − k_r ∈ {0, 1, 2, 3}`). |
+| `hᵢ`   | The i-th hash in the sequence (0-indexed), a byte array of length `H`.                                   |
+| `oᵢ`   | The byte offset of `hᵢ` within the palimpsest body. `o₀ = 0`; for `i ≥ 1`, `oᵢ = k_i + (i − 1)·k_r`.     |
+| `N`    | The total number of hashes in the receiver's library.                                                    |
+| `c`    | The _cadence byte_: the trailing byte of the palimpsest, packing `(k_r, k_i − k_r, s)`. See §2.1.        |
+| `s`    | The _hash-size index_, a 4-bit value in `{0..9}`; values `{10..15}` are reserved.                        |
+| `L`    | Length of the palimpsest in bytes, including the cadence byte: `L = H + 1` for `n = 1`, otherwise `L = H + k_i + k_r·(n − 2) + 1`. |
 
-**Normative constraints.** Encoders and decoders MUST enforce `n ≥ 1` and `1 ≤ k < H`. An empty
-input sequence (`n = 0`) is not representable as a palimpsest; protocols that need to convey
-"no hashes" MUST signal that out-of-band rather than by emitting a zero-length palimpsest.
-A cadence `k ≥ H` would yield a palimpsest no smaller than the naive concatenation of hashes
-(`L = H + k·(n−1) ≥ H·n` for `n ≥ 2`) and provides no compression benefit; the constraint `k < H`
-ensures the encoding is strictly more compact than the naive form.
+**Normative constraints.** Encoders and decoders MUST enforce `n ≥ 1`, `1 ≤ k_r ≤ 4`,
+`0 ≤ k_i − k_r ≤ 3`, and `s ∈ {0..9}`. An empty input sequence (`n = 0`) is not representable as
+a palimpsest; protocols that need to convey "no hashes" MUST signal that out-of-band rather than
+by emitting a zero-length palimpsest.
 
-**Note on bit vs. byte cadence**: In principle, the cadence `k` could be measured in bits rather
-than bytes, allowing finer-grained control over the compression/cost trade-off. However, a bit-level
-cadence would generally produce a palimpsest whose length is not a whole number of bytes (since
-`H + k*(n-1)` bits may not be divisible by 8), making the encoding awkward to handle in practice. A
-byte cadence is therefore used, keeping the palimpsest length always an exact number of bytes.
+### 2.1 Cadence byte layout
 
-**Hash library**: A collection of `N` known hashes, held by the receiver (server). The library is
-indexed by prefix: for a given sequence of `k` bytes `b`, the receiver can efficiently enumerate all
-hashes `h` in the library for which `h[0..k-1] == b`.
+The cadence byte `c` packs the three parameters as follows (bit 0 = least-significant bit):
 
-**Precondition — monotonic growth**: Hashes may be added to the library at any time. Hashes must
-_never_ be removed. A palimpsest encodes references to hashes that must be present in the receiver's
-library at decode time; removing a referenced hash makes the palimpsest undecodable.
+| Bits  | Field          | Encoding                                                                |
+| ----- | -------------- | ----------------------------------------------------------------------- |
+| 0 – 1 | `k_r − 1`      | `00` → `k_r = 1`, `01` → 2, `10` → 3, `11` → 4                          |
+| 2 – 3 | `k_i − k_r`    | `00` → 0, `01` → 1, `10` → 2, `11` → 3 (giving `k_i ∈ {k_r..k_r + 3}`)  |
+| 4 – 7 | `s`            | Hash-size index; see hash-size table below                              |
+
+Hash-size table:
+
+| `s` | bits | bytes (`H`) |
+| --- | ---- | ----------- |
+| 0   | 64   | 8           |
+| 1   | 80   | 10          |
+| 2   | 96   | 12          |
+| 3   | 128  | 16          |
+| 4   | 160  | 20          |
+| 5   | 192  | 24          |
+| 6   | 224  | 28          |
+| 7   | 256  | 32          |
+| 8   | 384  | 48          |
+| 9   | 512  | 64          |
+| 10 – 15 | — | reserved    |
+
+A decoder that observes `s ∈ {10..15}` MUST reject the palimpsest as malformed. Reserved values
+exist so that future revisions of this specification can register additional hash sizes without
+a format break.
+
+**Why these sizes?** The values are conventional output sizes of BLAKE3 and of the SHA-2 / SHA-3
+families; choosing them keeps the table inter-operable with hash output widths that implementers
+will already be familiar with.
+
+### 2.2 Hash library
+
+A **hash library** is a collection of `N` known hashes, held by the receiver (server). The
+library is indexed by prefix: for a given sequence of `k` bytes `b`, the receiver can efficiently
+enumerate all hashes `h` in the library for which `h[0..k − 1] == b`. A receiver that wishes to
+decode palimpsests with several different cadences SHOULD maintain its index keyed on the longest
+plausible prefix (the maximum `k_i`), since shorter-prefix lookups can be derived from
+longer-prefix ones.
+
+**Precondition — monotonic growth.** Hashes may be added to the library at any time. Hashes must
+_never_ be removed. A palimpsest encodes references to hashes that must be present in the
+receiver's library at decode time; removing a referenced hash makes the palimpsest undecodable.
 
 ---
 
@@ -55,32 +97,39 @@ library at decode time; removing a referenced hash makes the palimpsest undecoda
 
 ### 3.1 Construction
 
-Given a sequence of hashes `h₀, h₁, ..., hₙ₋₁` and cadence `k`:
+Given a sequence of hashes `h₀, h₁, …, hₙ₋₁`, an initial cadence `k_i`, a regular cadence `k_r`,
+and a hash-size index `s` consistent with the hashes' actual byte length `H`:
 
-1. Allocate a zero-filled byte array `P` of length `L = H + k*(n-1)`.
-2. For each `i` in `0..n`, XOR `hᵢ` into `P` starting at byte offset `k*i`:
+1. Compute `L_data = H` if `n = 1`, otherwise `L_data = H + k_i + k_r·(n − 2)`. Allocate a
+   zero-filled byte array `B` of length `L_data` (the palimpsest **body**).
+2. For each `i` in `0..n`, XOR `hᵢ` into `B` starting at byte offset `oᵢ`:
 
    ```
-   P[k*i + j] ^= hᵢ[j]   for j in 0..H
+   B[oᵢ + j] ^= hᵢ[j]   for j in 0..H
    ```
 
-3. The result `P` is the palimpsest.
+3. Form the cadence byte `c` by packing `(k_r − 1, k_i − k_r, s)` per §2.1.
+4. Let `D = B[0] ⊕ B[1] ⊕ … ⊕ B[L_data − 1]` (the XOR of every body byte).
+5. Append the trailing byte `z = D ⊕ c` to `B`, producing the palimpsest `P` of length
+   `L = L_data + 1`. By construction, the XOR of every byte of `P` equals `c`.
 
 ### 3.2 Equivalent view via padded hashes
 
-The same construction can be stated as: form `n` padded arrays, each of length `L`, where padded
-hash `i` has `k*i` leading zero bytes, then the `H` bytes of `hᵢ`, then `k*(n-1-i)` trailing zero
-bytes. The palimpsest is the XOR of all `n` padded arrays. The XOR is commutative and associative,
-so order does not matter.
+The body can be stated equivalently as: form `n` padded arrays, each of length `L_data`, where
+padded hash `i` has `oᵢ` leading zero bytes, then the `H` bytes of `hᵢ`, then `L_data − oᵢ − H`
+trailing zero bytes. The body is the XOR of all `n` padded arrays. The XOR is commutative and
+associative, so order does not matter.
 
 ### 3.3 Structural property
 
-The first `k` bytes of `P` equal `h₀[0..k-1]`, because only `h₀` contributes to those positions (all
-other padded hashes start with at least `k` zero bytes). More generally, position `k*i` receives
-contributions from `hᵢ` and the following `⌊(H-1)/k⌋` hashes, but `hᵢ[0]` is the _sole_ contribution
-from any hash whose first byte of significant data falls at that position. Consequently, the leading
-`k` bytes at position `k*i` in any partially-reduced palimpsest uniquely identify the first `k`
-bytes of the hash that belongs at that position.
+The first `k_i` bytes of `P` equal `h₀[0..k_i − 1]`, because only `h₀` contributes to those
+positions (`h₁`'s padded form starts with at least `k_i` zero bytes, and every later hash starts
+even further right). More generally, position `oᵢ` receives contributions from `hᵢ` and from
+each later hash `hⱼ` (`j > i`) whose offset `oⱼ` satisfies `oⱼ ≤ oᵢ + H − 1`, but `hᵢ[0]` is the
+_sole_ contribution from any hash whose first byte of significant data falls at that position.
+Consequently, the bytes at position `oᵢ` of any partially-reduced palimpsest body — at depths
+`k_i` bytes (for `i = 0`) or `k_r` bytes (for `i ≥ 1`) — uniquely identify the corresponding
+prefix of `hᵢ`.
 
 ---
 
@@ -88,64 +137,94 @@ bytes of the hash that belongs at that position.
 
 ### 4.1 Overview
 
-The receiver holds the palimpsest `P` of length `L` and knows the cadence `k`. It can derive
-`n = (L - H) / k + 1` (which must be a positive integer; `L - H` must be divisible by `k`). The
-receiver reconstructs the sequence `h₀, h₁, ..., hₙ₋₁` by iterating through positions
-`i = 0, 1, ..., n-1`, at each step identifying `hᵢ` using the library index, XORing `hᵢ` out of `P`,
-and continuing.
+The receiver holds the palimpsest `P` of length `L`. It first recovers the cadence byte `c` by
+XOR-folding every byte of `P`, then unpacks `c` into `(k_r, k_i, H)`, computes the number of
+hashes `n` from `L`, and finally runs the recursive search procedure to reconstruct
+`h₀, h₁, …, hₙ₋₁`.
 
-### 4.2 Algorithm
+### 4.2 Parameter recovery
+
+1. Compute `c = P[0] ⊕ P[1] ⊕ … ⊕ P[L − 1]`. This is the cadence byte.
+2. Unpack `c` per §2.1 into `(k_r, k_i, s)`. Reject the palimpsest if `s ∈ {10..15}` (reserved
+   hash size).
+3. Look up `H = bytes(s)` from the table in §2.1.
+4. Let `L_data = L − 1`. Solve for `n`:
+   - If `L_data = H`, then `n = 1`.
+   - If `L_data ≥ H + k_i` and `(L_data − H − k_i) mod k_r = 0`, then
+     `n = 2 + (L_data − H − k_i) / k_r`.
+   - Otherwise the byte length is inconsistent with the cadence byte; reject as malformed.
+
+### 4.3 Recursive search
+
+Let `B = P[0..L_data − 1]` denote the palimpsest body. The recursive search reconstructs the
+hash sequence by iterating through positions `i = 0, 1, …, n − 1`, at each step identifying
+`hᵢ` using the library index, XORing `hᵢ` out of `B`, and continuing.
 
 ```
-decode(P, k, library) -> sequence or failure:
-  n = (len(P) - H) / k + 1
+decode(P, library) -> sequence or failure:
+  c = XOR of every byte of P
+  (k_r, k_i, H) = unpack(c)            // reject reserved s
+  L_data = len(P) - 1
+  n = derive_n(L_data, H, k_i, k_r)    // §4.2
+  B = P[0..L_data - 1]                 // mutable copy
   result = []
-  return search(P, k, library, 0, n, result)
+  return search(B, k_i, k_r, H, library, 0, n, result)
 
-search(P, k, library, i, n, result) -> sequence or failure:
+search(B, k_i, k_r, H, library, i, n, result) -> sequence or failure:
   if i == n:
-    if all bytes of P are zero: return result
+    if all bytes of B are zero: return result
     else: return failure
 
-  candidates = library.lookup(P[k*i .. k*i + k - 1])  // first k bytes at position i
+  oᵢ = 0 if i == 0 else k_i + (i - 1)·k_r
+  pᵢ = k_i if i == 0 else k_r          // length of the unambiguous prefix
+  candidates = library.lookup(B[oᵢ .. oᵢ + pᵢ - 1])
   for each hash h in candidates:
-    XOR h into P at offset k*i   // P[k*i + j] ^= h[j] for j in 0..H
-    outcome = search(P, k, library, i+1, n, result + [h])
+    XOR h into B at offset oᵢ          // B[oᵢ + j] ^= h[j] for j in 0..H
+    outcome = search(B, k_i, k_r, H, library, i+1, n, result + [h])
     if outcome != failure: return outcome
-    XOR h into P at offset k*i   // undo (XOR is self-inverse)
+    XOR h into B at offset oᵢ          // undo (XOR is self-inverse)
 
   return failure
 ```
 
-### 4.3 Correctness of the key step
+### 4.4 Correctness of the key step
 
-When `search` is called with index `i`, the bytes of `P` at positions `k*i` through `k*i + k - 1`
-equal `hᵢ[0..k-1]`. This is because:
+When `search` is called with index `i`, the bytes of `B` at positions `oᵢ` through
+`oᵢ + pᵢ − 1` equal `hᵢ[0..pᵢ − 1]`. This is because:
 
-- Hashes `h₀, ..., hᵢ₋₁` have already been XORed out of `P`.
-- Hash `hᵢ` contributes its bytes starting at offset `k*i`; its first `k` bytes appear uncontested
-  at `P[k*i..k*i+k-1]`.
-- Hashes `hᵢ₊₁, ..., hₙ₋₁` contribute to `P[k*(i+1)..]` and higher, not to `P[k*i..k*i+k-1]`.
+- Hashes `h₀, …, hᵢ₋₁` have already been XORed out of `B`.
+- Hash `hᵢ` contributes its bytes starting at offset `oᵢ`; its first `pᵢ` bytes appear
+  uncontested at `B[oᵢ..oᵢ + pᵢ − 1]` because the next hash `hᵢ₊₁` starts at offset
+  `oᵢ + pᵢ` (= `oᵢ + k_i` when `i = 0`, and `oᵢ + k_r` otherwise) and every later hash starts
+  later still.
+- Hashes `hᵢ₊₁, …, hₙ₋₁` contribute to `B[oᵢ + pᵢ..]` and higher, not to
+  `B[oᵢ..oᵢ + pᵢ − 1]`.
 
-Thus the `k`-byte prefix at position `i` uniquely identifies the first `k` bytes of `hᵢ`, allowing
-the library lookup to narrow candidates.
+Thus the `pᵢ`-byte prefix at position `i` uniquely identifies the first `pᵢ` bytes of `hᵢ`,
+allowing the library lookup to narrow candidates.
 
-### 4.4 Termination and correctness check
+### 4.5 Termination and correctness check
 
-After all `n` hashes have been XORed out, `P` should be all zeros (since `P` was constructed as the
-XOR of exactly those hashes). The all-zeros check at the base case (`i == n`) therefore serves as an
-integrity check: it confirms that the selected set of hashes is consistent with the palimpsest. A
-corrupted palimpsest or a missing hash will cause the check to fail, causing the algorithm to
-backtrack or ultimately return failure.
+After all `n` hashes have been XORed out, `B` should be all zeros (since `B` was constructed as
+the XOR of exactly those hashes). The all-zeros check at the base case (`i == n`) therefore
+serves as an integrity check on the body: it confirms that the selected set of hashes is
+consistent with the palimpsest. A corrupted palimpsest or a missing hash will cause the check
+to fail, causing the algorithm to backtrack or ultimately return failure.
 
-**Ambiguity.** If two distinct hash sequences both leave `P` all-zero at the base case, the
+A second, cheaper integrity check is implicit in §4.2: if any byte of `P` is corrupted in
+transit, the trailing-byte XOR property of §3 no longer holds, and the recovered `c` will
+deviate from the encoder's intended cadence byte. A decoder MAY perform this check explicitly by
+verifying that the recovered `(k_r, k_i, s)` are consistent with the apparent byte length per
+§4.2; the spec requires no additional CRC.
+
+**Ambiguity.** If two distinct hash sequences both leave `B` all-zero at the base case, the
 palimpsest is structurally ambiguous. With a collision-resistant hash (§7) this requires a hash
-collision and is computationally infeasible; a conforming decoder MAY treat the ambiguous case as
-a failure (returning no result) or MAY return the lexicographically first valid sequence
+collision and is computationally infeasible; a conforming decoder MAY treat the ambiguous case
+as a failure (returning no result) or MAY return the lexicographically first valid sequence
 (comparing hashes as byte arrays, position by position). The choice is implementation-defined,
 but a decoder MUST be deterministic across repeated invocations on the same inputs.
 
-### 4.5 Backtracking
+### 4.6 Backtracking
 
 If a candidate hash `h` leads to eventual failure deeper in the recursion, it is XORed back out
 (undone) and the next candidate is tried. This backtracking is correct because XOR is its own
@@ -155,54 +234,54 @@ inverse.
 
 ## 5. Parameter Selection
 
-### 5.1 Choosing the cadence `k`
+### 5.1 Choosing the cadences
 
-The cadence `k` controls both the compression ratio and the decoding cost:
+Because the palimpsest has two cadences, the encoder has two distinct levers:
 
-- **Compression ratio**: A palimpsest is `H + k*(n-1)` bytes versus `H*n` bytes naive. The saving is
-  `(n-1)*(H - k)` bytes. This is positive for all `k < H`.
+- **Initial cadence `k_i`** controls how many uncontested bytes are available at offset `0` to
+  identify `h₀`. With a library of `N` hashes, choosing `k_i` so that `N < 256^{k_i}` means the
+  expected number of candidates for `h₀` is less than one and the base-hash lookup proceeds
+  without backtracking. Because identifying `h₀` correctly is what makes every subsequent step
+  unambiguous, errors at this step are the most expensive to recover from, and `k_i` should be
+  chosen generously.
 
-- **Decoding cost**: At each step `i`, the library lookup returns all hashes whose first `k` bytes
-  match. The expected number of candidates is `N / 256^k` (assuming uniform distribution of hashes).
-  Each false candidate may cause a recursive search that eventually backtracks.
+- **Regular cadence `k_r`** controls the size cost per additional hash and the expected number
+  of candidates at each subsequent step. After `hᵢ` is identified, the next step has `k_r`
+  uncontested prefix bytes; choosing `k_r` so that `N < 256^{k_r}` likewise keeps the expected
+  candidate count below one.
 
-**The cadence SHOULD be chosen so that `N < 256^k`**, i.e. the number of hashes in the library is
-less than the number of distinct `k`-byte prefixes. This ensures that the expected number of
-candidates per lookup is less than one, so decoding proceeds without backtracking in the typical
-case.
+Because hashes added to the library after the encoder commits to `(k_r, k_i)` may push `N`
+above `256^{k_r}`, encoders should choose `k_r` with some headroom relative to the current
+library size.
 
-If the cadence is too small (i.e. `N ≥ 256^k`), multiple hashes will share each prefix on average.
-Every such collision requires the decoder to explore a branch that may ultimately dead-end, and the
-resulting backtracking can degrade decoding performance significantly — in the worst case
-exponentially in the number of candidates per step.
+### 5.2 Size cost
 
-The minimum cadence satisfying `N < 256^k` is:
+For `n ≥ 2`, the palimpsest is `L = H + k_i + k_r·(n − 2) + 1` bytes versus `H·n` bytes naive.
+The saving is `(H − k_r)·(n − 1) + (k_r − k_i) − 1` bytes — positive for any `k_r < H` once
+`n` is moderately large.
 
-```
-k = ⌈log₂₅₆(N)⌉ = ⌈log₂(N) / 8⌉
-```
+### 5.3 Examples
 
-### 5.2 Examples
+| Library size `N` | `log₂₅₆(N)` | Recommended `k_i` | Recommended `k_r` |
+| ---------------- | ----------- | ----------------- | ----------------- |
+| 1,000            | 1.25        | 2                 | 2                 |
+| 10,000,000       | 2.91        | 3                 | 3                 |
+| 1,000,000,000    | 3.75        | 4                 | 4                 |
 
-| Library size `N` | `log₂₅₆(N)` | Recommended `k` |
-| ---------------- | ----------- | --------------- |
-| 1,000            | 1.25        | 2               |
-| 10,000,000       | 2.91        | 3               |
-| 1,000,000,000    | 3.75        | 4               |
+For mixed regimes — where the base-hash library is large but extension hashes draw from a much
+smaller per-base library — `k_i > k_r` is often the right choice. The BinTEL specification, for
+example, uses `k_i = 4, k_r = 2` because schema base components are drawn from a global library
+but each base's layer extensions come from a much smaller per-schema set.
 
-### 5.3 Size examples
+### 5.4 Size examples
 
-With `H = 32` (SHA-256):
+With `H = 32` (256-bit hash):
 
-| `N`  | `k` | `n` | Palimpsest size | Naive size | Ratio |
-| ---- | --- | --- | --------------- | ---------- | ----- |
-| 10M  | 3   | 100 | 329 bytes       | 3200 bytes | 9.7×  |
-| 1000 | 1   | 100 | 131 bytes       | 3200 bytes | 24.4× |
-
-**Note**: The intro document uses `k = 1` for `N = 1000`, which gives 256 buckets for 1000 hashes
-(~4 hashes per bucket). Using `k = 2` (65,536 buckets) would give fewer than one hash per bucket on
-average and substantially lower decoding cost. `k = 1` is workable but not optimal for this library
-size.
+| `N`  | `k_i` | `k_r` | `n` | Palimpsest size | Naive size | Ratio |
+| ---- | ----- | ----- | --- | --------------- | ---------- | ----- |
+| 10M  | 3     | 3     | 100 | 330 bytes       | 3200 bytes | 9.7×  |
+| 1000 | 2     | 2     | 100 | 231 bytes       | 3200 bytes | 13.9× |
+| 4G   | 4     | 2     | 100 | 233 bytes       | 3200 bytes | 13.7× |
 
 ---
 
@@ -210,43 +289,52 @@ size.
 
 ### 6.1 Encoding
 
-Encoding is `O(n * H)`: for each of `n` hashes, XOR `H` bytes into the palimpsest.
+Encoding is `O(n·H)`: for each of `n` hashes, XOR `H` bytes into the body, plus an `O(L)` pass
+to compute the trailing-byte XOR.
 
 ### 6.2 Decoding (average case)
 
-At each of the `n` steps, the library lookup returns an expected `N / 256^k` candidates. If `k` is
-chosen so that `N / 256^k ≈ 1`, the algorithm is expected to proceed without backtracking, giving
-`O(n * H)` work for decoding (plus the cost of library lookups).
+At the first step the library lookup returns an expected `N / 256^{k_i}` candidates; at every
+subsequent step, an expected `N / 256^{k_r}` candidates. If `k_i` and `k_r` are chosen so that
+both expected counts are `≲ 1`, the algorithm is expected to proceed without backtracking,
+giving `O(n·H)` work for decoding (plus the cost of library lookups).
 
 ### 6.3 Decoding (worst case)
 
-In the worst case, many candidates match at each step and all but the correct one lead to dead ends,
-giving exponential backtracking. However, because the hash function is assumed to distribute values
-uniformly, the probability of deep backtracking is low when `k` is chosen appropriately.
+In the worst case, many candidates match at each step and all but the correct one lead to dead
+ends, giving exponential backtracking. However, because the hash function is assumed to
+distribute values uniformly, the probability of deep backtracking is low when the cadences are
+chosen appropriately.
 
-> **UNRESOLVED**: The original document flags this analysis as incomplete ("FIXME: work on this
-> analysis some more"). A rigorous probabilistic bound on the expected number of recursive calls has
-> not been established. In particular, the analysis of non-uniform hash distributions — where some
-> buckets are denser than average — requires further work.
+> **UNRESOLVED**: A rigorous probabilistic bound on the expected number of recursive calls
+> under non-uniform hash distributions, and a formal worst-case bound, are not given. In
+> particular, the analysis of non-uniform hash distributions — where some buckets are denser
+> than average — requires further work.
 
 ### 6.4 Bucket count
 
-The number of distinct `k`-byte prefixes is `256^k` (since each byte takes 256 values). The intro
-document states "2^k distinct buckets" which is incorrect; the correct value is `256^k = 2^(8k)`.
+The number of distinct prefixes used at the first step is `256^{k_i}` and at each subsequent
+step is `256^{k_r}` (since each byte takes 256 values).
 
 ---
 
 ## 7. Requirements on the Hash Function
 
-- **Fixed output length**: All hashes must be exactly `H` bytes.
-- **Collision resistance**: No two distinct data chunks should share the same hash. A collision
-  would make the palimpsest ambiguous to decode.
+- **Selectable output length**: The hash function must support every length `H` listed in §2.1
+  that the implementation needs to handle, with the output at each length being a deterministic
+  truncation / extension of a single underlying construction.
+- **Collision resistance**: No two distinct data chunks should share the same hash at the chosen
+  output length. A collision would make the palimpsest ambiguous to decode.
 - **Uniform distribution**: The hash output should be uniformly distributed across all possible
   `H`-byte values. This ensures that the library index buckets are populated evenly, making the
   average-case complexity analysis valid.
 
-SHA-256 (`H = 32`) satisfies all three properties and is used as the motivating example throughout
-this document.
+**BLAKE3** satisfies all three properties and is the recommended hash function for new
+deployments. BLAKE3 produces an arbitrary-length output from a single hashing pass — the
+truncation to any of the table sizes in §2.1 is the prefix of the same extended output — so a
+single implementation can drive every entry in the hash-size table without having to compose
+distinct fixed-output algorithms. The BinTEL specification (§3) pins its value hash to 256-bit
+BLAKE3 (`s = 7`, `H = 32`).
 
 ---
 
@@ -257,15 +345,21 @@ A palimpsest is intended for use in a protocol where:
 - A _sender_ (client) holds a subset of the hashes in the receiver's library.
 - The sender wishes to communicate an ordered sequence of hashes to the _receiver_ (server) as
   compactly as possible.
-- The receiver holds a strictly larger set of hashes and maintains an index by `k`-byte prefix.
-- The receiver performs the computationally more expensive decoding; the sender only needs to XOR.
+- The receiver holds a strictly larger set of hashes and maintains an index by prefix.
+- The receiver performs the computationally more expensive decoding; the sender only needs to
+  XOR.
 
-**Cadence is not embedded.** The palimpsest byte sequence does not carry the cadence `k`; sender
-and receiver MUST agree `k` out-of-band. Typical mechanisms include a framing header, a protocol
-constant, or a per-deployment configuration value. A receiver that assumes the wrong cadence will
-fail decoding (the integrity check of §4.4 will reject every candidate). Specifications that
-embed a palimpsest within another format are RESPONSIBLE for fixing or communicating `k`; for
-example, the BinTEL specification fixes `k = 2` for all schema signatures.
+**Cadence is embedded.** Unlike earlier revisions of this specification, the palimpsest byte
+sequence is self-describing: the trailing byte recovers `(k_r, k_i, H)` without any framing
+header or out-of-band agreement. A specification that embeds a palimpsest within another format
+SHOULD nevertheless pin a single normative `(k_r, k_i, H)` for its own use, so that producers
+and consumers agree on the parameter regime and so that a static analysis of message sizes is
+possible. The BinTEL specification, for example, pins `(k_r, k_i, H) = (2, 4, 32)` for every
+schema signature.
+
+A receiver that decodes a palimpsest whose cadence byte names parameters incompatible with the
+embedding protocol's normative values MUST reject it as a framing error of the embedding
+protocol, even if the palimpsest is internally consistent.
 
 ---
 
@@ -273,40 +367,38 @@ example, the BinTEL specification fixes `k = 2` for all schema signatures.
 
 The following remain as deferred analytical work, not as gaps in the encoding contract:
 
-- **Tight worst-case bound on backtracking depth.** The average-case analysis of §6.2 establishes
-  that backtracking is rare when `k ≥ ⌈log₂₅₆(N)⌉`, but a closed-form probabilistic bound on the
-  expected number of recursive calls under non-uniform hash distributions, and a formal
-  worst-case bound, are not given. Implementations SHOULD impose an explicit recursion-depth
-  limit (e.g. `2·n`) to guarantee termination on pathological inputs.
+- **Tight worst-case bound on backtracking depth.** The average-case analysis of §6.2
+  establishes that backtracking is rare when the cadences are chosen so that
+  `N ≲ 256^{k_i}` and `N ≲ 256^{k_r}`, but a closed-form probabilistic bound on the expected
+  number of recursive calls under non-uniform hash distributions, and a formal worst-case
+  bound, are not given. Implementations SHOULD impose an explicit recursion-depth limit (e.g.
+  `2·n`) to guarantee termination on pathological inputs.
 - **Correlated hashes.** The complexity analysis assumes uniformly distributed hashes. When the
   hash function's inputs are correlated (for example, near-duplicate source data), bucket
   occupancy may deviate from uniform; the effect on decoding cost has not been characterised.
 
 All other items previously listed as open (encoding for `n = 0`, communication of the cadence,
-the `2^k`-vs-`256^k` arithmetic, the `k < H` constraint, the bandwidth-factor wording, the
-recommended cadence for small libraries, the base-case condition in decoding) are resolved by
-the normative text of §2 through §8 of this revision.
+the `2^k`-vs-`256^k` arithmetic, the cadence/hash-length constraints, the bandwidth-factor
+wording, the recommended cadence for small libraries, the base-case condition in decoding) are
+resolved by the normative text of §2 through §8 of this revision.
 
 ---
 
 ## 10. Reference Implementation
 
-The Rust implementation in `src/lib.rs` conforms to this specification. It exposes:
+The Rust implementation in `src/lib.rs` is being updated to conform to this revision. The
+intended interface is:
 
-- `pub struct Hash([u8; 32])` — a SHA-256 hash.
-- `pub struct Palimpsest` — carries the encoded bytes plus its cadence so it is self-describing for
-  decoding.
-- `pub struct Bibliography` — a hash library indexed by `k`-byte prefix; cadence is supplied at
-  construction.
-- `pub fn encode(hashes: &[Hash], cadence: usize) -> Palimpsest` — implements §3.
+- `pub struct Hash(Vec<u8>)` — a BLAKE3 hash of one of the §2.1 lengths.
+- `pub struct Palimpsest` — carries the encoded bytes; cadence and hash size are recovered from
+  the trailing byte and so are not separately required.
+- `pub struct Bibliography` — a hash library indexed by prefix; the prefix length used at
+  construction time SHOULD be the maximum `k_i` the library is expected to serve.
+- `pub fn encode(hashes: &[Hash], k_i: u8, k_r: u8) -> Palimpsest` — implements §3, deriving the
+  hash size index from the hashes' shared length.
 - `pub fn decode(palimpsest: &Palimpsest, bibliography: &Bibliography) -> Option<Vec<Hash>>` —
-  implements §4. Returns `None` if reconstruction fails (missing hashes, malformed length, or no
-  valid path).
+  implements §4. Returns `None` if reconstruction fails (missing hashes, malformed length,
+  reserved hash-size index, or no valid path).
 
-The implementation supports any cadence `k` in `1..H`. For `n = 1` (a single hash with no layers)
-the palimpsest is exactly the 32-byte hash.
-
-Sixteen unit tests cover the length formula at three cadences, full-cycle round-trips, the
-single-hash special case, library-extra-hashes scenarios, decode failures (missing hash,
-truncated input, empty sequence), the invariants checked by `encode`'s asserts, and the
-`Bibliography`'s prefix-lookup semantics.
+For `n = 1` (a single hash with no layers) the palimpsest is the `H` bytes of the hash followed
+by the cadence byte, giving `H + 1` total bytes.

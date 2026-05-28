@@ -252,20 +252,24 @@ ASCII digits — no whitespace or punctuation — so a schema identifier always 
 phrase and is selected as a single word by a double-click in any conforming text-handling
 environment.
 
-A **schema signature** is a deterministic byte string derived from the SHA-256 hashes of the
-schema's components (base schema and any layers, in order). It is constructed as a **palimpsest**
-of those hashes at byte cadence `k = 2` (see §8 of the [BinTEL Specification](bintel.md) and
-the [Palimpsest Specification](palimpsest.md)). The palimpsest form is what the pragma
-carries: it not only identifies the fully composed schema but also encodes the **identities of
-the base and each layer in order**, so that a receiver holding a library of known schemas and
-layers can decode the signature to reconstruct the exact composition.
+A **schema signature** is a deterministic byte string derived from the 256-bit BLAKE3 hashes of
+the schema's components (base schema and any layers, in order). It is constructed as a
+**palimpsest** of those hashes at the BinTEL-pinned parameters `(H, k_i, k_r) = (32, 4, 2)` —
+i.e. an initial cadence of 4 bytes between the base hash and the first layer hash, and a
+regular cadence of 2 bytes between subsequent layer hashes, followed by a one-byte cadence
+trailer (see §8 of the [BinTEL Specification](bintel.md) and the
+[Palimpsest Specification](palimpsest.md)). The palimpsest form is what the pragma carries: it
+not only identifies the fully composed schema but also encodes the **identities of the base and
+each layer in order**, so that a receiver holding a library of known schemas and layers can
+decode the signature to reconstruct the exact composition.
 
-For a non-layered schema (one component), the signature is 32 bytes (32 BASE-256 characters) —
-exactly the schema's value hash. For a schema with `n` total components, the signature is
-`30 + 2n` bytes (`30 + 2n` BASE-256 characters). A producer that wishes to extend a schema with
-additional layers publishes a new signature by appending each layer's hash to the palimpsest; a
-consumer that decodes the signature against its library reconstructs the same composition that
-the producer intended (§20.3 of this specification).
+For a non-layered schema (one component), the signature is 33 bytes (33 BASE-256 characters) —
+the 32-byte base value hash followed by the one-byte cadence trailer. For a schema with `n ≥ 2`
+total components, the signature is `37 + 2·(n − 2)` bytes (37, 39, 41, … BASE-256 characters
+for `n = 2, 3, 4, …`). A producer that wishes to extend a schema with additional layers
+publishes a new signature by appending each layer's hash to the palimpsest body (and recomputing
+the cadence trailer); a consumer that decodes the signature against its library reconstructs
+the same composition that the producer intended (§20.3 of this specification).
 
 ### 8.2 Schema Resolution
 
@@ -368,9 +372,9 @@ resolvable on every parse.
 
 #### Layered-Signature Decomposition
 
-When the document schema's signature contains more than one component (`30 + 2n` bytes for n > 1,
-per §8 of the BinTEL Specification), the parser MUST decompose it against its library of known
-hashes before parsing the document body. Decomposition produces an ordered sequence
+When the document schema's signature contains more than one component (signature byte length
+`37 + 2·(n − 2)` for `n ≥ 2`, per §8 of the BinTEL Specification), the parser MUST decompose
+it against its library of known hashes before parsing the document body. Decomposition produces an ordered sequence
 `h₀, h₁, …, h_{n-1}` of component value hashes; the parser MUST construct the composed `Schema` by
 applying the layers identified by `h₁ … h_{n-1}` to the base schema identified by `h₀`, in that
 order, using the merge algorithm of §20.3. If any component hash is unknown to the parser's
@@ -1395,7 +1399,7 @@ type TypeName = string;
 
 `Schema.name` is a kebab-case identifier (§20.7) for the schema. It is a human-readable label used
 to identify the schema in source form; it is **not** the same as the schema identifier carried in
-a document's pragma (§8.1), which is either a URL or a SHA-256 content hash of the schema's BinTEL.
+a document's pragma (§8.1), which is either a URL or a BLAKE3-256 content hash of the schema's BinTEL.
 
 `Schema.document` is the root `Struct` that defines the type of the document root compound. It
 is `Struct`-typed directly (not `Type`-typed) by analogy with `Layer.overlay`: every schema must
@@ -2165,22 +2169,24 @@ embed the `tel-schema` schema as a built-in**, available before any external sch
 resolved. When a TEL document's pragma identifies `tel-schema` as its schema, the parser uses
 the built-in form rather than performing schema retrieval. The built-in MUST produce the same
 `Schema` model that would result from parsing the canonical `tel-schema.tel` under itself, and
-MUST produce a byte-identical BinTEL encoding of that schema and the same SHA-256 value hash
-(§3 of the BinTEL Specification). The hash is normative — two conforming implementations MUST
-agree on it.
+MUST produce a byte-identical BinTEL encoding of that schema and the same 256-bit BLAKE3 value
+hash (§3 of the BinTEL Specification). The hash is normative — two conforming implementations
+MUST agree on it.
 
-The pinned value, computed against the canonical
-[`tel-schema.tel`](tel-schema.tel) in this repository, is:
+The pinned value will be computed against the canonical
+[`tel-schema.tel`](tel-schema.tel) in this repository once the reference implementation is
+updated to BLAKE3. The SHA-256 value previously pinned here is stale under this revision and
+is intentionally omitted to prevent accidental use:
 
-| Form     | Value                                                                |
-| -------- | -------------------------------------------------------------------- |
-| SHA-256  | `9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd`   |
-| BASE-256 | `Ґ3ϏąNǑOτŠϏÐEЂҢζΞȚψŀύȐ5ỲГIЫtίṽỲƨӝ`                                  |
+| Form       | Value                                                                |
+| ---------- | -------------------------------------------------------------------- |
+| BLAKE3-256 | (to be computed by the reference implementation)                     |
+| BASE-256   | (to be computed by the reference implementation)                     |
 
-The BinTEL document root encoding of `tel-schema.tel` is 887 bytes; the raw bytes are recorded
-in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
-[`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
-Specification.
+The BinTEL document root encoding of `tel-schema.tel`, the raw bytes (recorded in
+[`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and the hash (recorded in
+[`demo/tel-schema.hash`](demo/tel-schema.hash)) are likewise to be regenerated under BLAKE3.
+The same value will be pinned in §3 of the BinTEL Specification.
 
 **Verifying the built-in.** An implementation's built-in `tel-schema` Schema value (the
 "axiom") is a hand-written construction; it is easy to introduce silent drift between the
@@ -2193,8 +2199,8 @@ SHOULD therefore include two self-consistency checks:
   `Sigil`, `String`, which an implementation may inject into the axiom but which
   `construct_schema` will not produce from the document).
 - **Value-hash check.** Encode the axiom (or, equivalently, the parsed-and-constructed
-  document) as BinTEL and compute its SHA-256; assert that the result equals the pinned
-  value above. This is the content-addressed counterpart to the structural check.
+  document) as BinTEL and compute its 256-bit BLAKE3 digest; assert that the result equals the
+  pinned value above. This is the content-addressed counterpart to the structural check.
 
 Pinning both invariants in tandem makes axiom drift very hard to introduce undetected.
 

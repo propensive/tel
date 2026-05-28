@@ -28,12 +28,14 @@ described in RFC 2119 and RFC 8174 when, and only when, they appear in all capit
 
 ## 3. Value Hash
 
-The **value hash** of a TEL document is the SHA-256 digest of its BinTEL document-root encoding
-(§7.1) — that is, the bytes produced by the recursive node encoding of the document root, with
-the magic number and schema signature of §6 excluded. This is the general method for hashing any
-semantic TEL value, including schema documents (which are themselves TEL documents).
+The **value hash** of a TEL document is the 256-bit BLAKE3 digest of its BinTEL document-root
+encoding (§7.1) — that is, the bytes produced by the recursive node encoding of the document
+root, with the magic number and schema signature of §6 excluded. This is the general method for
+hashing any semantic TEL value, including schema documents (which are themselves TEL documents).
+256-bit BLAKE3 corresponds to hash-size index `s = 7` of the
+[Palimpsest Specification](palimpsest.md) (§2.1).
 
-The value hash of a schema document — the SHA-256 over its full document-root encoding,
+The value hash of a schema document — the BLAKE3 digest over its full document-root encoding,
 including any `layer` children — is distinct from the **component hashes** used in a schema
 signature. A schema signature decomposes the schema into a base component (the schema document
 with all `layer` children removed) and one component per layer; each component is encoded as a
@@ -43,23 +45,28 @@ purposes are described in §8.1.
 When used in a schema identifier (see §8.1 of the TEL Specification), the ordered sequence of
 component hashes (the base hash followed by each layer hash) is combined into a **schema
 signature** per §8 below. The signature is encoded as [BASE-256](base256.md) for textual
-representation. A schema with no layers has a single-component signature whose bytes are exactly
-the 32-byte base-component hash, encoded as 32 BASE-256 characters.
+representation. A schema with no layers has a single-component signature comprising the 32-byte
+base-component hash followed by a one-byte cadence trailer (§8), giving 33 bytes total, encoded
+as 33 BASE-256 characters.
 
 ### Normative Test Vector
 
 The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas defined in §20.5
-of the TEL Specification — is:
+of the TEL Specification — is to be pinned to the 256-bit BLAKE3 digest of the canonical
+document-root encoding once the reference implementation is updated to BLAKE3. The SHA-256 / 
+BASE-256 pair previously pinned here is stale under this revision and is intentionally omitted
+to prevent accidental use:
 
 ```
-SHA-256:  9033cf054ed14fc460cfd04502a2b69e1ac840cd1035f213492b74af7df2a8dd
-BASE-256: Ґ3ϏąNǑOτŠϏÐEЂҢζΞȚψŀύȐ5ỲГIЫtίṽỲƨӝ
+BLAKE3-256: (to be computed by the reference implementation)
+BASE-256:   (to be computed by the reference implementation)
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` (887 BinTEL bytes; raw
-bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
-resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
-in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
+A conforming implementation that encodes the canonical `tel-schema.tel` and hashes the resulting
+document-root encoding MUST produce the pinned BLAKE3-256 value byte-for-byte. The same value
+appears in §20.5 of the TEL Specification; the two specifications are pinned to this single
+vector. Until the reference implementation supplies the value, no conformance can be claimed for
+this normative vector; the format rules of §3, §6 and §8 are nevertheless normative.
 
 ## 4. Integer Encoding
 
@@ -129,11 +136,15 @@ A BinTEL document consists of the following fields in order:
    mistaken for the start of an ASCII or UTF-8 text file.
 2. **Schema signature**: the byte length of the signature (integer), followed by the signature
    bytes. The schema signature (whose construction is defined in the Schema Signature section
-   below) identifies the composed schema (base plus layers) used to type the document. The byte
-   length MUST satisfy `length ≥ 32` and `(length − 30) mod 2 == 0` — equivalently, `length =
-   30 + 2n` for some `n ≥ 1`, so that the signature describes a valid palimpsest at cadence
-   `k = 2` over at least one component (the base schema). A length of zero or any length not
-   matching this pattern is a framing error (B03).
+   below) identifies the composed schema (base plus layers) used to type the document. The
+   signature is a palimpsest at the BinTEL-pinned parameters `(H, k_i, k_r) = (32, 4, 2)` (see
+   §8 and the [Palimpsest Specification](palimpsest.md)). The byte length MUST therefore satisfy
+   either `length == 33` (for a schema with no layers, `n = 1`) or `length == 37 + 2·(n − 2)`
+   for some `n ≥ 2` — equivalently, `length ∈ {33, 37, 39, 41, 43, …}` (33 alone for `n = 1`,
+   then 37 and every odd integer above). Note that `length == 35` is **not** valid under these
+   pinned parameters: the initial cadence `k_i = 4` introduces a one-time +4-byte step between
+   `n = 1` (33 bytes) and `n = 2` (37 bytes), after which each additional layer adds `k_r = 2`
+   bytes. A length of zero or any length not matching this pattern is a framing error (B03).
 3. **Document root**: encoded using the node encoding described in the Node Encoding section
    below (root form). The encoding terminates exactly when the recursive procedure of §7.8 has
    consumed the last byte of the document root; there is no trailing tag or length.
@@ -335,8 +346,8 @@ followed by zero or more layers. Each component is identified by its value hash 
 
 A schema document (a TEL document conforming to the `tel-schema` schema; see §20 of the TEL
 Specification) defines a base schema and zero or more layers. Each component's hash is its value
-hash (§3): the component is encoded as a BinTEL document root (§7) and the SHA-256 digest is taken
-over that root encoding alone, without the magic number or schema signature.
+hash (§3): the component is encoded as a BinTEL document root (§7) and the 256-bit BLAKE3 digest
+is taken over that root encoding alone, without the magic number or schema signature.
 
 ### 8.1 Per-Component Encoding
 
@@ -361,63 +372,85 @@ cases reuse the entire composed `tel-schema` namespace (every Definition reachab
 A conforming implementation of `schema-signature(schema-document)` therefore:
 
 1. Constructs the base-schema document (the schema document minus its `layer` compounds) and
-   computes h₀ = SHA-256 of its document-root BinTEL encoding.
-2. For each `layer` compound L_i in source order, computes h_{i+1} = SHA-256 of the
+   computes h₀ = BLAKE3-256 of its document-root BinTEL encoding.
+2. For each `layer` compound L_i in source order, computes h_{i+1} = BLAKE3-256 of the
    document-root BinTEL encoding of L_i's children under the `Layer` Definition.
 3. Combines the sequence (h₀, h₁, …, h_n) into the palimpsest signature per §8.2 below.
 
 ### 8.2 Signature Construction
 
-The construction below is a **palimpsest** with byte cadence `k = 2`, as defined in the
-[Palimpsest Specification](palimpsest.md). The palimpsest framework permits any byte cadence;
-this specification fixes `k = 2`, which is sufficient for schema libraries of up to 65 536
-distinct components without backtracking during decode, while keeping signature size growth to two
-bytes per layer.
+A schema signature is a **palimpsest** as defined in the
+[Palimpsest Specification](palimpsest.md), constructed at the BinTEL-pinned parameters
+`(H, k_i, k_r) = (32, 4, 2)` — equivalently, hash-size index `s = 7`, regular cadence 2 bytes,
+initial cadence 4 bytes. The palimpsest framework permits any combination of these parameters;
+this specification pins them so that producers and consumers can statically reason about
+signature sizes. The pinned values are sufficient for schema libraries of up to `2^32 ≈ 4 × 10^9`
+distinct base components without backtracking during decode of the base hash, while keeping
+signature size growth to two bytes per additional layer.
 
-**Encoding.** Given an ordered sequence of n component hashes h₀, h₁, …, h_{n−1} (each 256 bits),
-the signature is computed as follows:
+**Encoding.** Given an ordered sequence of `n` component hashes `h₀, h₁, …, h_{n−1}` (each
+32 bytes, BLAKE3-256), the signature is computed as the palimpsest of those hashes per §3 of
+the Palimpsest Specification, with the cadence byte for `(s, k_i − k_r, k_r − 1) = (7, 2, 1)`.
+Concretely:
 
-1. Let S = 0 (a zero-valued integer of unbounded width).
-2. For each hash hᵢ, in order from i = 0 to i = n−1: set S = (S << 16) XOR hᵢ.
-3. The result S has a width of 256 + (n−1)×16 bits, or equivalently `30 + 2n` bytes.
+1. Compute the offsets `oᵢ`: `o₀ = 0`, and for `i ≥ 1`, `oᵢ = 4 + 2·(i − 1)` — i.e. the
+   sequence `0, 4, 6, 8, 10, …`.
+2. Allocate a zero-filled byte array `B` of length `L_data`, where `L_data = 32` if `n = 1` and
+   `L_data = 32 + 4 + 2·(n − 2) = 36 + 2·(n − 2)` otherwise.
+3. For each `i`, XOR `hᵢ` into `B` at offset `oᵢ`.
+4. Form the cadence byte `c` by packing `(s, k_i − k_r, k_r − 1) = (7, 2, 1)`. Bit-by-bit:
+   bits 0–1 = `01` (`k_r − 1 = 1`), bits 2–3 = `10` (`k_i − k_r = 2`), bits 4–7 = `0111`
+   (`s = 7`). The byte's value is `0x79`.
+5. Compute `D = XOR(B[0..L_data − 1])` and append the trailing byte `z = D ⊕ 0x79`.
 
-Emit the signature as `30 + 2n` bytes, most-significant byte first. For n = 1 (no layers), the
-signature is exactly the 32-byte value hash of the base schema.
+The signature is `B` followed by `z`, a total of `L_data + 1` bytes. For `n = 1` the signature
+is the 32-byte value hash of the base schema followed by the cadence trailer (33 bytes total).
+For `n ≥ 2` the signature is `36 + 2·(n − 2) + 1 = 37 + 2·(n − 2)` bytes (37, 39, 41, … for
+`n = 2, 3, 4, …`).
+
+**Worked examples.**
+
+- `n = 1`: signature is `h₀[0..31] ‖ z`, where `z = (h₀[0] ⊕ h₀[1] ⊕ … ⊕ h₀[31]) ⊕ 0x79`.
+  Length: 33 bytes.
+- `n = 3`: body is the XOR of three padded hashes at offsets `0, 4, 6`, length
+  `32 + 4 + 2 = 38` bytes; total signature length is 39 bytes.
 
 **Textual form.** When a schema signature appears in textual contexts — most notably the schema
 identifier of a TEL pragma (see §8.1 of the TEL Specification) — it is encoded with
-[BASE-256](base256.md), producing one Unicode character per signature byte (`30 + 2n`
-characters total). BASE-256 is chosen over BASE64-URL or hex because (a) it is the most compact
-character-per-byte encoding available — half the length of hex; (b) every character is a Unicode
-letter or digit, so the encoded signature is a single word for double-click selection (per Unicode
-Annex #29); and (c) the alphabet contains no whitespace or punctuation, so the signature always
-occupies a single phrase on the pragma line. Encoders and decoders use the alphabet defined in §4
-of the BASE-256 Specification.
+[BASE-256](base256.md), producing one Unicode character per signature byte. BASE-256 is chosen
+over BASE64-URL or hex because (a) it is the most compact character-per-byte encoding
+available — half the length of hex; (b) every character is a Unicode letter or digit, so the
+encoded signature is a single word for double-click selection (per Unicode Annex #29); and (c)
+the alphabet contains no whitespace or punctuation, so the signature always occupies a single
+phrase on the pragma line. Encoders and decoders use the alphabet defined in §4 of the BASE-256
+Specification.
 
-**Correctness property.** Because each shift is 16 bits wide but each hash is 256 bits wide, the
-lowest 16 bits of S are determined solely by the last hash h_{n−1}. After XORing h_{n−1} out of S
-and shifting right by 16 bits, the lowest 16 bits are determined solely by h_{n−2}. This property
-holds at every step, enabling unambiguous decoding so long as no two hashes in the candidate
-library share the same final 16 bits — see the palimpsest specification for the probabilistic
-analysis.
+**Correctness property.** Decodability rests on the structural property of §3.3 of the
+Palimpsest Specification: the first `k_i = 4` bytes of the body equal `h₀[0..3]` uncontested,
+and after `h₀` is XORed out, the bytes at offset `o₁ = 4` for the next `k_r = 2` positions equal
+`h₁[0..1]` uncontested, and so on. Decoding therefore proceeds deterministically as long as no
+two hashes in the candidate library share the same first 4 bytes (for the base lookup) or the
+same first 2 bytes (for layer lookups within a single base's reachable layers); see §5 of the
+Palimpsest Specification for the probabilistic analysis.
 
-**Decoding.** Given a signature S of known byte length L, and a set of candidate hashes H (the value
-hashes of all components defined in the schema file):
+**Decoding.** Given a signature of known byte length `L` and a set of candidate hashes:
 
-1. Compute n = (L − 30) / 2. This is the number of components. L MUST be even and at least 32.
-2. Let the output sequence be empty.
-3. Repeat n times: a. Let b = S & 0xFFFF (the lowest two bytes of S). b. Find all hashes in H whose
-   lowest two bytes equal b. c. For each candidate hash h: compute S′ = (S XOR h) >> 16. d. Recurse
-   with S = S′ and the candidate h appended to the front of the output sequence.
-4. When n steps have been completed, S MUST be zero. If S ≠ 0, the candidate path is invalid;
-   backtrack and try the next candidate.
-5. A conforming decoder MUST return the unique valid sequence if one exists. If no valid
-   sequence is found against the candidate library, the signature is malformed (B04). The
-   "more than one valid sequence" case requires a SHA-256 collision among components — a
-   second-preimage attack on SHA-256 — and is computationally infeasible under the security
-   assumptions of §7 of the [Palimpsest Specification](palimpsest.md); a decoder that
-   nevertheless encounters multiple satisfying sequences MUST also report B04 (treating it as
-   a corruption or integrity failure rather than as a regular decoding outcome).
+1. XOR every byte of the signature; the result MUST equal `0x79` (the BinTEL-pinned cadence
+   byte). If it does not, treat this as a framing error (B03 if the byte length is otherwise
+   plausible, otherwise B04 by extension).
+2. From `L`, compute `n`: `n = 1` if `L = 33`; otherwise require `L ≥ 37` and
+   `(L − 37) mod 2 = 0`, and set `n = 2 + (L − 37) / 2`. Any other `L` is a framing error
+   (B03).
+3. Treating bytes `[0..L − 2]` as the palimpsest body, run the recursive search of §4.3 of the
+   Palimpsest Specification with `(H, k_i, k_r) = (32, 4, 2)`. Candidates at step 0 are looked
+   up by 4-byte prefix; at every subsequent step by 2-byte prefix.
+4. If the search returns a valid sequence, decoding succeeds. If no valid sequence is found
+   against the candidate library, the signature is malformed (B04). The "more than one valid
+   sequence" case requires a BLAKE3 collision among components — a second-preimage attack on
+   BLAKE3-256 — and is computationally infeasible under the security assumptions of §7 of the
+   Palimpsest Specification; a decoder that nevertheless encounters multiple satisfying
+   sequences MUST also report B04 (treating it as a corruption or integrity failure rather than
+   as a regular decoding outcome).
 
 The decoded sequence gives the component hashes in order: h₀ (base schema), h₁ (first layer), …,
 h_{n−1} (last layer). A BinTEL decoder uses this sequence to locate and compose the schema before
@@ -458,7 +491,7 @@ Specification.
 | ---- | -------------------------------------------------------------------------------------------- |
 | B01  | Magic number absent or does not match the bytes `B2 C4 B5 BB` (BASE-256: `βτελ`) (§6 field 1). |
 | B02  | A variable-length integer (§4) extends beyond the end of input, or its accumulator overflows the decoder's chosen integer width. |
-| B03  | Schema signature length is less than 32 bytes or is not `30 + 2n` for any `n ≥ 1` (§6 field 2). |
+| B03  | Schema signature length is not `33` (for `n = 1`) and not `37 + 2·(n − 2)` for any `n ≥ 2` (§6 field 2), **or** the XOR of every signature byte does not equal `0x79` — the BinTEL-pinned cadence byte (§8.2). |
 | B04  | Schema signature does not decode against the available hash library (§8.2 decoding); zero or more than one valid hash sequence. |
 | B05  | A keyword index read from the stream is outside `[0, keyword-count(parent-members))` (§7.8). |
 | B06  | A Scalar value's byte length extends beyond the end of input.                                 |
