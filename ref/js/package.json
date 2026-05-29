@@ -1,0 +1,12 @@
+{
+  "name": "tel-js",
+  "version": "0.1.0",
+  "description": "JavaScript reference implementations of BASE-256 and BinTEL.",
+  "type": "module",
+  "main": "bintel.js",
+  "scripts": {
+    "test": "node run-tests.js"
+  },
+  "files": ["base256.js", "bintel.js"],
+  "license": "MIT"
+}
