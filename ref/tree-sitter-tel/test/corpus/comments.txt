@@ -1,0 +1,71 @@
+==================
+comment at document start
+==================
+# a leading comment
+name alice
+---
+
+(document
+  (comment)
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+multiple comments
+==================
+# first
+# second
+# third
+name alice
+---
+
+(document
+  (comment)
+  (comment)
+  (comment)
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+comment between compounds with blank line
+==================
+a
+
+# explanatory
+b
+---
+
+(document
+  (compound)
+  (blank_line)
+  (comment)
+  (compound))
+
+==================
+comment inside child block
+==================
+parent
+  # comment
+  child
+---
+
+(document
+  (compound
+    (children
+      (comment)
+      (compound))))
+
+==================
+empty comment
+==================
+#
+name alice
+---
+
+(document
+  (comment)
+  (compound
+    (soft_atom
+      (soft_gap))))

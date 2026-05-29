@@ -1,0 +1,72 @@
+==================
+source atom basic
+==================
+code
+    line one
+    line two
+---
+
+(document
+  (compound
+    (source_atom)))
+
+==================
+source atom multi-line
+==================
+description
+    A JSON document carried inside TEL,
+    with no escaping or fence wrapping.
+---
+
+(document
+  (compound
+    (source_atom)))
+
+==================
+literal atom basic
+==================
+code
+      EOF
+hello world
+  indented
+trailing spaces
+EOF
+---
+
+(document
+  (compound
+    (literal_atom)))
+
+==================
+literal atom custom delimiter
+==================
+code
+      ===
+content
+===
+---
+
+(document
+  (compound
+    (literal_atom)))
+
+==================
+compound with children and atoms
+==================
+person Alice 30
+  address
+    city London
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (soft_atom
+      (soft_gap))
+    (children
+      (compound
+        (children
+          (compound
+            (soft_atom
+              (soft_gap))))))))

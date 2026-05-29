@@ -1,0 +1,20 @@
+{
+  "name": "tree-sitter-tel",
+  "version": "0.1.0",
+  "description": "tree-sitter grammar for TEL (Typed Element Language)",
+  "license": "Apache-2.0",
+  "main": "bindings/node",
+  "type": "commonjs",
+  "keywords": ["parser", "tree-sitter", "tel"],
+  "tree-sitter": [
+    {
+      "scope": "source.tel",
+      "file-types": ["tel"],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.0"
+  }
+}

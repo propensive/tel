@@ -1,0 +1,45 @@
+==================
+remark at end of line
+==================
+name alice # this is alice's record
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (remark
+      (soft_gap))))
+
+==================
+remark on keyword-only compound
+==================
+active # currently active
+---
+
+(document
+  (compound
+    (remark
+      (soft_gap))))
+
+==================
+hash in keyword is not a remark
+==================
+c#sharp value
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+sigil at end of line is not a remark
+==================
+name #
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))))

@@ -1,0 +1,97 @@
+==================
+soft gap (one space)
+==================
+name alice
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+hard gap (two spaces) makes the atom a single phrase
+==================
+name  Alice Anderson
+---
+
+(document
+  (compound
+    (hard_atom
+      (hard_gap))))
+
+==================
+hard gap (three spaces)
+==================
+name   alice
+---
+
+(document
+  (compound
+    (hard_atom
+      (hard_gap))))
+
+==================
+mixed soft then hard
+==================
+name alice  Bob Builder
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (hard_atom
+      (hard_gap))))
+
+==================
+hard then more hard (hard mode persists)
+==================
+name  alice  bob
+---
+
+(document
+  (compound
+    (hard_atom
+      (hard_gap))
+    (hard_atom
+      (hard_gap))))
+
+==================
+remark with soft gap
+==================
+name alice # comment text
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (remark
+      (soft_gap))))
+
+==================
+remark with hard gap
+==================
+name alice  # comment text
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (remark
+      (hard_gap))))
+
+==================
+hard gap before sigil that is NOT a remark
+==================
+name alice  #
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (hard_atom
+      (hard_gap))))

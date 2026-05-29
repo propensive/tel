@@ -1,0 +1,100 @@
+==================
+single keyword
+==================
+name
+---
+
+(document
+  (compound))
+
+==================
+keyword with inline atom
+==================
+name alice
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+keyword with multiple inline atoms
+==================
+phone work +44 20 7946 0958
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap))
+    (soft_atom
+      (soft_gap))
+    (soft_atom
+      (soft_gap))
+    (soft_atom
+      (soft_gap))
+    (soft_atom
+      (soft_gap))))
+
+==================
+hard space mode atoms
+==================
+name  Alice Anderson
+---
+
+(document
+  (compound
+    (hard_atom
+      (hard_gap))))
+
+==================
+nested children
+==================
+phone
+  country-code 44
+  number 020-7946-0100
+---
+
+(document
+  (compound
+    (children
+      (compound
+        (soft_atom
+          (soft_gap)))
+      (compound
+        (soft_atom
+          (soft_gap))))))
+
+==================
+peer compounds
+==================
+name alice
+email alice@example.org
+---
+
+(document
+  (compound
+    (soft_atom
+      (soft_gap)))
+  (compound
+    (soft_atom
+      (soft_gap))))
+
+==================
+deep nesting
+==================
+a
+  b
+    c
+      d
+---
+
+(document
+  (compound
+    (children
+      (compound
+        (children
+          (compound
+            (children
+              (compound))))))))

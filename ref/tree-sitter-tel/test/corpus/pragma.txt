@@ -1,0 +1,50 @@
+==================
+pragma minimal
+==================
+tel 1.0
+---
+
+(document
+  (pragma))
+
+==================
+pragma with schema URL
+==================
+tel 1.0 https://example.org/contact
+---
+
+(document
+  (pragma))
+
+==================
+pragma with custom sigil
+==================
+tel 1.0 %
+---
+
+(document
+  (pragma))
+
+==================
+pragma with schema and sigil
+==================
+tel 1.0 https://example.org/contact %
+---
+
+(document
+  (pragma))
+
+==================
+pragma followed by content
+==================
+tel 1.0
+
+name alice
+---
+
+(document
+  (pragma)
+  (blank_line)
+  (compound
+    (soft_atom
+      (soft_gap))))

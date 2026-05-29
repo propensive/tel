@@ -1,0 +1,42 @@
+==================
+tabulation basic
+==================
+# Name  # Age
+Alice   30
+Bob     25
+---
+
+(document
+  (tabulation_block
+    (tabulation_line)
+    (tabulated_row)
+    (tabulated_row)))
+
+==================
+tabulation row omits columns
+==================
+# A  # B  # C
+x    1
+y    2    extra
+---
+
+(document
+  (tabulation_block
+    (tabulation_line)
+    (tabulated_row)
+    (tabulated_row)))
+
+==================
+tabulation indented
+==================
+parent
+  # Name  # Age
+  Alice   30
+---
+
+(document
+  (compound
+    (children
+      (tabulation_block
+        (tabulation_line)
+        (tabulated_row)))))
