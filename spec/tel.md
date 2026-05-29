@@ -322,6 +322,14 @@ A parser presented with a document schema MUST resolve it to a `Schema` value (a
 before any rule that depends on the schema is applied. Resolution proceeds in the following
 order:
 
+0. **Embedded-schema lookup.** When the document is a BinTEL byte sequence in self-contained
+   mode (§6.2 of the BinTEL Specification), the parser MUST decode the embedded schema body
+   under the built-in `tel-schema` axiom (§20.5), construct the composed `Schema` from it per
+   §20.3, and verify that the composed signature recomputed from the embedded body equals the
+   signature carried in the document (B11 of the BinTEL Specification on mismatch). On success
+   the parser MUST use that composed `Schema` and skip the remaining steps. Step 0 applies only
+   to BinTEL inputs in self-contained mode; for TEL-source inputs and external-mode BinTEL
+   inputs, resolution begins at step 1.
 1. **Built-in lookup.** If the document schema's signature equals the value hash of the built-in
    `tel-schema` schema (§20.5), the parser MUST use the built-in `Schema` and skip the remaining
    steps.

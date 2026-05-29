@@ -14,18 +14,26 @@
 //! for the underlying construction.
 
 use crate::{
-    Atom, Block, Compound, Document, Member, Schema, Type,
+    Atom, Block, Compound, Document, LineEndings, Member, Schema, Struct, Type,
+    builtin_tel_schema, compose_schema, construct_schema,
     resolve, ResolvedType, scalar_value_text,
 };
 #[cfg(test)]
 use crate::Polarity;
 
-/// The BinTEL magic number: four bytes `B2 C4 B5 BB`. In BASE-256 textual
-/// form (§9 of the spec) these render as the four Greek letters `βτελ`
-/// — `β` for "binary", `τελ` the Greek root for *tel*-. None of the
-/// bytes is below `0x80`, so a BinTEL stream cannot be mistaken for the
-/// start of an ASCII or UTF-8 text file.
+/// The BinTEL external-schema-mode magic number: four bytes `B2 C4 B5 BB`.
+/// In BASE-256 textual form (§9 of the spec) these render as the four Greek
+/// letters `βτελ` — `β` for "binary", `τελ` the Greek root for *tel*-. None
+/// of the bytes is below `0x80`, so a BinTEL stream cannot be mistaken for
+/// the start of an ASCII or UTF-8 text file.
 pub const MAGIC: [u8; 4] = [0xB2, 0xC4, 0xB5, 0xBB];
+
+/// The BinTEL self-contained-mode magic number: four bytes `B2 C4 B5 BC`.
+/// In BASE-256 textual form these render as `βτεμ` — `μ` (Greek small mu,
+/// `U+03BC`) for *monolithic*, distinguishing this mode from external
+/// mode's `βτελ`. See §6.2 of the BinTEL Specification.
+pub const MAGIC_SELF_CONTAINED: [u8; 4] = [0xB2, 0xC4, 0xB5, 0xBC];
+
 pub const HASH_LEN: usize = 32;
 
 /// BinTEL pins its schema-signature palimpsest at `(H, k_i, k_r) = (32, 4, 2)`
@@ -406,8 +414,8 @@ pub fn schema_signature_from_hashes(component_hashes: &[[u8; 32]]) -> Vec<u8> {
 
 // ── File layout (§6) ─────────────────────────────────────────────────────────
 
-/// Encode a complete BinTEL document: magic number, schema signature, then
-/// the document root encoding.
+/// Encode a complete BinTEL document in external-schema mode (§6.1):
+/// magic number, schema signature, then the document root encoding.
 ///
 /// `component_hashes` is the ordered sequence of component value hashes that
 /// identify the composed schema. For a base schema with no layers, pass a
@@ -424,6 +432,243 @@ pub fn encode_document_with_signature(
     out.extend_from_slice(&signature);
     out.extend(encode_root(doc, schema));
     out
+}
+
+// ── Schema-document hash helpers (§8.1) ──────────────────────────────────────
+
+/// Compute the BinTEL value hash of a schema document's **base** component
+/// (the schema document with all `layer` compounds removed), per §8.1 of the
+/// BinTEL Specification. Used both when computing a schema's full signature
+/// and when verifying a self-contained document's embedded schema.
+pub fn schema_base_hash(schema_doc: &Document) -> [u8; 32] {
+    let base_doc = Document {
+        interpreter_directive: schema_doc.interpreter_directive.clone(),
+        pragma: schema_doc.pragma.clone(),
+        line_endings: schema_doc.line_endings,
+        children: schema_doc.children.iter().map(|b| Block {
+            comments: b.comments.clone(),
+            tabulation: b.tabulation.clone(),
+            compounds: b.compounds.iter()
+                .filter(|c| c.keyword != "layer")
+                .cloned().collect(),
+            trailing_blank_lines: b.trailing_blank_lines,
+        }).collect(),
+    };
+    value_hash(&base_doc, &builtin_tel_schema())
+}
+
+/// Compute the BinTEL value hash of a single `layer` compound, per §8.1.
+/// The layer's children are treated as the document root of a virtual schema
+/// whose `document` Struct is the tel-schema `Layer` Definition; the
+/// Definition namespace is inherited from tel-schema unchanged.
+pub fn schema_layer_hash(layer_compound: &Compound) -> [u8; 32] {
+    let layer_doc = Document {
+        interpreter_directive: None,
+        pragma: None,
+        line_endings: LineEndings::LF,
+        children: layer_compound.children.clone(),
+    };
+    let tel = builtin_tel_schema();
+    let layer_def = tel.records.iter().find(|d| d.name == "Layer")
+        .expect("builtin tel-schema must define the Layer record");
+    let synth_schema = Schema {
+        name: "tel-layer".to_string(),
+        document: Struct {
+            members: layer_def.members.clone(),
+            validators: layer_def.validators.clone(),
+        },
+        layers: Vec::new(),
+        sigil: tel.sigil,
+        records: tel.records.clone(),
+        scalars: tel.scalars.clone(),
+        selects: tel.selects.clone(),
+    };
+    value_hash(&layer_doc, &synth_schema)
+}
+
+/// Compute the full composed signature (§8.2 palimpsest) of a schema
+/// document: the base hash followed by each layer hash in source order.
+/// Returns 33 bytes for a no-layer schema, `37 + 2·(n − 2)` bytes for an
+/// `n`-component schema with `n ≥ 2`.
+pub fn schema_full_signature(schema_doc: &Document) -> Vec<u8> {
+    let mut component_hashes: Vec<[u8; 32]> = vec![schema_base_hash(schema_doc)];
+    for block in &schema_doc.children {
+        for c in &block.compounds {
+            if c.keyword == "layer" {
+                component_hashes.push(schema_layer_hash(c));
+            }
+        }
+    }
+    schema_signature_from_hashes(&component_hashes)
+}
+
+/// Return the ordered component hashes (base hash followed by each layer
+/// hash in source order) for a schema document. Useful for callers that
+/// want to populate a per-component library.
+pub fn schema_component_hashes(schema_doc: &Document) -> Vec<[u8; 32]> {
+    let mut out: Vec<[u8; 32]> = vec![schema_base_hash(schema_doc)];
+    for block in &schema_doc.children {
+        for c in &block.compounds {
+            if c.keyword == "layer" {
+                out.push(schema_layer_hash(c));
+            }
+        }
+    }
+    out
+}
+
+// ── Self-contained mode (§6.2) ───────────────────────────────────────────────
+
+/// Result of decoding a BinTEL byte sequence in self-contained mode
+/// (§6.2): the carried signature, the embedded schema (both as a TEL
+/// document and as the composed `Schema`), and the decoded data document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedSelfContained {
+    pub signature: Vec<u8>,
+    /// The embedded schema as a TEL document (the bytes that were
+    /// length-prefixed in §6.2 field 3, parsed under tel-schema).
+    pub schema_document: Document,
+    /// The composed `Schema` obtained from the embedded schema document
+    /// via `construct_schema` + `compose_schema`.
+    pub schema: Schema,
+    /// The decoded data document.
+    pub document: Document,
+}
+
+/// Encode a complete BinTEL document in self-contained mode (§6.2).
+///
+/// - `doc` is the data document to encode as the outer document root.
+/// - `schema_doc` is the schema as a TEL document; it is encoded as the
+///   embedded schema body using `tel-schema` (the schema-for-schemas) and
+///   provides the §8.2 resolution-protocol step-0 lookup.
+/// - `composed_schema` is the composed schema (base + layers merged) used
+///   to encode `doc` itself.
+/// - `component_hashes` is the ordered sequence of component value hashes
+///   that identify `composed_schema`; the resulting signature MUST also be
+///   the composed signature of `schema_doc`.
+pub fn encode_document_self_contained(
+    doc: &Document,
+    schema_doc: &Document,
+    composed_schema: &Schema,
+    component_hashes: &[[u8; 32]],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&MAGIC_SELF_CONTAINED);
+    let signature = schema_signature_from_hashes(component_hashes);
+    out.extend(encode_varint(signature.len() as u64));
+    out.extend_from_slice(&signature);
+    let schema_bytes = encode_root(schema_doc, &builtin_tel_schema());
+    out.extend(encode_varint(schema_bytes.len() as u64));
+    out.extend_from_slice(&schema_bytes);
+    out.extend(encode_root(doc, composed_schema));
+    out
+}
+
+/// Encode a schema as a complete BinTEL document (external-schema mode)
+/// under the `tel-schema` axiom. The resulting bytes are a portable
+/// representation of the schema — the BinTEL counterpart to TEL schema
+/// source text — usable directly with `Resolver::add_bintel_to_library`.
+///
+/// `schema_doc` is the schema as a TEL document; it is encoded under
+/// tel-schema and the carried signature is tel-schema's own signature
+/// (because tel-schema is the schema being used to type the bytes).
+pub fn schema_to_bintel(schema_doc: &Document) -> Vec<u8> {
+    let tel = builtin_tel_schema();
+    let tel_hash = crate::builtin_tel_schema_value_hash();
+    encode_document_with_signature(schema_doc, &tel, &[tel_hash])
+}
+
+/// Decode a BinTEL byte sequence in self-contained mode (§6.2). Returns
+/// the carried signature, the embedded schema (both as a TEL document and
+/// composed), and the decoded data document.
+pub fn decode_document_self_contained(
+    bytes: &[u8],
+) -> Result<DecodedSelfContained, DecodeError> {
+    let mut cur = 0;
+
+    // B01: magic — self-contained mode only.
+    if bytes.len() < MAGIC_SELF_CONTAINED.len() {
+        return Err(DecodeError::new(BCode::B09, "magic number truncated"));
+    }
+    if bytes[0..MAGIC_SELF_CONTAINED.len()] != MAGIC_SELF_CONTAINED {
+        let hint = if bytes[0..MAGIC.len()] == MAGIC {
+            "; document is in external-schema mode (§6.1) — use `decode_document`"
+        } else { "" };
+        return Err(DecodeError::new(BCode::B01,
+            format!("magic bytes were {:?}; expected {:?}{}",
+                &bytes[0..MAGIC_SELF_CONTAINED.len()], MAGIC_SELF_CONTAINED, hint)));
+    }
+    cur += MAGIC_SELF_CONTAINED.len();
+
+    let (signature, sig_consumed) = read_signature(&bytes[cur..])?;
+    cur += sig_consumed;
+
+    // Embedded schema body: length varint + schema bytes.
+    let (schema_len, n) = decode_varint(&bytes[cur..])
+        .ok_or_else(|| DecodeError::new(BCode::B02, "malformed embedded-schema length varint"))?;
+    cur += n;
+    let schema_len = schema_len as usize;
+    let schema_end = cur + schema_len;
+    if schema_end > bytes.len() {
+        return Err(DecodeError::new(BCode::B09, "embedded schema body truncated"));
+    }
+    let schema_bytes = &bytes[cur..schema_end];
+    cur = schema_end;
+
+    // Decode the embedded schema body as a bare document-root under the
+    // hardwired tel-schema axiom.
+    let tel = builtin_tel_schema();
+    let (schema_blocks, schema_consumed) = decode_root_into_blocks(schema_bytes, &tel)
+        .map_err(|e| DecodeError::new(BCode::B12,
+            format!("embedded schema body does not decode under tel-schema: {}", e.context)))?;
+    if schema_consumed != schema_bytes.len() {
+        return Err(DecodeError::new(BCode::B12,
+            format!("embedded schema body has {} trailing bytes after decode",
+                schema_bytes.len() - schema_consumed)));
+    }
+    let schema_document = Document {
+        interpreter_directive: None,
+        pragma: None,
+        line_endings: LineEndings::LF,
+        children: schema_blocks,
+    };
+
+    // Construct + compose the embedded schema.
+    let staged = construct_schema(&schema_document);
+    let (composed, compose_errors) = compose_schema(&staged);
+    if !compose_errors.is_empty() {
+        return Err(DecodeError::new(BCode::B12,
+            format!("embedded schema fails composition: {} error(s)", compose_errors.len())));
+    }
+
+    // B11: verify the recomputed signature matches the carried one.
+    let recomputed = schema_full_signature(&schema_document);
+    if recomputed != signature {
+        return Err(DecodeError::new(BCode::B11,
+            format!("embedded schema body's recomputed signature ({} bytes) does not equal the carried signature ({} bytes)",
+                recomputed.len(), signature.len())));
+    }
+
+    // Decode the outer data document root under the composed schema.
+    let (root_blocks, root_consumed) = decode_root_into_blocks(&bytes[cur..], &composed)?;
+    cur += root_consumed;
+
+    if cur < bytes.len() {
+        return Err(DecodeError::new(BCode::B08,
+            format!("{} byte(s) remained after document root", bytes.len() - cur)));
+    }
+
+    Ok(DecodedSelfContained {
+        signature,
+        schema_document,
+        schema: composed,
+        document: Document {
+            interpreter_directive: None,
+            pragma: None,
+            line_endings: LineEndings::LF,
+            children: root_blocks,
+        },
+    })
 }
 
 // ── Decoding (§§6–7) ─────────────────────────────────────────────────────────
@@ -470,6 +715,14 @@ pub enum BCode {
     /// B10: A `Reference` type appears in the schema but resolves to
     /// no `Definition` (schema configuration error).
     B10,
+    /// B11: In self-contained mode (§6.2), the composed signature
+    /// recomputed from the embedded schema body does not equal the
+    /// carried signature byte-for-byte.
+    B11,
+    /// B12: In self-contained mode (§6.2), the embedded schema body
+    /// does not decode as a valid TEL document under `tel-schema`
+    /// (structural error during bootstrap).
+    B12,
 }
 
 impl BCode {
@@ -485,6 +738,8 @@ impl BCode {
             BCode::B08 => "framing error: input bytes remain after document root",
             BCode::B09 => "end of input reached mid-decode",
             BCode::B10 => "Reference type does not resolve to a Definition",
+            BCode::B11 => "embedded schema body signature mismatch (self-contained mode)",
+            BCode::B12 => "embedded schema body is not a valid tel-schema document (self-contained mode)",
         }
     }
 }
@@ -507,18 +762,51 @@ impl DecodeError {
 pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeError> {
     let mut cur = 0;
 
-    // B01: magic
+    // B01: magic. This entry point handles external-schema mode only
+    // (§6.1). Self-contained mode (§6.2) is handled by
+    // `decode_document_self_contained`; encountering its magic here is
+    // a usage error (the caller supplied an external-mode schema).
     if bytes.len() < MAGIC.len() {
         return Err(DecodeError::new(BCode::B09, "magic number truncated"));
     }
     if bytes[0..MAGIC.len()] != MAGIC {
+        let hint = if bytes[0..MAGIC.len()] == MAGIC_SELF_CONTAINED {
+            "; document is in self-contained mode (§6.2) — use `decode_document_self_contained`"
+        } else { "" };
         return Err(DecodeError::new(BCode::B01,
-            format!("magic bytes were {:?}; expected {:?}",
-                &bytes[0..MAGIC.len()], MAGIC)));
+            format!("magic bytes were {:?}; expected {:?}{}",
+                &bytes[0..MAGIC.len()], MAGIC, hint)));
     }
     cur += MAGIC.len();
 
-    // B02 + B03: signature length and bytes
+    let (signature, sig_consumed) = read_signature(&bytes[cur..])?;
+    cur += sig_consumed;
+
+    let (root_blocks, root_consumed) = decode_root_into_blocks(&bytes[cur..], schema)?;
+    cur += root_consumed;
+
+    // B08: framing — every byte must be consumed.
+    if cur < bytes.len() {
+        return Err(DecodeError::new(BCode::B08,
+            format!("{} byte(s) remained after document root", bytes.len() - cur)));
+    }
+
+    Ok(Decoded {
+        signature,
+        document: Document {
+            interpreter_directive: None,
+            pragma: None,
+            line_endings: LineEndings::LF,
+            children: root_blocks,
+        },
+    })
+}
+
+/// Read the schema-signature field (length varint + signature bytes)
+/// starting at `bytes[0]`. Returns the signature bytes and the number of
+/// input bytes consumed. Performs the B02 / B03 / B09 checks of §6 and §8.2.
+fn read_signature(bytes: &[u8]) -> Result<(Vec<u8>, usize), DecodeError> {
+    let mut cur = 0;
     let (sig_len, n) = decode_varint(&bytes[cur..])
         .ok_or_else(|| DecodeError::new(BCode::B02, "malformed schema-signature length varint"))?;
     cur += n;
@@ -543,40 +831,35 @@ pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeE
                 sig_xor, SIGNATURE_CADENCE_BYTE)));
     }
     cur = end;
+    Ok((signature, cur))
+}
 
-    // Document root: child_count + children
+/// Decode a bare document-root encoding (§7.1) under the given composed
+/// schema, returning the synthetic blocks and the number of input bytes
+/// consumed. Used by both `decode_document` (external mode) and the
+/// self-contained-mode decoder for the embedded schema body and the
+/// outer data root.
+fn decode_root_into_blocks(
+    bytes: &[u8],
+    schema: &Schema,
+) -> Result<(Vec<Block>, usize), DecodeError> {
+    let mut cur = 0;
     let (child_count, n) = decode_varint(&bytes[cur..])
         .ok_or_else(|| DecodeError::new(BCode::B02, "malformed root child-count varint"))?;
     cur += n;
-    let mut blocks = Vec::new();
     let mut compounds = Vec::new();
     for _ in 0..child_count {
         let (comp, consumed) = decode_child(&bytes[cur..], &schema.document.members, schema)?;
         cur += consumed;
         compounds.push(comp);
     }
-    blocks.push(Block {
+    let blocks = vec![Block {
         comments: Vec::new(),
         tabulation: None,
         compounds,
         trailing_blank_lines: 0,
-    });
-
-    // B08: framing — every byte must be consumed.
-    if cur < bytes.len() {
-        return Err(DecodeError::new(BCode::B08,
-            format!("{} byte(s) remained after document root", bytes.len() - cur)));
-    }
-
-    Ok(Decoded {
-        signature,
-        document: Document {
-            interpreter_directive: None,
-            pragma: None,
-            line_endings: crate::LineEndings::LF,
-            children: blocks,
-        },
-    })
+    }];
+    Ok((blocks, cur))
 }
 
 /// Decode a single child given the parent's member list. Returns the compound
@@ -1143,5 +1426,143 @@ mod tests {
         let err = decode_document(&bytes, &bad_schema).unwrap_err();
         assert_eq!(err.code, BCode::B10,
                    "expected B10 for dangling Reference, got: {:?}", err);
+    }
+
+    // ── Self-contained mode (§6.2) ───────────────────────────────────────
+
+    /// Compose a small test schema with a single required `name` Scalar
+    /// member, returning the schema document, the composed schema, and
+    /// its component hashes. Used by the self-contained-mode tests below.
+    fn small_schema() -> (Document, Schema, Vec<[u8; 32]>) {
+        let schema_src = "tel 1.0\n\nname my-schema\n\ndocument\n  field name String\n";
+        let parsed = crate::parse(schema_src);
+        assert!(parsed.errors.is_empty(), "schema source must parse");
+        let composed = crate::construct_schema(&parsed.document);
+        let (composed, errors) = crate::compose_schema(&composed);
+        assert!(errors.is_empty(), "schema must compose");
+        let hashes = schema_component_hashes(&parsed.document);
+        (parsed.document, composed, hashes)
+    }
+
+    /// Build a data document with one scalar child `name <text>`.
+    fn name_doc(text: &str) -> Document {
+        Document {
+            interpreter_directive: None, pragma: None,
+            line_endings: LineEndings::LF,
+            children: vec![Block {
+                comments: Vec::new(), tabulation: None,
+                compounds: vec![Compound {
+                    keyword: "name".to_string(),
+                    atoms: vec![Atom::Inline {
+                        text: text.to_string(), preceding_spaces: 1,
+                    }],
+                    remark: None, children: Vec::new(),
+                }],
+                trailing_blank_lines: 0,
+            }],
+        }
+    }
+
+    #[test]
+    fn self_contained_round_trip() {
+        let (schema_doc, composed, hashes) = small_schema();
+        let data = name_doc("Alice");
+        let bytes = encode_document_self_contained(&data, &schema_doc, &composed, &hashes);
+        // Begins with the self-contained magic, not the external magic.
+        assert_eq!(&bytes[0..4], &MAGIC_SELF_CONTAINED);
+        let decoded = decode_document_self_contained(&bytes)
+            .expect("self-contained decode should succeed");
+        assert_eq!(decoded.signature.len(), 33);
+        assert_eq!(decoded.document.children.len(), 1);
+        assert_eq!(decoded.document.children[0].compounds.len(), 1);
+        assert_eq!(decoded.document.children[0].compounds[0].keyword, "name");
+        // The decoded schema document round-trips structurally.
+        assert_eq!(decoded.schema.name, "my-schema");
+    }
+
+    #[test]
+    fn self_contained_value_hash_invariant() {
+        // §3 of the BinTEL Specification: the value hash is mode-invariant.
+        // The same document encoded under the same composed schema in
+        // external-schema mode (§6.1) and self-contained mode (§6.2) must
+        // produce identical document-root bytes and therefore identical
+        // value hashes.
+        let (schema_doc, composed, hashes) = small_schema();
+        let data = name_doc("Bob");
+        let h_ext = value_hash(&data, &composed);
+        // Encode self-contained; extract the doc-root portion and verify
+        // it hashes to the same value as encoding under composed alone.
+        let sc_bytes = encode_document_self_contained(&data, &schema_doc, &composed, &hashes);
+        // Decode and recompute the value hash of the decoded document.
+        let decoded = decode_document_self_contained(&sc_bytes).unwrap();
+        let h_sc = value_hash(&decoded.document, &decoded.schema);
+        assert_eq!(h_ext, h_sc,
+                   "value hash must be identical between external-schema and self-contained modes");
+    }
+
+    #[test]
+    fn self_contained_b11_on_tampered_schema() {
+        let (schema_doc, composed, hashes) = small_schema();
+        let data = name_doc("Charlie");
+        let mut bytes = encode_document_self_contained(&data, &schema_doc, &composed, &hashes);
+        // Find the embedded-schema-bytes region and flip a byte there. The
+        // layout is: 4 magic + sig_len_varint + 33 sig + schema_len_varint +
+        // schema_bytes + root. sig_len = 33 → encoded as 0x21 (single byte).
+        // schema_len varint is at offset 4 + 1 + 33 = 38.
+        let (schema_len, n) = decode_varint(&bytes[38..]).unwrap();
+        let schema_start = 38 + n;
+        // Flip a byte in the middle of the embedded schema body.
+        let mid = schema_start + (schema_len as usize) / 2;
+        bytes[mid] ^= 0xFF;
+        // Decoder should now report B11 (recomputed signature mismatch) or
+        // B12 (decode of corrupted schema failed). Either is acceptable;
+        // both are fatal and indicate the embedded body is corrupt.
+        let err = decode_document_self_contained(&bytes).unwrap_err();
+        assert!(matches!(err.code, BCode::B11 | BCode::B12),
+                "expected B11 or B12 after tampering, got: {:?}", err);
+    }
+
+    #[test]
+    fn decode_document_rejects_self_contained_magic() {
+        // The external-mode decoder must not silently accept self-contained
+        // bytes; it should emit B01 with a hint pointing at the right entry.
+        let (schema_doc, composed, hashes) = small_schema();
+        let data = name_doc("Dana");
+        let bytes = encode_document_self_contained(&data, &schema_doc, &composed, &hashes);
+        let err = decode_document(&bytes, &composed).unwrap_err();
+        assert_eq!(err.code, BCode::B01);
+        assert!(err.context.contains("self-contained"),
+                "B01 message should hint at self-contained mode; got: {}", err.context);
+    }
+
+    #[test]
+    fn self_contained_decode_rejects_external_magic() {
+        let (_doc, composed, hashes) = small_schema();
+        let data = name_doc("Eve");
+        let bytes = encode_document_with_signature(&data, &composed, &hashes);
+        let err = decode_document_self_contained(&bytes).unwrap_err();
+        assert_eq!(err.code, BCode::B01);
+        assert!(err.context.contains("external"),
+                "B01 message should hint at external mode; got: {}", err.context);
+    }
+
+    #[test]
+    fn schema_to_bintel_round_trip_under_tel_schema() {
+        // schema_to_bintel produces a complete BinTEL document carrying
+        // tel-schema's signature; decoding it under tel-schema yields back
+        // the schema's semantic model.
+        let (schema_doc, _composed, _hashes) = small_schema();
+        let bytes = schema_to_bintel(&schema_doc);
+        // External-mode magic with tel-schema's signature.
+        assert_eq!(&bytes[0..4], &MAGIC);
+        let tel = crate::builtin_tel_schema();
+        let decoded = decode_document(&bytes, &tel)
+            .expect("schema bytes must decode under tel-schema");
+        // Carried signature equals tel-schema's full signature.
+        let tel_sig = schema_signature_from_hashes(&[crate::builtin_tel_schema_value_hash()]);
+        assert_eq!(decoded.signature, tel_sig);
+        // The decoded Document reconstructs into the same schema (name etc.).
+        let reconstructed = crate::construct_schema(&decoded.document);
+        assert_eq!(reconstructed.name, "my-schema");
     }
 }

@@ -17,27 +17,14 @@
 //! `Schema`.
 
 use crate::{
-    Schema, Layer, Struct, Document, Block, LineEndings, Compound,
-    parse, construct_schema, builtin_tel_schema, type_assign, compose_schema,
+    Schema, Layer, Document,
+    parse, construct_schema, builtin_tel_schema, builtin_tel_schema_value_hash,
+    type_assign, compose_schema,
 };
 use crate::bintel;
 use crate::base256;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-
-/// The canonical `tel-schema.tel` source, baked into the binary so the
-/// resolver can recognise the built-in signature without depending on the
-/// file's runtime location.
-const TEL_SCHEMA_SOURCE: &str = include_str!("../../../tel-schema.tel");
-
-/// Lazily-computed BLAKE3-256 value hash of the canonical tel-schema.
-fn builtin_tel_schema_value_hash() -> [u8; 32] {
-    static CACHE: OnceLock<[u8; 32]> = OnceLock::new();
-    *CACHE.get_or_init(|| {
-        let parsed = parse(TEL_SCHEMA_SOURCE);
-        bintel::value_hash(&parsed.document, &builtin_tel_schema())
-    })
-}
 
 /// Lazily-computed full schema signature for the built-in tel-schema
 /// (33 bytes: 32-byte BLAKE3-256 hash of tel-schema.tel + cadence trailer).
@@ -184,10 +171,53 @@ impl<F: SchemaFetcher> Resolver<F> {
                 detail: format!("{} type-assignment errors", ta.errors.len()),
             });
         }
-        let schema = construct_schema(&parsed.document);
+        Ok(self.add_components_from_document(&parsed.document))
+    }
 
+    /// Add a schema to the library from its BinTEL encoding (a complete
+    /// BinTEL document whose schema is tel-schema and whose content is a
+    /// TEL schema document). Decodes the bytes under the hardwired
+    /// tel-schema axiom, decomposes the result into base + layer
+    /// components, and populates the library. Returns the resulting full
+    /// composed signature, matching `add_to_library` for the equivalent
+    /// TEL source.
+    ///
+    /// This is the BinTEL counterpart to `add_to_library`. The bytes
+    /// produced by `bintel::schema_to_bintel(&schema_doc)` round-trip
+    /// through this function and produce the same signature as
+    /// `add_to_library(&schema_source)` for the same logical schema.
+    pub fn add_bintel_to_library(&mut self, bintel_bytes: &[u8]) -> Result<Vec<u8>, ResolutionError> {
+        let decoded = bintel::decode_document(bintel_bytes, &builtin_tel_schema())
+            .map_err(|e| ResolutionError::MalformedSchemaBody {
+                detail: format!("BinTEL decode error {:?}: {}", e.code, e.context),
+            })?;
+        // The decoded bytes must declare themselves a tel-schema document:
+        // the carried signature must be tel-schema's signature.
+        if decoded.signature != builtin_tel_schema_signature() {
+            return Err(ResolutionError::SignatureMismatch {
+                expected: builtin_tel_schema_signature(),
+                actual: decoded.signature,
+            });
+        }
+        // Validate the decoded schema document under tel-schema — catches any
+        // structural issues that the BinTEL decoder did not detect (e.g.,
+        // missing required scalars after composition).
+        let ta = type_assign(&decoded.document, &builtin_tel_schema(), None);
+        if !ta.errors.is_empty() {
+            return Err(ResolutionError::MalformedSchemaBody {
+                detail: format!("{} type-assignment errors against tel-schema", ta.errors.len()),
+            });
+        }
+        Ok(self.add_components_from_document(&decoded.document))
+    }
+
+    /// Shared implementation: given a validated TEL schema document,
+    /// decompose it into base + layer components (per BinTEL §8.1),
+    /// populate the library, and return the composed signature.
+    fn add_components_from_document(&mut self, doc: &Document) -> Vec<u8> {
+        let schema = construct_schema(doc);
         // Base component: schema document with `layer` compounds stripped.
-        let base_hash = compute_base_hash(&parsed.document);
+        let base_hash = bintel::schema_base_hash(doc);
         let mut base_schema = schema.clone();
         base_schema.layers = Vec::new();
         self.base_library.insert(base_hash, base_schema);
@@ -195,22 +225,22 @@ impl<F: SchemaFetcher> Resolver<F> {
         let mut component_hashes: Vec<[u8; 32]> = vec![base_hash];
 
         // Layer components: each `layer` compound in source order.
-        // `schema.layers` already preserves source order (construct_schema
-        // walks blocks/compounds top-down), so we walk both in lockstep.
+        // `schema.layers` already preserves source order, so we walk
+        // both in lockstep.
         let mut layer_iter = schema.layers.iter();
-        for block in &parsed.document.children {
+        for block in &doc.children {
             for c in &block.compounds {
                 if c.keyword == "layer" {
                     let layer = layer_iter.next()
                         .expect("layer count matches layer-compound count");
-                    let layer_hash = compute_layer_hash(c);
+                    let layer_hash = bintel::schema_layer_hash(c);
                     self.layer_library.insert(layer_hash, layer.clone());
                     component_hashes.push(layer_hash);
                 }
             }
         }
 
-        Ok(bintel::schema_signature_from_hashes(&component_hashes))
+        bintel::schema_signature_from_hashes(&component_hashes)
     }
 
     /// Add a base schema directly by its value hash. The caller is
@@ -293,7 +323,7 @@ impl<F: SchemaFetcher> Resolver<F> {
                 // schemas it is a `37 + 2·(n − 2)`-byte palimpsest at the
                 // BinTEL-pinned parameters (k_i = 4, k_r = 2) (BinTEL §8).
                 let parsed = parse(&body);
-                let actual_sig = compute_full_signature(&parsed.document);
+                let actual_sig = bintel::schema_full_signature(&parsed.document);
                 if expected_sig.as_slice() == actual_sig.as_slice() {
                     self.cache.insert(expected_sig.clone(), schema.clone());
                     return Ok(schema);
@@ -350,68 +380,6 @@ impl<F: SchemaFetcher> Resolver<F> {
     }
 }
 
-/// Compute the full composed signature (BinTEL §8.2 palimpsest) of a parsed
-/// schema document: the base hash followed by each layer hash, in source
-/// order. Returns 33 bytes for a no-layer schema, `37 + 2·(n − 2)` bytes for
-/// an n-component schema with n ≥ 2 (base + n−1 layers).
-fn compute_full_signature(doc: &Document) -> Vec<u8> {
-    let mut component_hashes: Vec<[u8; 32]> = vec![compute_base_hash(doc)];
-    for block in &doc.children {
-        for c in &block.compounds {
-            if c.keyword == "layer" {
-                component_hashes.push(compute_layer_hash(c));
-            }
-        }
-    }
-    bintel::schema_signature_from_hashes(&component_hashes)
-}
-
-/// Compute the BinTEL value hash of a schema document's **base** (the
-/// document with all `layer` compounds removed), per BinTEL §8.1.
-fn compute_base_hash(doc: &Document) -> [u8; 32] {
-    let base_doc = Document {
-        interpreter_directive: doc.interpreter_directive.clone(),
-        pragma: doc.pragma.clone(),
-        line_endings: doc.line_endings,
-        children: doc.children.iter().map(|b| Block {
-            comments: b.comments.clone(),
-            tabulation: b.tabulation.clone(),
-            compounds: b.compounds.iter()
-                .filter(|c| c.keyword != "layer")
-                .cloned().collect(),
-            trailing_blank_lines: b.trailing_blank_lines,
-        }).collect(),
-    };
-    bintel::value_hash(&base_doc, &builtin_tel_schema())
-}
-
-/// Compute the BinTEL value hash of a single `layer` compound, encoded
-/// as a virtual document whose root Struct is the tel-schema
-/// `layer-body` Definition, per BinTEL §8.1.
-fn compute_layer_hash(layer_compound: &Compound) -> [u8; 32] {
-    let layer_doc = Document {
-        interpreter_directive: None,
-        pragma: None,
-        line_endings: LineEndings::LF,
-        children: layer_compound.children.clone(),
-    };
-    let tel = builtin_tel_schema();
-    let layer_def = tel.records.iter().find(|d| d.name == "Layer")
-        .expect("builtin tel-schema must define the Layer record");
-    let synth_schema = Schema {
-        name: "tel-layer".to_string(),
-        document: Struct {
-            members: layer_def.members.clone(),
-            validators: layer_def.validators.clone(),
-        },
-        layers: Vec::new(),
-        sigil: tel.sigil,
-        records: tel.records.clone(),
-        scalars: tel.scalars.clone(),
-        selects: tel.selects.clone(),
-    };
-    bintel::value_hash(&layer_doc, &synth_schema)
-}
 
 fn parse_schema_body(body: &str) -> Result<Schema, ResolutionError> {
     let parsed = parse(body);
@@ -597,6 +565,78 @@ layer
         };
         let s = r.resolve(&id).expect("multi-component URL fetch should verify");
         assert_eq!(s.name, "url-layered");
+    }
+
+    #[test]
+    fn add_bintel_to_library_round_trip_matches_source_form() {
+        // Bytes produced by `schema_to_bintel` for a parsed schema document
+        // round-trip through `add_bintel_to_library`, producing the same
+        // signature as `add_to_library` for the same TEL source.
+        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x String\n";
+        let mut from_source: Resolver<InMemoryFetcher> = Resolver::new();
+        let sig_src = from_source.add_to_library(src).unwrap();
+
+        let parsed = parse(src);
+        let bintel_bytes = bintel::schema_to_bintel(&parsed.document);
+        let mut from_bintel: Resolver<InMemoryFetcher> = Resolver::new();
+        let sig_bintel = from_bintel.add_bintel_to_library(&bintel_bytes).unwrap();
+
+        assert_eq!(sig_src, sig_bintel,
+                   "BinTEL load must yield the same signature as source load");
+    }
+
+    #[test]
+    fn add_bintel_to_library_handles_layered_schema() {
+        let layered_src = "\
+tel 1.0
+
+name url-layered
+
+document
+  field x String
+
+layer
+  name extra
+  overlay
+    field y String optional
+";
+        let mut from_source: Resolver<InMemoryFetcher> = Resolver::new();
+        let sig_src = from_source.add_to_library(layered_src).unwrap();
+        assert_eq!(sig_src.len(), 37, "two-component signature is 37 bytes");
+
+        let parsed = parse(layered_src);
+        let bintel_bytes = bintel::schema_to_bintel(&parsed.document);
+        let mut from_bintel: Resolver<InMemoryFetcher> = Resolver::new();
+        let sig_bintel = from_bintel.add_bintel_to_library(&bintel_bytes).unwrap();
+        assert_eq!(sig_src, sig_bintel);
+
+        // The loaded schema is now resolvable by its signature.
+        let id = SchemaIdentifier { url: None, signature: Some(sig_bintel) };
+        let s = from_bintel.resolve(&id).expect("layered schema resolves from BinTEL load");
+        assert_eq!(s.name, "url-layered");
+    }
+
+    #[test]
+    fn add_bintel_to_library_rejects_non_tel_schema_signature() {
+        // A BinTEL document not signed under tel-schema is not a valid
+        // schema-representation; add_bintel_to_library MUST reject it.
+        let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x String\n";
+        let parsed = parse(src);
+        let composed = construct_schema(&parsed.document);
+        // Encode the data using `composed` itself as the schema — a
+        // non-tel-schema signature.
+        let data_doc = crate::Document {
+            interpreter_directive: None, pragma: None,
+            line_endings: crate::LineEndings::LF,
+            children: Vec::new(),
+        };
+        let other_hash = bintel::value_hash(&data_doc, &composed);
+        let bogus_bytes = bintel::encode_document_with_signature(
+            &data_doc, &composed, &[other_hash]);
+        let mut r: Resolver<InMemoryFetcher> = Resolver::new();
+        let err = r.add_bintel_to_library(&bogus_bytes).unwrap_err();
+        assert!(matches!(err, ResolutionError::SignatureMismatch { .. }),
+                "expected SignatureMismatch, got: {:?}", err);
     }
 
     #[test]

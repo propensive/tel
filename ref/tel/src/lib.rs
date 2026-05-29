@@ -24,6 +24,26 @@ pub mod mutate;
 pub mod resolver;
 
 use std::fmt;
+use std::sync::OnceLock;
+
+/// The canonical `tel-schema.tel` source text, baked into the crate so the
+/// hardwired schema-for-schemas (§20.5 of the TEL Specification) is
+/// available without a runtime file dependency. Used by the resolver's
+/// built-in lookup, the BinTEL self-contained-mode bootstrap, and the
+/// programmatic `add_bintel_to_library` API.
+pub const TEL_SCHEMA_SOURCE: &str = include_str!("../../../tel-schema.tel");
+
+/// Lazily-computed BLAKE3-256 value hash of the canonical tel-schema (§3
+/// of the BinTEL Specification). This is the base hash of a single-
+/// component tel-schema signature; the full 33-byte signature is obtained
+/// by `bintel::schema_signature_from_hashes(&[builtin_tel_schema_value_hash()])`.
+pub fn builtin_tel_schema_value_hash() -> [u8; 32] {
+    static CACHE: OnceLock<[u8; 32]> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let parsed = parse(TEL_SCHEMA_SOURCE);
+        bintel::value_hash(&parsed.document, &builtin_tel_schema())
+    })
+}
 
 // ── Error types ──────────────────────────────────────────────────────────────
 

@@ -30,10 +30,15 @@ described in RFC 2119 and RFC 8174 when, and only when, they appear in all capit
 
 The **value hash** of a TEL document is the 256-bit BLAKE3 digest of its BinTEL document-root
 encoding (§7.1) — that is, the bytes produced by the recursive node encoding of the document
-root, with the magic number and schema signature of §6 excluded. This is the general method for
-hashing any semantic TEL value, including schema documents (which are themselves TEL documents).
-256-bit BLAKE3 corresponds to hash-size index `s = 7` of the
-[Palimpsest Specification](palimpsest.md) (§2.1).
+root, with the magic number, schema signature, and (in self-contained mode, §6.2) embedded
+schema body excluded. This is the general method for hashing any semantic TEL value, including
+schema documents (which are themselves TEL documents). 256-bit BLAKE3 corresponds to hash-size
+index `s = 7` of the [Palimpsest Specification](palimpsest.md) (§2.1).
+
+The value hash is **mode-independent**: encoding the same semantic content under the same
+composed schema in external-schema mode (§6.1) and in self-contained mode (§6.2) produces
+byte-identical document-root encodings, and therefore identical value hashes. Encoding mode is
+a transport choice; it does not affect document identity.
 
 The value hash of a schema document — the BLAKE3 digest over its full document-root encoding,
 including any `layer` children — is distinct from the **component hashes** used in a schema
@@ -119,17 +124,34 @@ following a complete document root as a framing error (§10) rather than as a se
 Any embedding that needs to multiplex BinTEL documents over a shared channel is responsible for
 framing at its own layer.
 
-A BinTEL document consists of the following fields in order:
+A BinTEL document MAY appear in one of two **modes**, distinguished by its leading magic number:
+
+- **External-schema mode** (§6.1, magic `B2 C4 B5 BB`) — the document carries only a schema
+  signature; the schema body itself MUST be obtained out-of-band via the resolution protocol of
+  §8.2 of the TEL Specification.
+- **Self-contained mode** (§6.2, magic `B2 C4 B5 BC`) — the document carries both the schema
+  signature and the schema body inline. The embedded schema body is interpreted under the
+  hardwired `tel-schema` axiom (§20.5 of the TEL Specification); a receiver carrying only that
+  axiom can fully decode a self-contained BinTEL document with no external resolution.
+
+The two modes produce **identical document-root encodings** for the same semantic content and
+composed schema. The value hash (§3) is therefore unchanged whether a document is encoded in
+external-schema or self-contained mode — encoding mode is a transport choice and does not affect
+document identity.
+
+### 6.1 External-Schema Mode
+
+A BinTEL document in external-schema mode consists of the following fields in order:
 
 1. **Magic number**: the 4 bytes `B2 C4 B5 BB`. When the document is carried in BASE-256
    textual form (§9), these bytes appear as the four Greek letters at positions `0xB2`, `0xC4`,
    `0xB5`, and `0xBB` of the BASE-256 alphabet defined in the
    [BASE-256 Specification](base256.md) — namely the characters `β` (`U+03B2` Greek small
    beta), `τ` (`U+03C4` Greek small tau), `ε` (`U+03B5` Greek small epsilon), and `λ`
-   (`U+03BB` Greek small lambda). A BinTEL document therefore begins with the literal string
-   `βτελ` in BASE-256 textual form — visually evocative of "binary TEL" (`β` for binary, `τελ`
-   the Greek root for *tel*-) and, because none of the bytes is below `0x80`, unlikely to be
-   mistaken for the start of an ASCII or UTF-8 text file.
+   (`U+03BB` Greek small lambda). An external-schema BinTEL document therefore begins with the
+   literal string `βτελ` in BASE-256 textual form — visually evocative of "binary TEL" (`β` for
+   binary, `τελ` the Greek root for *tel*-) and, because none of the bytes is below `0x80`,
+   unlikely to be mistaken for the start of an ASCII or UTF-8 text file.
 2. **Schema signature**: the byte length of the signature (integer), followed by the signature
    bytes. The schema signature (whose construction is defined in the Schema Signature section
    below) identifies the composed schema (base plus layers) used to type the document. The
@@ -147,6 +169,49 @@ A BinTEL document consists of the following fields in order:
 
 A conforming decoder MUST verify that all bytes of the input are consumed by this procedure. Any
 bytes following the document root are a framing error (§10).
+
+### 6.2 Self-Contained Mode
+
+A BinTEL document in self-contained mode consists of the following fields in order:
+
+1. **Magic number**: the 4 bytes `B2 C4 B5 BC`. In BASE-256 textual form (§9), these bytes
+   appear as the characters at positions `0xB2`, `0xC4`, `0xB5`, and `0xBC` of the BASE-256
+   alphabet — `β` (`U+03B2`), `τ` (`U+03C4`), `ε` (`U+03B5`), and `μ` (`U+03BC` Greek small
+   mu). A self-contained BinTEL document therefore begins with the literal string `βτεμ` —
+   the trailing `μ` (for *monolithic*) distinguishes self-contained mode from external mode's
+   `βτελ`. As with §6.1 every byte is `≥ 0x80`, so the document cannot be mistaken for ASCII
+   or UTF-8 text.
+2. **Schema signature**: identical in structure and constraints to §6.1 field 2 — a length
+   varint followed by a palimpsest at the BinTEL-pinned parameters `(H, k_i, k_r) = (32, 4, 2)`.
+   The signature carried here MUST be the composed signature obtained from the embedded schema
+   body (field 3 below) under §8. A decoder MUST recompute the signature from the embedded body
+   and verify equality byte-for-byte; mismatch is fatal (B11).
+3. **Embedded schema body**: the byte length of the schema body (integer), followed by that many
+   bytes. The bytes are the bare document-root encoding (§7.1) of the schema document, with the
+   root struct's member list taken to be `tel-schema.document.members` (an axiomatic property
+   of any conforming implementation, per §20.5 of the TEL Specification). No nested magic
+   number and no nested signature appear: framing is provided by the outer schema_bytes_len
+   varint, and the implicit governing schema is `tel-schema`.
+
+   The embedded schema body MAY contain `layer` compounds. A decoder reconstructs the composed
+   schema by stripping the `layer` compounds to obtain the base schema, treating each `layer`
+   compound as a tel-schema `Layer` Definition (§8.1), and applying the layers in source order
+   per §20.3 of the TEL Specification.
+4. **Document root**: encoded using the node encoding (§7.1), under the composed schema
+   obtained from field 3. The bytes are identical to those of §6.1 field 3 for the same
+   semantic content and the same composed schema; the embedded-schema preamble is the only
+   wire-form difference between the two modes.
+
+A conforming decoder MUST verify that all bytes of the input are consumed by this procedure;
+any bytes following the document root are a framing error (B08). A decoder MUST NOT begin
+decoding the document root until the embedded schema's signature has been recomputed and
+verified equal to the carried signature (B11 on mismatch); it MUST NOT emit a partial result
+when verification fails.
+
+A receiver that already has the embedded schema cached or known (e.g., the signature equals
+the built-in tel-schema signature, or matches an entry of an in-memory library) MAY skip
+decoding the embedded body — advancing the cursor by `schema_bytes_len` bytes — and use the
+known schema, provided it has previously verified that schema's signature.
 
 ## 7. Node Encoding
 
@@ -281,9 +346,12 @@ determine the child's type (Struct, Scalar, or Flag) from the next-read keyword 
 ### 7.8 Decoding
 
 A BinTEL decoder consumes the byte sequence defined in §6 and produces the semantic model defined
-in §18 of the TEL Specification. The decoder MUST have access to the resolved composed schema
-before it begins reading the document root (§6 fields 1–2 supply the magic number and the schema
-signature; the composed schema is obtained per §8.2 of the TEL Specification).
+in §18 of the TEL Specification. The decoder dispatches on the leading magic number (§6.1 field 1
+or §6.2 field 1); in external-schema mode it MUST have access to the resolved composed schema
+before it begins reading the document root (the composed schema is obtained per §8.2 of the TEL
+Specification), while in self-contained mode it obtains the composed schema from the embedded
+schema body inline, using the hardwired `tel-schema` axiom (§20.5 of the TEL Specification) as
+its bootstrap.
 
 The decoding algorithm is recursive. The pseudocode below treats `bytes` as a **stateful byte
 cursor**: each `next N bytes`, `decode-varint(bytes)`, and similar operation advances the cursor;
@@ -291,15 +359,38 @@ reading past end-of-input raises B09, and any input bytes remaining when the doc
 completes raise B08.
 
 ```
-decode-document(bytes, schema):
-  read magic = next 4 bytes; verify magic == [B2, C4, B5, BB] or report error (B01)
+decode-document(bytes, schema_or_resolver):
+  read magic = next 4 bytes
+  if magic == [B2, C4, B5, BB]:        // external-schema mode (§6.1)
+    mode = External
+  elif magic == [B2, C4, B5, BC]:      // self-contained mode (§6.2)
+    mode = SelfContained
+  else: report error (B01)
+
   read signature-length = decode-varint(bytes)
   read signature-bytes = next signature-length bytes
-  // Resolution to a composed schema is handled at the §8.2 (TEL spec) layer;
-  // this algorithm assumes the schema is already composed.
+  verify signature length and cadence XOR per §8.2 (B03 on failure)
+
+  if mode == SelfContained:
+    read schema-bytes-length = decode-varint(bytes)
+    read schema-bytes = next schema-bytes-length bytes
+    // The embedded schema body is a bare document-root encoding under
+    // tel-schema; tel-schema's keyword indices and member layout are
+    // axiomatic to any conforming implementation (§20.5 of the TEL spec).
+    schema-doc = decode-struct-body(schema-bytes, tel_schema.document.members)
+    if schema-doc is malformed: report error (B12)
+    composed-schema = construct_schema_and_compose(schema-doc)  // §20.3
+    recomputed-sig = composed-signature(schema-doc) per §8
+    if recomputed-sig != signature-bytes: report error (B11)
+    schema = composed-schema
+  else:
+    // Resolution to a composed schema is handled at the §8.2 (TEL spec) layer;
+    // this algorithm assumes the schema is already composed.
+    schema = schema_or_resolver  // supplied by the caller
+
   root = decode-struct-body(bytes, schema.document.members)
   if bytes-remaining(): report error (B08)
-  return Document { signature: signature-bytes, root }
+  return Document { signature: signature-bytes, root, mode }
 
 decode-struct-body(bytes, members):
   child-count = decode-varint(bytes)
@@ -485,7 +576,7 @@ Specification.
 
 | Code | Description                                                                                  |
 | ---- | -------------------------------------------------------------------------------------------- |
-| B01  | Magic number absent or does not match the bytes `B2 C4 B5 BB` (BASE-256: `βτελ`) (§6 field 1). |
+| B01  | Magic number absent or does not match either of the recognised values `B2 C4 B5 BB` (external-schema mode, BASE-256: `βτελ`, §6.1 field 1) or `B2 C4 B5 BC` (self-contained mode, BASE-256: `βτεμ`, §6.2 field 1). |
 | B02  | A variable-length integer (§4) extends beyond the end of input, or its accumulator overflows the decoder's chosen integer width. |
 | B03  | Schema signature length is not `33` (for `n = 1`) and not `37 + 2·(n − 2)` for any `n ≥ 2` (§6 field 2), **or** the XOR of every signature byte does not equal `0x79` — the BinTEL-pinned cadence byte (§8.2). |
 | B04  | Schema signature does not decode against the available hash library (§8.2 decoding); zero or more than one valid hash sequence. |
@@ -495,8 +586,10 @@ Specification.
 | B08  | The document-root decoding procedure of §7.8 terminates with input bytes remaining (framing error per §6). |
 | B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
 | B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E210 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
+| B11  | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte. |
+| B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tel-schema` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
 
-All BinTEL error codes (B01–B10) are **fatal**: on any such error a conforming decoder MUST
+All BinTEL error codes (B01–B12) are **fatal**: on any such error a conforming decoder MUST
 abort decoding and MUST NOT emit any partial result. BinTEL is the authoritative serialisation
 of the semantic model — once any byte is found inconsistent with §6 / §7, no remaining bytes
 can be trusted to convey their nominal types and lengths. No recovery is specified for BinTEL.
