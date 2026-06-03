@@ -233,6 +233,9 @@ pub struct RecordDefinition {
     /// Struct-level validators (§21.6) applying to instances of this
     /// Definition. Same semantics as `Struct.validators`.
     pub validators: Vec<String>,
+    /// Optional human-readable description of this type. Free-form text,
+    /// carried through to the semantic model and BinTEL; never validated.
+    pub description: Option<String>,
 }
 
 /// A named scalar type declared via `scalar <Name>` at schema or layer
@@ -242,6 +245,9 @@ pub struct RecordDefinition {
 pub struct ScalarDefinition {
     pub name: String,
     pub validators: Vec<String>,
+    /// Optional human-readable description of this type. Free-form text,
+    /// carried through to the semantic model and BinTEL; never validated.
+    pub description: Option<String>,
 }
 
 /// A named sum type declared via `select <Name>` at schema or layer scope.
@@ -257,6 +263,9 @@ pub struct SelectDefinition {
     /// that name a variant of the base SelectDefinition to remove. Always
     /// empty in a fully composed schema (consumed by `MergeSelect`).
     pub layer_excludes: Vec<String>,
+    /// Optional human-readable description of this type. Free-form text,
+    /// carried through to the semantic model and BinTEL; never validated.
+    pub description: Option<String>,
 }
 
 /// A `Type` is what a Field or Variant evaluates to. In the v1.0 schema
@@ -349,6 +358,9 @@ pub struct Field {
     /// `required` is `true` and the resolved `type` is `Scalar`
     /// (E204 otherwise).
     pub default: Option<String>,
+    /// Optional human-readable description of this field. Free-form text,
+    /// carried through to the semantic model and BinTEL; never validated.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -363,6 +375,9 @@ pub struct SelectRef {
 pub struct Variant {
     pub keyword: String,
     pub r#type: Type,
+    /// Optional human-readable description of this variant. Free-form text,
+    /// carried through to the semantic model and BinTEL; never validated.
+    pub description: Option<String>,
 }
 
 // ── Validators (§21) ────────────────────────────────────────────────────────
@@ -675,13 +690,15 @@ pub fn builtin_tel_schema() -> Schema {
     // a loosening flag was explicitly chosen.
     let field = |req: Polarity, rep: Polarity, kw: &str, t: Type| Member::Field(Field {
         required: req, repeatable: rep, keyword: kw.to_string(),
-        r#type: t, default: None,
+        r#type: t, default: None, description: None,
     });
     // SelectRef-construction helper.
     let selref = |req: Polarity, rep: Polarity, name: &str| Member::SelectRef(SelectRef {
         required: req, repeatable: rep, reference: name.to_string(),
     });
-    let variant = |kw: &str, t: Type| Variant { keyword: kw.to_string(), r#type: t };
+    let variant = |kw: &str, t: Type| Variant {
+        keyword: kw.to_string(), r#type: t, description: None,
+    };
 
     // ── RecordDefinitions ────────────────────────────────────────────────
 
@@ -696,7 +713,9 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, dflt, "repeatable", flag_type()),
             field(loose, dflt, "irrepeatable", flag_type()),
             field(loose, dflt, "default", str_type()),
+            field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
+        description: Some("A field declaration at a member position.\n".to_string()),
     };
 
     // A `select` declaration at a member position — a SelectRef.
@@ -709,6 +728,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, dflt, "repeatable", flag_type()),
             field(loose, dflt, "irrepeatable", flag_type()),
         ], validators: Vec::new(),
+        description: Some("A select declaration at a member position, referencing a top-level SelectDefinition.\n".to_string()),
     };
 
     // A `variant` declaration inside a Select body.
@@ -717,7 +737,9 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             field(dflt, dflt, "keyword", id_type()),
             field(dflt, dflt, "type", tn_type()),
+            field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
+        description: Some("A variant declaration inside a Select body.\n".to_string()),
     };
 
     // A `record` declaration: name + members.
@@ -726,7 +748,9 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             field(dflt, dflt, "name", tn_type()),
             selref(loose, loose, "Member"),
+            field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
+        description: Some("A record declaration: a named struct definition.\n".to_string()),
     };
 
     // A `scalar` declaration: name + one or more validators.
@@ -735,7 +759,9 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             field(dflt, dflt, "name", tn_type()),
             field(dflt, loose, "validate", id_type()),
+            field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
+        description: Some("A scalar declaration: a named scalar definition with one or more validators.\n".to_string()),
     };
 
     // A top-level `select` declaration.
@@ -744,7 +770,9 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             field(dflt, dflt, "name", tn_type()),
             selref(dflt, loose, "SelectChild"),
+            field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
+        description: Some("A top-level select declaration: a named sum type.\n".to_string()),
     };
 
     // The shared struct-shape used by `document` and `overlay`.
@@ -753,6 +781,7 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             selref(loose, loose, "Member"),
         ], validators: Vec::new(),
+        description: Some("The shared struct shape used by document and overlay.\n".to_string()),
     };
 
     // A `layer` declaration.
@@ -765,6 +794,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, loose, "select", refn("Select")),
             field(loose, dflt, "overlay", refn("Body")),
         ], validators: Vec::new(),
+        description: Some("A layer declaration: per-layer definitions and an optional overlay.\n".to_string()),
     };
 
     // ── SelectDefinitions ────────────────────────────────────────────────
@@ -779,6 +809,7 @@ pub fn builtin_tel_schema() -> Schema {
         ],
         validators: Vec::new(),
         layer_excludes: Vec::new(),
+        description: Some("Members admissible inside a struct-shaped body: a field, select, or validator.\n".to_string()),
     };
 
     // Children admissible inside a Select body. `exclude` is lexically
@@ -793,6 +824,7 @@ pub fn builtin_tel_schema() -> Schema {
         ],
         validators: Vec::new(),
         layer_excludes: Vec::new(),
+        description: Some("Children admissible inside a Select body: a variant, exclude, or validator.\n".to_string()),
     };
 
     // ── Schema document root ─────────────────────────────────────────────
@@ -1429,7 +1461,8 @@ fn construct_record(c: &Compound) -> RecordDefinition {
     // The `record` compound's first inline atom is the TypeName.
     let name = first_inline_atom(c);
     let (members, validators) = construct_struct_body(&c.children);
-    RecordDefinition { name, members, validators }
+    let description = description_of(c);
+    RecordDefinition { name, members, validators, description }
 }
 
 fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
@@ -1443,7 +1476,8 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
             }
         }
     }
-    ScalarDefinition { name, validators }
+    let description = description_of(c);
+    ScalarDefinition { name, validators, description }
 }
 
 /// Construct a `SelectDefinition` from a top-level `select <Name>` compound
@@ -1467,13 +1501,29 @@ fn construct_select_definition(c: &Compound) -> SelectDefinition {
             }
         }
     }
-    SelectDefinition { name, variants, validators, layer_excludes }
+    let description = description_of(c);
+    SelectDefinition { name, variants, validators, layer_excludes, description }
 }
 
 /// Return the text of `c`'s first inline atom, or the empty string. Helper for
 /// extracting the keyword/name from compounds whose first atom is the name.
 fn first_inline_atom(c: &Compound) -> String {
     c.atoms.first().map(atom_text).unwrap_or_default()
+}
+
+/// Scan a compound's children for a `description` member and return its text,
+/// or `None`. Descriptions are supplied as an explicit `description` child
+/// compound (typically carrying a double-indented source atom); they are
+/// never positional atoms. Shared by the record/scalar/select constructors.
+fn description_of(c: &Compound) -> Option<String> {
+    for block in &c.children {
+        for child in &block.compounds {
+            if child.keyword == "description" {
+                return Some(scalar_value_text(child));
+            }
+        }
+    }
+    None
 }
 
 fn construct_layer(c: &Compound) -> Layer {
@@ -1598,7 +1648,8 @@ fn construct_field(c: &Compound) -> Field {
     let required = polarity_of(optional_flag, required_flag);
     let repeatable = polarity_of(repeatable_flag, irrepeatable_flag);
     let r#type = Type::Reference(type_name);
-    Field { required, repeatable, keyword, r#type, default }
+    let description = description_of(c);
+    Field { required, repeatable, keyword, r#type, default, description }
 }
 
 /// Construct a `SelectRef` at a member position. The first inline atom is
@@ -1661,7 +1712,8 @@ fn construct_variant(c: &Compound) -> Variant {
             }
         }
     }
-    Variant { keyword, r#type: Type::Reference(type_name) }
+    let description = description_of(c);
+    Variant { keyword, r#type: Type::Reference(type_name), description }
 }
 
 /// Build a `Type` from a type-variant child compound (`struct`, `scalar`,
@@ -1920,6 +1972,10 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                     name: def.name.clone(),
                     members: merged_members,
                     validators: merged_validators,
+                    // A layer's description (if any) overrides the base's;
+                    // otherwise the base description is inherited.
+                    description: def.description.clone()
+                        .or_else(|| records[pos].description.clone()),
                 };
             } else {
                 records.push(def.clone());
@@ -1945,6 +2001,9 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 scalars[pos] = ScalarDefinition {
                     name: sd.name.clone(),
                     validators: merged,
+                    // Layer description overrides base; else inherit base.
+                    description: sd.description.clone()
+                        .or_else(|| scalars[pos].description.clone()),
                 };
             } else {
                 scalars.push(sd.clone());
@@ -2062,6 +2121,12 @@ fn merge_select_def(
         variants,
         validators,
         layer_excludes: Vec::new(),
+        // Layer description overrides base; else inherit base. (Per-variant
+        // descriptions are not layer-overridable: the base variant list is
+        // retained wholesale above, so a matched layer variant's description
+        // does not replace the base's. Acceptable for v1.)
+        description: layer.description.clone()
+            .or_else(|| base.description.clone()),
     }
 }
 
@@ -2140,6 +2205,11 @@ fn merge_field_with(
         keyword: base.keyword.clone(),
         r#type: merged_type,
         default: base.default.clone(),
+        // A layer's description (if any) overrides the base's; otherwise the
+        // base description is inherited. (Note: `default` above is base-only
+        // by design — descriptions deliberately differ, being overridable.)
+        description: layer.description.clone()
+            .or_else(|| base.description.clone()),
     })
 }
 
@@ -3940,12 +4010,12 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
@@ -3968,7 +4038,7 @@ mod tests {
             layers: vec![], sigil: None,
             records: vec![],
             scalars: Vec::new(),
-            selects: vec![SelectDefinition {
+            selects: vec![SelectDefinition { description: None,
                 name: "Empty".to_string(),
                 variants: vec![],
                 validators: Vec::new(),
@@ -3987,7 +4057,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, // not required, so default is illegal
                         repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
@@ -4024,7 +4094,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "tel".to_string(),
                         r#type: Type::Flag, default: None,
@@ -4044,7 +4114,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Reference("missing".to_string()), default: None,
@@ -4060,7 +4130,7 @@ mod tests {
 
     #[test]
     fn validate_schema_catches_e211_duplicate_definition() {
-        let dup = || RecordDefinition {
+        let dup = || RecordDefinition { description: None,
             name: "Dup".to_string(),
             members: vec![], validators: Vec::new(),
         };
@@ -4104,7 +4174,7 @@ mod tests {
             document: Struct { members: vec![], validators: vec![] },
             layers: vec![],
             sigil: None,
-            records: vec![RecordDefinition {
+            records: vec![RecordDefinition { description: None,
                 name: "Thing".to_string(),
                 members: vec![Member::Exclude("bar".to_string())],
                 validators: vec![],
@@ -4121,16 +4191,16 @@ mod tests {
         // path — NOT E217. Base schema declares a named Select with
         // variants {a, b}; the layer declares a same-name Select with
         // `exclude b` to narrow.
-        let base_select = SelectDefinition {
+        let base_select = SelectDefinition { description: None,
             name: "Choice".to_string(),
             variants: vec![
-                Variant { keyword: "a".to_string(), r#type: Type::Flag },
-                Variant { keyword: "b".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "a".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "b".to_string(), r#type: Type::Flag },
             ],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
         };
-        let layer_select = SelectDefinition {
+        let layer_select = SelectDefinition { description: None,
             name: "Choice".to_string(),
             variants: vec![],
             validators: Vec::new(),
@@ -4189,7 +4259,7 @@ mod tests {
     }
 
     fn field(req: bool, rep: bool, kw: &str, t: Type) -> Member {
-        Member::Field(Field {
+        Member::Field(Field { description: None,
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: if rep { Polarity::Loose } else { Polarity::Default },
             keyword: kw.to_string(), r#type: t, default: None,
@@ -4206,7 +4276,7 @@ mod tests {
     }
 
     fn variant_(kw: &str, t: Type) -> Variant {
-        Variant { keyword: kw.to_string(), r#type: t }
+        Variant { description: None, keyword: kw.to_string(), r#type: t }
     }
 
     fn scalar_string() -> Type {
@@ -4251,7 +4321,7 @@ mod tests {
         // Required Scalar Field with a Field.default — the default is
         // substituted when the field is absent from the document.
         let s = schema_with_root(vec![
-            Member::Field(Field {
+            Member::Field(Field { description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
                 r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()] }),
@@ -4278,7 +4348,7 @@ mod tests {
     fn type_assign_catches_e310_validator_failure() {
         // schema with identifier validator on `id` field
         let s = schema_with_root(vec![
-            Member::Field(Field {
+            Member::Field(Field { description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
                 r#type: Type::Scalar(Scalar { validators: vec!["identifier".to_string()]}), default: None,
@@ -4330,7 +4400,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -4379,11 +4449,11 @@ mod tests {
         let mut s = schema_with_root(vec![
             field(true, false, "outer", mixed_struct),
         ]);
-        s.selects.push(SelectDefinition {
+        s.selects.push(SelectDefinition { description: None,
             name: "Mixed".to_string(),
             variants: vec![
-                Variant { keyword: "one".to_string(), r#type: scalar_string() },
-                Variant { keyword: "two".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "one".to_string(), r#type: scalar_string() },
+                Variant { description: None, keyword: "two".to_string(), r#type: Type::Flag },
             ],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
@@ -4407,7 +4477,7 @@ mod tests {
         let mut s = schema_with_root(vec![
             field(true, false, "colour", colour_struct),
         ]);
-        s.selects.push(SelectDefinition {
+        s.selects.push(SelectDefinition { description: None,
             name: "Colour".to_string(),
             variants: vec![
                 variant_("red", Type::Flag),
@@ -4435,7 +4505,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn flag_field(req: bool, kw: &str) -> Member {
-        Member::Field(Field {
+        Member::Field(Field { description: None,
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: Polarity::Default,
             keyword: kw.to_string(), r#type: Type::Flag, default: None,
@@ -4448,13 +4518,13 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default, keyword: "name".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], validators: Vec::new()},
             layers: vec![layer("with-email", vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default, keyword: "email".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
@@ -4474,20 +4544,20 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![], validators: vec![] },
-            layers: vec![layer("ext", vec![], vec![RecordDefinition {
+            layers: vec![layer("ext", vec![], vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default, keyword: "postcode".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
                 ], validators: Vec::new(),
             }])],
             sigil: None,
-            records: vec![RecordDefinition {
+            records: vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default, keyword: "street".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
@@ -4504,16 +4574,16 @@ mod tests {
     fn compose_exclude_variant_works() {
         // Base has `select Status { active, archived }`. Layer excludes
         // `archived`. Composed Status has only `active`.
-        let base_status = SelectDefinition {
+        let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
             variants: vec![
-                Variant { keyword: "active".to_string(), r#type: Type::Flag },
-                Variant { keyword: "archived".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "active".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "archived".to_string(), r#type: Type::Flag },
             ],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
         };
-        let layer_status = SelectDefinition {
+        let layer_status = SelectDefinition { description: None,
             name: "Status".to_string(),
             variants: vec![],
             validators: Vec::new(),
@@ -4543,13 +4613,13 @@ mod tests {
 
     #[test]
     fn compose_exclude_variant_unknown_keyword_is_e212() {
-        let base_status = SelectDefinition {
+        let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
-            variants: vec![Variant { keyword: "active".to_string(), r#type: Type::Flag }],
+            variants: vec![Variant { description: None, keyword: "active".to_string(), r#type: Type::Flag }],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
         };
-        let layer_status = SelectDefinition {
+        let layer_status = SelectDefinition { description: None,
             name: "Status".to_string(),
             variants: vec![],
             validators: Vec::new(),
@@ -4577,15 +4647,15 @@ mod tests {
         // A layer tries to introduce a fresh variant `extra` in an existing
         // SelectDefinition — variant addition is forbidden (E214 — would
         // widen the sum).
-        let base_status = SelectDefinition {
+        let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
-            variants: vec![Variant { keyword: "active".to_string(), r#type: Type::Flag }],
+            variants: vec![Variant { description: None, keyword: "active".to_string(), r#type: Type::Flag }],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
         };
-        let layer_status = SelectDefinition {
+        let layer_status = SelectDefinition { description: None,
             name: "Status".to_string(),
-            variants: vec![Variant { keyword: "extra".to_string(), r#type: Type::Flag }],
+            variants: vec![Variant { description: None, keyword: "extra".to_string(), r#type: Type::Flag }],
             validators: Vec::new(),
             layer_excludes: Vec::new(),
         };
@@ -4643,13 +4713,13 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![], validators: vec![] },
-            layers: vec![layer("ext", vec![], vec![RecordDefinition {
+            layers: vec![layer("ext", vec![], vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![],
                 validators: vec!["layer-rule".to_string()],
             }])],
             sigil: None,
-            records: vec![RecordDefinition {
+            records: vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![],
                 validators: vec!["base-rule".to_string()],
@@ -4672,7 +4742,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4680,7 +4750,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Tight, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4706,7 +4776,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4714,7 +4784,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Tight,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4738,7 +4808,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4746,7 +4816,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4766,7 +4836,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4774,7 +4844,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field {
+                Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -4869,6 +4939,111 @@ mod tests {
     }
 
     #[test]
+    fn construct_schema_captures_descriptions_on_types_fields_variants() {
+        // Descriptions are supplied as `description` child compounds carrying
+        // a (double-indented) source atom, so prose with spaces round-trips.
+        // A source atom (§14) is indented two levels (four spaces) deeper than
+        // its compound — one level deeper would be a child compound.
+        let source = "\
+tel 1.0
+
+name demo
+
+scalar Email
+  validate non-empty
+  description
+      An email address.
+
+record Person
+  description
+      A human being.
+  field name String
+    description
+        The full legal name.
+  field email Email optional
+
+select Status
+  variant active Flag
+    description
+        Currently reachable.
+  variant archived Flag
+
+document
+  field person Person
+";
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let s = construct_schema(&parsed.document);
+
+        // Scalar type description; validators are unaffected (and carry no
+        // description of their own — validators are bare identifiers).
+        let email = s.scalars.iter().find(|d| d.name == "Email").expect("Email scalar");
+        assert_eq!(email.description.as_deref().map(str::trim), Some("An email address."));
+        assert_eq!(email.validators, vec!["non-empty".to_string()]);
+
+        // Record type description, and per-field descriptions (present vs absent).
+        let person = s.records.iter().find(|d| d.name == "Person").expect("Person record");
+        assert_eq!(person.description.as_deref().map(str::trim), Some("A human being."));
+        let name = match &person.members[0] { Member::Field(f) => f, _ => panic!("field name") };
+        assert_eq!(name.keyword, "name");
+        assert_eq!(name.description.as_deref().map(str::trim), Some("The full legal name."));
+        let email_field = match &person.members[1] { Member::Field(f) => f, _ => panic!("field email") };
+        assert_eq!(email_field.keyword, "email");
+        assert_eq!(email_field.description, None, "undescribed field stays None");
+
+        // Select type and per-variant descriptions (present vs absent).
+        let status = s.selects.iter().find(|d| d.name == "Status").expect("Status select");
+        assert_eq!(status.variants[0].keyword, "active");
+        assert_eq!(status.variants[0].description.as_deref().map(str::trim), Some("Currently reachable."));
+        assert_eq!(status.variants[1].keyword, "archived");
+        assert_eq!(status.variants[1].description, None);
+    }
+
+    #[test]
+    fn layer_description_overrides_base_else_inherits() {
+        // A layer's non-null field description overrides the base's; a layer
+        // field with no description leaves the base description intact.
+        let source = "\
+tel 1.0
+
+name demo
+
+record Person
+  field name String
+    description
+        Base name description.
+  field nick String optional
+    description
+        Base nick description.
+
+document
+  field person Person
+
+layer fancy
+  record Person
+    field name String
+      description
+          Layer name description.
+    field nick String optional
+";
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let base = construct_schema(&parsed.document);
+        let (composed, errs) = compose_schema(&base);
+        assert!(errs.is_empty(), "compose errors: {:?}", errs);
+
+        let person = composed.records.iter().find(|d| d.name == "Person").expect("Person");
+        let name = match &person.members[0] { Member::Field(f) => f, _ => panic!("field name") };
+        assert_eq!(name.keyword, "name");
+        assert_eq!(name.description.as_deref().map(str::trim), Some("Layer name description."),
+                   "layer description should override base");
+        let nick = match &person.members[1] { Member::Field(f) => f, _ => panic!("field nick") };
+        assert_eq!(nick.keyword, "nick");
+        assert_eq!(nick.description.as_deref().map(str::trim), Some("Base nick description."),
+                   "absent layer description should inherit base");
+    }
+
+    #[test]
     fn construct_schema_round_trips_minimal_schema() {
         // Hand-built schema → write a TEL source in the v1.0 syntax →
         // re-parse → re-construct. The constructed schema MUST equal the
@@ -4879,13 +5054,13 @@ mod tests {
             name: "round-trip".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Reference("String".to_string()),
                         default: None,
                     }),
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Reference("Flag".to_string()),
@@ -4925,7 +5100,7 @@ mod tests {
             layers: vec![],
             sigil: None,
             records: vec![
-                RecordDefinition {
+                RecordDefinition { description: None,
                     name: "Address".to_string(),
                     members: vec![
                         field(true, false, "city", scalar_string()),
@@ -5101,7 +5276,7 @@ mod tests {
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "outer".to_string(),
@@ -5112,9 +5287,9 @@ mod tests {
             },
             layers: vec![],
             sigil: None,
-            records: vec![RecordDefinition {
+            records: vec![RecordDefinition { description: None,
                 name: "Outer".to_string(),
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "inner".to_string(),
@@ -5162,7 +5337,7 @@ mod tests {
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "a".to_string(),
                     r#type: Type::Reference("A".to_string()),
@@ -5173,9 +5348,9 @@ mod tests {
             layers: vec![],
             sigil: None,
             records: vec![
-                RecordDefinition {
+                RecordDefinition { description: None,
                     name: "A".to_string(),
-                    members: vec![Member::Field(Field {
+                    members: vec![Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
                         r#type: Type::Reference("B".to_string()),
@@ -5183,16 +5358,16 @@ mod tests {
                     })],
                     validators: vec![],
                 },
-                RecordDefinition {
+                RecordDefinition { description: None,
                     name: "B".to_string(),
                     members: vec![
-                        Member::Field(Field {
+                        Member::Field(Field { description: None,
                             required: Polarity::Loose, repeatable: Polarity::Default,
                             keyword: "shared".to_string(),
                             r#type: Type::Reference("String".to_string()),
                             default: None,
                         }),
-                        Member::Field(Field {
+                        Member::Field(Field { description: None,
                             required: Polarity::Default, repeatable: Polarity::Default,
                             keyword: "c".to_string(),
                             r#type: Type::Reference("C".to_string()),
@@ -5201,9 +5376,9 @@ mod tests {
                     ],
                     validators: vec![],
                 },
-                RecordDefinition {
+                RecordDefinition { description: None,
                     name: "C".to_string(),
-                    members: vec![Member::Field(Field {
+                    members: vec![Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "shared".to_string(),
                         r#type: Type::Reference("String".to_string()),
@@ -5394,18 +5569,18 @@ mod tests {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "address".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field {
+                                Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
                                     r#type: Type::Scalar(Scalar {
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field {
+                                Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
                                     r#type: Type::Scalar(Scalar {
@@ -5461,12 +5636,12 @@ mod tests {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -5503,17 +5678,17 @@ mod tests {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "record".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field {
+                                Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
                                     r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field {
+                                Member::Field(Field { description: None,
                                     required: Polarity::Loose, repeatable: Polarity::Default,
                                     keyword: "active".to_string(),
                                     r#type: Type::Flag, default: None,
@@ -5547,12 +5722,12 @@ mod tests {
             name: "greeting".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
                         r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "bold".to_string(),
                         r#type: Type::Flag, default: None,

@@ -1009,7 +1009,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
@@ -1049,7 +1049,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()] }),
@@ -1074,7 +1074,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
@@ -1116,7 +1116,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "ok".to_string(),
                     r#type: crate::Type::Flag, default: None,
@@ -1147,17 +1147,17 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "person".to_string(),
                     r#type: crate::Type::Struct(crate::Struct {
                         members: vec![
-                            crate::Member::Field(crate::Field {
+                            crate::Member::Field(crate::Field { description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "first".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
                             }),
-                            crate::Member::Field(crate::Field {
+                            crate::Member::Field(crate::Field { description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "last".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
@@ -1247,7 +1247,7 @@ mod tests {
         crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar {
@@ -1404,7 +1404,7 @@ mod tests {
         let bad_schema = crate::Schema {
             name: "bad".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field {
+                members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "child".to_string(),
                     r#type: crate::Type::Reference("missing-definition".to_string()), default: None,
