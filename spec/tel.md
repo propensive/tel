@@ -1315,17 +1315,20 @@ interface RecordDefinition {
   name: TypeName;
   members: Member[];
   validators: string[];
+  description: string | null;
 }
 
 interface ScalarDefinition {
   name: TypeName;
   validators: string[];
+  description: string | null;
 }
 
 interface SelectDefinition {
   name: TypeName;
   variants: Variant[];
   validators: string[];
+  description: string | null;
 }
 
 type Type = Struct | Scalar | Flag | Reference;
@@ -1369,6 +1372,7 @@ interface Field {
   keyword: string;
   type: Type;
   default: string | null;
+  description: string | null;
 }
 
 // References a SelectDefinition at a member position. The named Select's
@@ -1384,6 +1388,7 @@ interface SelectRef {
 interface Variant {
   keyword: string;
   type: Type;
+  description: string | null;
 }
 
 // Layer-only operation. At the position of a Struct, `Exclude(K)` would
@@ -1469,6 +1474,16 @@ instance and may reject it under cross-cutting rules. Layer-merge of same-name
 `SelectDefinition`s removes variants (via `Exclude` members declared in the layer's
 SelectDefinition body) and appends validators; a layer MUST NOT introduce a variant with a
 keyword absent from the base SelectDefinition (**E214**).
+
+Each `RecordDefinition`, `ScalarDefinition`, `SelectDefinition`, `Field`, and `Variant` also
+carries an optional `description`: free-form human-readable text documenting the type, field, or
+variant, or `null` when absent. Unlike a comment (§11.1), a `description` is part of the semantic
+model: it survives construction and BinTEL round-trips. It is never validated and places no
+constraint on instances. Validators carry no `description`; documentation of what a constraint
+checks belongs with the validator, not its use site. On layer-merge of same-name Definitions and
+same-keyword fields, a layer's non-null `description` overrides the base's; otherwise the base
+`description` is inherited. (Per-variant descriptions are not layer-overridable, as the base
+variant list is retained wholesale; see §20.3.)
 
 `Flag` types cannot be aliased through `Definition`; they are referenced by the built-in name
 `Flag` instead (§20.5).
@@ -2121,6 +2136,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `type`          | The type-name field of a `Field`, a `Variant`, or a `SelectRef`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`). |
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E204 otherwise). |
+| `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
 | `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E217 otherwise). |
 
 **Predefined type names.** The names `Flag`, `String`, `Identifier`, and `Sigil` are predefined
@@ -2186,10 +2202,10 @@ The pinned value, computed against the canonical
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | `a9d3e1ed5843888b8c077a12609252e81e62dcccaf9d2cc074bd4d5ec10613ba`   |
-| BASE-256   | `ΩǓῡíXCẈẋẌćzĒŠƒRǨḞbӜỌίƝЬπtẽMŞӁĆГκ`                                  |
+| BLAKE3-256 | `626dd8958809da354a2f8bd9f7dac1cfda7f549ecbe047eb0d8c0a17c278d517`   |
+| BASE-256   | `bmῘƕẈȉῚ5JįẋÙỷῚӁϏῚſTΞϋàGӫḍẌЊЗӂxϕЗ`                                  |
 
-The BinTEL document root encoding of `tel-schema.tel` is 887 bytes; the raw bytes are recorded
+The BinTEL document root encoding of `tel-schema.tel` is 1651 bytes; the raw bytes are recorded
 in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
 [`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
 Specification.
@@ -2235,18 +2251,21 @@ fields of the `Schema` model:
 2. **`RecordDefinition` construction.** From a `record` element: take the `name` child (or first
    inline atom, which MUST be a `TypeName`) as `RecordDefinition.name`; build
    `RecordDefinition.members` and `RecordDefinition.validators` from the element's remaining
-   children per step 6.
+   children per step 6; set `RecordDefinition.description` from the optional `description` child's
+   text, or `null` if absent.
 2b. **`ScalarDefinition` construction.** From a `scalar` element: take the `name` child (or
    first inline atom, a `TypeName`) as `ScalarDefinition.name`; for each `validate` child within
    the element, append the child's inline-atom text to `ScalarDefinition.validators`, in source
-   order.
+   order; set `ScalarDefinition.description` from the optional `description` child's text, or
+   `null` if absent.
 2c. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
    (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
    append a `Variant` to `SelectDefinition.variants` per step 3; for each `validate` child,
    append the child's inline-atom text to `SelectDefinition.validators`; for each `exclude`
    child (permitted only inside a layer's `select` body — otherwise **E217**), append a
    `Member::Exclude(K)` entry to the SelectDefinition body that will be consumed by
-   `MergeSelect` during layer composition.
+   `MergeSelect` during layer composition; set `SelectDefinition.description` from the optional
+   `description` child's text, or `null` if absent.
 3. **Member construction.** A `field` element becomes a `Field`; a `select` element at a member
    position (inside a `record` body, `document`, or `overlay`) becomes a `SelectRef`; a
    `variant` element (inside a top-level `select`) becomes a `Variant`. The four loosen/tighten
@@ -2270,6 +2289,8 @@ fields of the `Schema` model:
    - The `type` Scalar child or atom → `Field.type` as a `Reference(TypeName)` (per step 5).
    - The optional `default` Scalar child or atom → `Field.default` (a string), or `null` if
      absent.
+   - The optional `description` Scalar child → `Field.description` (a string), or `null` if
+     absent.
 
    Within a `SelectRef`:
    - The four loosen/tighten Flag children compute `SelectRef.required` and
@@ -2280,6 +2301,8 @@ fields of the `Schema` model:
    Within a `Variant`:
    - `keyword` child or first inline atom → `Variant.keyword` (kebab-case).
    - `type` child or second inline atom → `Variant.type` as a `Reference(TypeName)`.
+   - The optional `description` Scalar child → `Variant.description` (a string), or `null` if
+     absent.
 4. **`Layer` construction.** From a `layer` element: take the `name` child as `Layer.name`;
    build `Layer.overlay` from the `overlay` element's children per step 6 (treating an absent
    `overlay` as an empty Struct); construct `Layer.records` from each `record` child within

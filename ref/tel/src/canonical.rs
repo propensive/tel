@@ -255,7 +255,7 @@ mod tests {
         Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field {
+                members: vec![Member::Field(Field { description: None,
                     required: if required { Polarity::Default } else { Polarity::Loose },
                     repeatable: Polarity::Default,
                     keyword: keyword.to_string(),
@@ -337,13 +337,13 @@ mod tests {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "a".to_string(),
                         r#type: Type::Scalar(Scalar {
                             validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field {
+                    Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
                         r#type: Type::Scalar(Scalar {
