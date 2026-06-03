@@ -696,13 +696,14 @@ the opening indent. The scan uses bare `LF` regardless of the document's line-en
 payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
 delimiter (exclusive). The `LF` after the closing delimiter terminates the literal atom.
 
-For example, a literal atom nested two indent levels deep with delimiter `END` looks like this
-(note that the closing `END` is flush left, not indented):
+For example, a literal atom with delimiter `END`, opened three indent levels below its compound
+line `inner`, looks like this (note that the closing `END` is flush left, not indented, and that
+the payload's leading spaces are preserved because no indentation is stripped):
 
 ```text
 outer
   inner
-      END
+        END
         leading-space-preserved-content
 END
   sibling-of-inner
