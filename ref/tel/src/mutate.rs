@@ -13,6 +13,7 @@
 //! compound. Helpers below build paths by keyword search.
 
 use crate::{Atom, Block, Compound, Document, atom_text};
+use crate::canonical;
 
 /// Path to a compound within a `Document`. Each step is a
 /// `(block_index, compound_index)` pair indexing into the surrounding
@@ -73,62 +74,47 @@ fn walk_mut<'a>(doc: &'a mut Document, path: &Path) -> Result<&'a mut Compound, 
 /// represented in the existing form, in which case the operation upgrades
 /// to the next form per §22.2 "Atom form escalation".
 pub fn update_value(doc: &mut Document, target: &Path, value: &str) -> Result<(), MutationError> {
+    // The sigil is needed to evaluate the inline-safe predicate (§22.2). It is
+    // captured before the mutable borrow below; default `#` when unspecified.
+    let sigil = doc.pragma.as_ref().and_then(|p| p.sigil).unwrap_or('#');
     let cc = walk_mut(doc, target)?;
     let atom = cc.atoms.first_mut().ok_or(MutationError::NotAScalar)?;
     match atom {
+        // Atom-form safety invariant (§22.2): keep the current form only while
+        // the new value remains safe for it, otherwise escalate inline → source
+        // → literal. Escalation never moves to an earlier form.
         Atom::Inline { text, .. } => {
-            if value.contains('\n') {
-                // Cannot remain inline; upgrade to source atom.
+            if canonical::can_inline(value, sigil) {
+                *text = value.to_string();
+            } else if canonical::can_source(value) {
                 *atom = Atom::Source { text: value.to_string() };
             } else {
-                *text = value.to_string();
+                *atom = Atom::Literal {
+                    delimiter: canonical::choose_literal_delim(value),
+                    text: value.to_string(),
+                };
             }
         }
         Atom::Source { text } => {
-            if has_trailing_spaces_on_any_line(value) || requires_literal(value) {
+            if canonical::can_source(value) {
+                *text = value.to_string();
+            } else {
                 *atom = Atom::Literal {
-                    delimiter: choose_delimiter(value, "---"),
+                    delimiter: canonical::choose_literal_delim(value),
                     text: value.to_string(),
                 };
-            } else {
-                *text = value.to_string();
             }
         }
         Atom::Literal { delimiter, text } => {
-            if value.lines().any(|l| l == delimiter) {
-                // Pick a fresh delimiter.
-                *delimiter = choose_delimiter(value, delimiter);
+            // Keep the existing delimiter unless the new payload collides with
+            // it; only then fall back to a fresh dash-extension delimiter.
+            if value.split('\n').any(|l| l == delimiter) {
+                *delimiter = canonical::choose_literal_delim(value);
             }
             *text = value.to_string();
         }
     }
     Ok(())
-}
-
-fn has_trailing_spaces_on_any_line(s: &str) -> bool {
-    s.lines().any(|l| l.ends_with(' '))
-}
-
-fn requires_literal(s: &str) -> bool {
-    // Source atoms are not the right form when the content would be ambiguous
-    // (e.g., contains a line that looks like a delimiter, or carries trailing
-    // spaces). The simplest conservative answer for now is "no" unless the
-    // caller hits a delimiter collision; the canonical-serialization rules
-    // pick the literal form for trailing-space cases.
-    has_trailing_spaces_on_any_line(s)
-}
-
-fn choose_delimiter(payload: &str, preferred: &str) -> String {
-    if !payload.lines().any(|l| l == preferred) {
-        return preferred.to_string();
-    }
-    for i in 1..1000 {
-        let candidate = "-".repeat(3 + i);
-        if !payload.lines().any(|l| l == candidate) {
-            return candidate;
-        }
-    }
-    "---".to_string() // unreachable in practice
 }
 
 // ── attach-remark / remove-remark ────────────────────────────────────────────
@@ -823,6 +809,92 @@ mod tests {
         match c.atoms.first().unwrap() {
             Atom::Source { text } => assert_eq!(text, "line1\nline2"),
             _ => panic!("expected source atom for multi-line value"),
+        }
+    }
+
+    #[test]
+    fn update_value_inline_escalates_to_source_for_hard_space() {
+        // Two consecutive spaces are a hard space: not inline-safe, but a
+        // single line with no leading/trailing space is source-safe.
+        let mut doc = small_doc();
+        let p = find_root_by_keyword(&doc, "email").unwrap();
+        update_value(&mut doc, &p, "a  b").unwrap();
+        let c = doc.children[0].compounds.iter().find(|c| c.keyword == "email").unwrap();
+        match c.atoms.first().unwrap() {
+            Atom::Source { text } => assert_eq!(text, "a  b"),
+            other => panic!("expected source atom for hard-space value, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn update_value_inline_escalates_to_source_for_leading_sigil_remark() {
+        // A leading sigil followed by a soft space would parse as a remark
+        // (§11.2), so it is not inline-safe. (An internal space-then-sigil such
+        // as "a #b" *is* inline-safe — it stays a single atom in hard-space
+        // mode — so it would remain inline.)
+        let mut doc = small_doc();
+        let p = find_root_by_keyword(&doc, "email").unwrap();
+        update_value(&mut doc, &p, "# x").unwrap();
+        let c = doc.children[0].compounds.iter().find(|c| c.keyword == "email").unwrap();
+        match c.atoms.first().unwrap() {
+            Atom::Source { text } => assert_eq!(text, "# x"),
+            other => panic!("expected source atom for leading-sigil remark value, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn update_value_inline_escalates_to_literal_for_leading_space() {
+        // A leading space is neither inline-safe nor source-safe (a source atom
+        // strips the first line's indentation), so it must become literal.
+        let mut doc = small_doc();
+        let p = find_root_by_keyword(&doc, "email").unwrap();
+        update_value(&mut doc, &p, " leading").unwrap();
+        let c = doc.children[0].compounds.iter().find(|c| c.keyword == "email").unwrap();
+        match c.atoms.first().unwrap() {
+            Atom::Literal { text, delimiter } => {
+                assert_eq!(text, " leading");
+                assert!(!text.split('\n').any(|l| l == delimiter),
+                        "chosen delimiter must not collide with any payload line");
+            }
+            other => panic!("expected literal atom for leading-space value, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn update_value_inline_escalates_to_literal_for_trailing_space() {
+        // Trailing space: not inline-safe and not source-safe (source strips it).
+        let mut doc = small_doc();
+        let p = find_root_by_keyword(&doc, "email").unwrap();
+        update_value(&mut doc, &p, "trailing ").unwrap();
+        let c = doc.children[0].compounds.iter().find(|c| c.keyword == "email").unwrap();
+        match c.atoms.first().unwrap() {
+            Atom::Literal { text, delimiter } => {
+                assert_eq!(text, "trailing ");
+                assert!(!text.split('\n').any(|l| l == delimiter),
+                        "chosen delimiter must not collide with any payload line");
+            }
+            other => panic!("expected literal atom for trailing-space value, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn update_value_source_escalates_to_literal_for_blank_line() {
+        // A blank line would terminate a source atom prematurely, so a source
+        // atom whose new value contains a blank line must escalate to literal.
+        let mut doc = parse("tel 1.0\n\nnote\n    line a\n    line b\n").document;
+        let p = find_root_by_keyword(&doc, "note").unwrap();
+        assert!(matches!(
+            doc.children[0].compounds.iter().find(|c| c.keyword == "note").unwrap().atoms.first(),
+            Some(Atom::Source { .. })));
+        update_value(&mut doc, &p, "first\n\nthird").unwrap();
+        let c = doc.children[0].compounds.iter().find(|c| c.keyword == "note").unwrap();
+        match c.atoms.first().unwrap() {
+            Atom::Literal { text, delimiter } => {
+                assert_eq!(text, "first\n\nthird");
+                assert!(!text.split('\n').any(|l| l == delimiter),
+                        "chosen delimiter must not collide with any payload line");
+            }
+            other => panic!("expected literal atom for blank-line value, got: {:?}", other),
         }
     }
 

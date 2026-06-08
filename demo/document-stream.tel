@@ -1,0 +1,23 @@
+tel 1.0
+
+# A multi-document stream (§6.1): three independent TEL documents separated by
+# document-separator lines (a line of exactly two sigil characters, `##`). Each
+# document has its own pragma and is parsed independently. Streaming parsing
+# yields all three; single-document parsing reads only the first and stops at
+# the first `##`.
+
+event   deploy
+service api
+status  started
+##
+tel 1.0
+
+event   deploy
+service api
+status  succeeded
+##
+tel 1.0
+
+event   deploy
+service web
+status  started
