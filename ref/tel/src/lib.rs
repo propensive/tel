@@ -715,7 +715,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, dflt, "default", str_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A field declaration at a member position.\n".to_string()),
+        description: Some("A field declaration at a member position.".to_string()),
     };
 
     // A `select` declaration at a member position — a SelectRef.
@@ -728,7 +728,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, dflt, "repeatable", flag_type()),
             field(loose, dflt, "irrepeatable", flag_type()),
         ], validators: Vec::new(),
-        description: Some("A select declaration at a member position, referencing a top-level SelectDefinition.\n".to_string()),
+        description: Some("A select declaration at a member position, referencing a top-level SelectDefinition.".to_string()),
     };
 
     // A `variant` declaration inside a Select body.
@@ -739,7 +739,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(dflt, dflt, "type", tn_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A variant declaration inside a Select body.\n".to_string()),
+        description: Some("A variant declaration inside a Select body.".to_string()),
     };
 
     // A `record` declaration: name + members.
@@ -750,7 +750,7 @@ pub fn builtin_tel_schema() -> Schema {
             selref(loose, loose, "Member"),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A record declaration: a named struct definition.\n".to_string()),
+        description: Some("A record declaration: a named struct definition.".to_string()),
     };
 
     // A `scalar` declaration: name + one or more validators.
@@ -761,7 +761,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(dflt, loose, "validate", id_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A scalar declaration: a named scalar definition with one or more validators.\n".to_string()),
+        description: Some("A scalar declaration: a named scalar definition with one or more validators.".to_string()),
     };
 
     // A top-level `select` declaration.
@@ -772,7 +772,7 @@ pub fn builtin_tel_schema() -> Schema {
             selref(dflt, loose, "SelectChild"),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A top-level select declaration: a named sum type.\n".to_string()),
+        description: Some("A top-level select declaration: a named sum type.".to_string()),
     };
 
     // The shared struct-shape used by `document` and `overlay`.
@@ -781,7 +781,7 @@ pub fn builtin_tel_schema() -> Schema {
         members: vec![
             selref(loose, loose, "Member"),
         ], validators: Vec::new(),
-        description: Some("The shared struct shape used by document and overlay.\n".to_string()),
+        description: Some("The shared struct shape used by document and overlay.".to_string()),
     };
 
     // A `layer` declaration.
@@ -794,7 +794,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, loose, "select", refn("Select")),
             field(loose, dflt, "overlay", refn("Body")),
         ], validators: Vec::new(),
-        description: Some("A layer declaration: per-layer definitions and an optional overlay.\n".to_string()),
+        description: Some("A layer declaration: per-layer definitions and an optional overlay.".to_string()),
     };
 
     // ── SelectDefinitions ────────────────────────────────────────────────
@@ -809,7 +809,7 @@ pub fn builtin_tel_schema() -> Schema {
         ],
         validators: Vec::new(),
         layer_excludes: Vec::new(),
-        description: Some("Members admissible inside a struct-shaped body: a field, select, or validator.\n".to_string()),
+        description: Some("Members admissible inside a struct-shaped body: a field, select, or validator.".to_string()),
     };
 
     // Children admissible inside a Select body. `exclude` is lexically
@@ -824,7 +824,7 @@ pub fn builtin_tel_schema() -> Schema {
         ],
         validators: Vec::new(),
         layer_excludes: Vec::new(),
-        description: Some("Children admissible inside a Select body: a variant, exclude, or validator.\n".to_string()),
+        description: Some("Children admissible inside a Select body: a variant, exclude, or validator.".to_string()),
     };
 
     // ── Schema document root ─────────────────────────────────────────────
@@ -2514,6 +2514,12 @@ pub struct ParseResult {
     pub errors: Vec<TelError>,
 }
 
+/// Parse a single TEL document. Parsing stops at the first document
+/// separator (§6.1) — a line whose content is exactly two sigil characters —
+/// returning only the first document. Any content after that separator is
+/// not processed, which is the supported way to prefix arbitrary (possibly
+/// non-TEL) content with a TEL header. Use [`parse_stream`] to obtain every
+/// document in a multi-document source.
 pub fn parse(input: &str) -> ParseResult {
     parse_inner(input, None)
 }
@@ -2524,15 +2530,94 @@ pub fn parse(input: &str) -> ParseResult {
 /// which the line's keyword is a valid member of the parent struct. With
 /// no schema (or via `parse`), the parser falls back to the
 /// schema-independent shallower-wins rule. All other behaviour is
-/// identical.
+/// identical. Like [`parse`], this returns only the first document of the
+/// source, stopping at the first document separator (§6.1).
 pub fn parse_with_schema(input: &str, schema: &Schema) -> ParseResult {
     parse_inner(input, Some(schema))
 }
 
+/// Parse a stream of independent TEL documents (§6.1), separated by document
+/// separators (lines whose content is exactly two sigil characters). Yields
+/// one [`ParseResult`] per document, each carrying its own errors. Each
+/// document is parsed independently, with its own interpreter directive,
+/// pragma, resolved sigil, and margin. A separator followed only by blank
+/// lines (or nothing) does not produce a trailing empty document; a
+/// separator pair with no content between them yields an empty document.
+pub fn parse_stream(input: &str) -> impl Iterator<Item = ParseResult> + '_ {
+    DocumentStream::new(input, None)
+}
+
+/// Schema-aware variant of [`parse_stream`]; the schema is applied to every
+/// document in the stream.
+pub fn parse_stream_with_schema<'a>(input: &'a str, schema: &'a Schema) -> impl Iterator<Item = ParseResult> + 'a {
+    DocumentStream::new(input, Some(schema))
+}
+
 fn parse_inner(input: &str, schema: Option<&Schema>) -> ParseResult {
     let mut p = ParserState::new(input);
-    let doc = p.run(schema);
-    ParseResult { document: doc, errors: p.errors }
+    let prelude = p.prelude();
+    let (document, _next) = p.run_one(&prelude.raw_lines, 0, prelude.line_endings, schema);
+    ParseResult { document, errors: std::mem::take(&mut p.errors) }
+}
+
+/// Result of the file-level parsing prelude shared by every document in a
+/// source: the line split and line-ending mode are computed once for the
+/// whole input. A UTF-8 BOM (E101) is only meaningful at the very start of
+/// the source; if present, its error is recorded on `ParserState::errors`
+/// and is taken by the first document's result.
+struct Prelude {
+    raw_lines: Vec<RawLine>,
+    line_endings: LineEndings,
+}
+
+/// Lazy iterator over the documents of a multi-document source (§6.1).
+struct DocumentStream<'a> {
+    state: ParserState,
+    raw_lines: Vec<RawLine>,
+    line_endings: LineEndings,
+    /// Raw-line index at which the next document begins.
+    cursor: usize,
+    schema: Option<&'a Schema>,
+    done: bool,
+}
+
+impl<'a> DocumentStream<'a> {
+    fn new(input: &str, schema: Option<&'a Schema>) -> Self {
+        let mut state = ParserState::new(input);
+        let prelude = state.prelude();
+        DocumentStream {
+            state,
+            raw_lines: prelude.raw_lines,
+            line_endings: prelude.line_endings,
+            cursor: 0,
+            schema,
+            done: false,
+        }
+    }
+}
+
+impl<'a> Iterator for DocumentStream<'a> {
+    type Item = ParseResult;
+
+    fn next(&mut self) -> Option<ParseResult> {
+        if self.done {
+            return None;
+        }
+        // No trailing empty document: once everything from the cursor onward
+        // is blank, the stream is exhausted. A document separator line is
+        // non-blank, so an empty document delimited on both sides is still
+        // produced (the cursor then points at the following separator).
+        if self.raw_lines[self.cursor..].iter().all(|l| l.is_blank()) {
+            self.done = true;
+            return None;
+        }
+        let (document, next) = self.state.run_one(
+            &self.raw_lines, self.cursor, self.line_endings, self.schema,
+        );
+        self.cursor = next;
+        let errors = std::mem::take(&mut self.state.errors);
+        Some(ParseResult { document, errors })
+    }
 }
 
 struct ParserState {
@@ -2552,42 +2637,70 @@ impl ParserState {
         }
     }
 
-    fn run(&mut self, schema: Option<&Schema>) -> Document {
+    /// File-level prelude shared by every document in the source: handle a
+    /// leading BOM (E101), detect the line-ending mode (E121), and split the
+    /// input into raw lines. Computed once per source.
+    fn prelude(&mut self) -> Prelude {
         let mut start = 0;
 
-        // E101: BOM
+        // E101: BOM (only meaningful at the very start of the source).
         if self.all_chars.first() == Some(&'\u{FEFF}') {
             self.errors.push(TelError::new(ErrorCode::E101, 0, 1));
             start = 1;
         }
 
-        // Detect line endings and check E121
+        // Detect line endings and check E121 (file-wide; one mode per source).
         let line_endings = self.detect_line_endings(start);
 
-        // Split into raw lines
+        // Split into raw lines.
         let raw_lines = self.split_lines(start);
 
-        // Parse interpreter directive
-        let mut line_idx = 0;
+        Prelude { raw_lines, line_endings }
+    }
+
+    /// Parse one document beginning at raw-line index `start_line`. Returns
+    /// the parsed document and the raw-line index at which the next document
+    /// begins (just past the terminating separator, or `raw_lines.len()` if
+    /// the document reached the true end of input). Errors are accumulated in
+    /// `self.errors`, which the caller takes after the call so that each
+    /// document's errors are isolated.
+    fn run_one(
+        &mut self,
+        raw_lines: &[RawLine],
+        start_line: usize,
+        line_endings: LineEndings,
+        schema: Option<&Schema>,
+    ) -> (Document, usize) {
+        // Reset per-document presentation state. The default sigil applies
+        // unless this document's own pragma overrides it.
+        self.sigil = '#';
+        self.margin = 0;
+
+        // Parse interpreter directive — this document's own first line.
+        let mut line_idx = start_line;
         let mut interpreter_directive = None;
-        if !raw_lines.is_empty() && raw_lines[0].chars.len() >= 2
-            && raw_lines[0].chars[0] == '#' && raw_lines[0].chars[1] == '!'
+        if line_idx < raw_lines.len() && raw_lines[line_idx].chars.len() >= 2
+            && raw_lines[line_idx].chars[0] == '#' && raw_lines[line_idx].chars[1] == '!'
         {
-            interpreter_directive = Some(raw_lines[0].chars[2..].iter().collect());
-            self.margin = 0;
-            line_idx = 1;
+            interpreter_directive = Some(raw_lines[line_idx].chars[2..].iter().collect());
+            line_idx += 1;
         }
 
-        // Skip blank lines, find pragma or first content
-        let first_nb = raw_lines[line_idx..].iter().position(|l| !l.is_blank()).map(|i| i + line_idx);
+        // Skip blank lines, find pragma or first content (within this document).
+        let pragma_search_start = line_idx;
+        let first_nb = raw_lines[line_idx..].iter()
+            .position(|l| !l.is_blank()).map(|i| i + line_idx);
         let mut pragma = None;
 
         if let Some(fi) = first_nb {
             let text = raw_lines[fi].text();
             let trimmed = text.trim_start();
             if trimmed == "tel" || trimmed.starts_with("tel ") {
-                // Check E103
-                let byte_end: usize = self.all_chars[..raw_lines[fi].start + raw_lines[fi].chars.len()]
+                // Check E103 — measured from the document's first byte, since
+                // each document in a stream has its own 4096-byte pragma window.
+                let doc_start_char = raw_lines.get(start_line).map(|l| l.start).unwrap_or(0);
+                let byte_end: usize = self.all_chars
+                    [doc_start_char..raw_lines[fi].start + raw_lines[fi].chars.len()]
                     .iter().collect::<String>().len();
                 if byte_end > 4096 {
                     self.errors.push(TelError::new(
@@ -2598,7 +2711,7 @@ impl ParserState {
                 }
                 // Check E102 - is it the first non-blank after directive?
                 // There shouldn't be non-blank lines between line_idx and fi
-                if raw_lines[line_idx..fi].iter().any(|l| !l.is_blank()) {
+                if raw_lines[pragma_search_start..fi].iter().any(|l| !l.is_blank()) {
                     self.errors.push(TelError::new(
                         ErrorCode::E102, raw_lines[fi].start, raw_lines[fi].start + 3,
                     ));
@@ -2611,9 +2724,25 @@ impl ParserState {
             }
         }
 
-        // Check E102: if pragma wasn't found at first non-blank, scan for misplaced pragma
+        // Determine margin
+        if interpreter_directive.is_none() {
+            let search_start = line_idx;
+            if let Some(fi) = raw_lines[search_start..].iter().position(|l| !l.is_blank()) {
+                let line = &raw_lines[fi + search_start];
+                self.margin = line.chars.iter().take_while(|&&c| c == ' ').count();
+            }
+        }
+
+        // Build the tree from this document's lines. `boundary` is the
+        // raw-line index of the separator that ended the document, if any.
+        let (children, boundary) = self.build_tree(raw_lines, line_idx, schema);
+
+        // Check E102: if no pragma was found at the first non-blank line, scan
+        // for a misplaced pragma — but only within this document (up to its
+        // separator), so the next document's pragma is never mistaken for one.
         if pragma.is_none() {
-            for rl in &raw_lines[line_idx..] {
+            let scan_end = boundary.unwrap_or(raw_lines.len());
+            for rl in &raw_lines[pragma_search_start..scan_end] {
                 if rl.is_blank() { continue; }
                 let t = rl.text();
                 let tr = t.trim_start();
@@ -2624,19 +2753,11 @@ impl ParserState {
             }
         }
 
-        // Determine margin
-        if interpreter_directive.is_none() {
-            let search_start = line_idx;
-            if let Some(fi) = raw_lines[search_start..].iter().position(|l| !l.is_blank()) {
-                let line = &raw_lines[fi + search_start];
-                self.margin = line.chars.iter().take_while(|&&c| c == ' ').count();
-            }
-        }
-
-        // Build the tree from remaining lines
-        let children = self.build_tree(&raw_lines, line_idx, schema);
-
-        Document { interpreter_directive, pragma, line_endings, children }
+        let next_start = boundary.map_or(raw_lines.len(), |b| b + 1);
+        (
+            Document { interpreter_directive, pragma, line_endings, children },
+            next_start,
+        )
     }
 
     fn detect_line_endings(&mut self, start: usize) -> LineEndings {
@@ -2842,7 +2963,11 @@ impl ParserState {
 
     // ── Tree builder ────────────────────────────────────────────────────────
 
-    fn build_tree<'a>(&'a mut self, raw_lines: &'a [RawLine], start_idx: usize, schema: Option<&'a Schema>) -> Vec<Block> {
+    /// Build the block tree for a single document starting at `start_idx`.
+    /// Returns the blocks together with the raw-line index of the document
+    /// separator (§6.1) that ended the document, or `None` if parsing reached
+    /// the true end of input first.
+    fn build_tree<'a>(&'a mut self, raw_lines: &'a [RawLine], start_idx: usize, schema: Option<&'a Schema>) -> (Vec<Block>, Option<usize>) {
         let all_chars: &[char] = &self.all_chars;
         let mut bld = TreeCtx {
             raw: raw_lines,
@@ -2853,11 +2978,13 @@ impl ParserState {
             errors: Vec::new(),
             schema,
             ancestors: Vec::new(),
+            boundary: None,
         };
         let blocks = bld.parse_blocks(-1); // -1 = accept indent 0
+        let boundary = bld.boundary;
         let errs = std::mem::take(&mut bld.errors);
         self.errors.extend(errs);
-        blocks
+        (blocks, boundary)
     }
 }
 
@@ -2879,6 +3006,12 @@ struct TreeCtx<'a> {
     /// depth. `ancestors[d]` is the keyword of the compound at depth `d`,
     /// for `d` in `0..ancestors.len()`. Empty at the document root.
     ancestors: Vec<String>,
+    /// Raw-line index of the document separator (§6.1) that terminated this
+    /// document, if one was encountered. A document separator is a line whose
+    /// content is exactly two sigil characters; it acts as end-of-input for
+    /// the current document and begins a new one on the following line. Set
+    /// once, when the structural parser first encounters such a line.
+    boundary: Option<usize>,
 }
 
 /// What kind of line is this?
@@ -3079,6 +3212,21 @@ impl<'a> TreeCtx<'a> {
         while self.idx < self.raw.len() {
             let ri = self.idx;
             let line = &self.raw[ri];
+
+            // Document separator (§6.1): a line whose content is exactly two
+            // sigil characters terminates the current document, like EOF, and
+            // begins a new one on the following line. It is recognised only at
+            // the structural level — literal-atom payloads (§15) are consumed
+            // by `consume_literal_atom` and never reach this loop, so a
+            // separator sequence inside a closed literal stays payload. The
+            // separator is at column zero, so this check precedes margin and
+            // indentation handling. Every enclosing `parse_blocks` re-checks
+            // its loop head with `idx` parked here, so the break unwinds
+            // cleanly to the document root.
+            if line.chars.len() == 2 && line.chars[0] == self.sigil && line.chars[1] == self.sigil {
+                self.boundary = Some(ri);
+                break;
+            }
 
             if line.is_blank() {
                 // Peek ahead: if the next non-blank line belongs to a parent level,
@@ -3425,9 +3573,14 @@ impl<'a> TreeCtx<'a> {
             self.idx += 1;
         }
 
-        let mut result = lines.join("\n");
-        result.push('\n');
-        result
+        // Convention A (§14): `text` is the captured lines joined by LF, with
+        // no trailing LF. Trailing blank lines are separation, not content —
+        // they are dropped, so a source atom can never carry a trailing LF (a
+        // value with one requires a literal atom). Internal blank lines remain.
+        while lines.last().map_or(false, |l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
     }
 
     fn peek_indent(&self, ri: usize) -> Option<usize> {
@@ -3774,6 +3927,91 @@ mod tests {
         }
     }
 
+    /// Run the schema-resolution + type-assignment pipeline for one parsed
+    /// document, returning its parse errors plus any schema/type errors.
+    /// Two test conventions:
+    ///
+    /// (1) Pragma names tel-schema (via its placeholder URL): type-assign
+    ///     against the built-in tel-schema, and if that passes, construct a
+    ///     Schema and validate it.
+    ///
+    /// (2) Pragma URL ends with `/<NAME>` where <NAME> matches a sibling
+    ///     `<NAME>.tel` file in `test_dir`: parse that file as a schema
+    ///     document (type-checked against tel-schema), construct the user
+    ///     schema, and type-check this document against it.
+    fn document_all_errors(result: &ParseResult, test_dir: &std::path::Path) -> Vec<TelError> {
+        let mut all_errors: Vec<TelError> = result.errors.clone();
+        if let Some(ref pr) = result.document.pragma {
+            if let Some(schema_url) = pr.schema.as_deref() {
+                if schema_url == "https://tel-lang.org/schema/tel-schema" {
+                    let builtin = builtin_tel_schema();
+                    let ta = type_assign(&result.document, &builtin, None);
+                    let had_ta_errors = !ta.errors.is_empty();
+                    all_errors.extend(ta.errors);
+                    if !had_ta_errors {
+                        let constructed = construct_schema(&result.document);
+                        for serr in validate_schema(&constructed) {
+                            all_errors.push(TelError::with_detail(
+                                serr.code, 0, 0, serr.detail,
+                            ));
+                        }
+                    }
+                } else if let Some(name) = extract_url_tail(schema_url) {
+                    // Look for a sibling `<name>.tel` first, then `_<name>.tel`
+                    // (the underscore convention for auxiliary fixtures that
+                    // aren't tests themselves).
+                    let primary = test_dir.join(format!("{}.tel", name));
+                    let underscore = test_dir.join(format!("_{}.tel", name));
+                    let schema_src_result = fs::read_to_string(&primary)
+                        .or_else(|_| fs::read_to_string(&underscore));
+                    if let Ok(schema_src) = schema_src_result {
+                        // Parse the schema document and build a Schema
+                        let schema_parsed = parse(&schema_src);
+                        let builtin = builtin_tel_schema();
+                        let schema_ta = type_assign(
+                            &schema_parsed.document, &builtin, None,
+                        );
+                        if schema_ta.errors.is_empty() {
+                            let user_schema = construct_schema(&schema_parsed.document);
+                            // Validate the constructed user schema first;
+                            // surface any of its own E2xx errors so the test
+                            // author sees them.
+                            for serr in validate_schema(&user_schema) {
+                                all_errors.push(TelError::with_detail(
+                                    serr.code, 0, 0,
+                                    format!("[schema `{}`] {}", name, serr.detail),
+                                ));
+                            }
+                            // Then type-check the test document against it.
+                            let doc_ta = type_assign(
+                                &result.document, &user_schema, None,
+                            );
+                            all_errors.extend(doc_ta.errors);
+                        }
+                        // If the schema document itself doesn't parse against
+                        // tel-schema, we don't surface those errors here —
+                        // that's the schema's own bug, not the test document's.
+                    }
+                }
+            }
+        }
+        all_errors
+    }
+
+    /// Format one parsed document and its errors the way the `.check`
+    /// snapshots record them.
+    fn format_document(result: &ParseResult, test_dir: &std::path::Path) -> String {
+        let all_errors = document_all_errors(result, test_dir);
+        let mut output = format!("{}", result.document);
+        if !all_errors.is_empty() {
+            output.push_str("\nerrors:\n");
+            for e in &all_errors {
+                output.push_str(&format!("  {}\n", e));
+            }
+        }
+        output
+    }
+
     fn run_test_with_timeout(path: &str, expect_errors: bool) -> (bool, String) {
         let input = match fs::read(path) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
@@ -3789,87 +4027,12 @@ mod tests {
 
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => {
-                // Schema processing pipeline. Two test conventions:
-                //
-                // (1) Pragma names tel-schema (via its placeholder URL):
-                //     type-assign against the built-in tel-schema, and if
-                //     that passes, construct a Schema and validate it.
-                //
-                // (2) Pragma URL ends with `/<NAME>` where <NAME> matches
-                //     a sibling `<NAME>.tel` file in the same directory as
-                //     this test: parse that file as a schema document
-                //     (type-checked against tel-schema), construct the
-                //     user schema, and type-check the current document
-                //     against it. This is how user-document tests
-                //     reference their schema.
-                let mut all_errors: Vec<TelError> = result.errors.clone();
-                if let Some(ref pr) = result.document.pragma {
-                    if let Some(schema_url) = pr.schema.as_deref() {
-                        if schema_url == "https://tel-lang.org/schema/tel-schema" {
-                            let builtin = builtin_tel_schema();
-                            let ta = type_assign(&result.document, &builtin, None);
-                            let had_ta_errors = !ta.errors.is_empty();
-                            all_errors.extend(ta.errors);
-                            if !had_ta_errors {
-                                let constructed = construct_schema(&result.document);
-                                for serr in validate_schema(&constructed) {
-                                    all_errors.push(TelError::with_detail(
-                                        serr.code, 0, 0, serr.detail,
-                                    ));
-                                }
-                            }
-                        } else if let Some(name) = extract_url_tail(schema_url) {
-                            // Look for a sibling `<name>.tel` first, then
-                            // `_<name>.tel` (the underscore convention for
-                            // auxiliary fixtures that aren't tests themselves).
-                            let test_dir = std::path::Path::new(path).parent()
-                                .map(|p| p.to_path_buf())
-                                .unwrap_or_else(|| std::path::PathBuf::from("."));
-                            let primary = test_dir.join(format!("{}.tel", name));
-                            let underscore = test_dir.join(format!("_{}.tel", name));
-                            let schema_src_result = fs::read_to_string(&primary)
-                                .or_else(|_| fs::read_to_string(&underscore));
-                            if let Ok(schema_src) = schema_src_result {
-                                // Parse the schema document and build a Schema
-                                let schema_parsed = parse(&schema_src);
-                                let builtin = builtin_tel_schema();
-                                let schema_ta = type_assign(
-                                    &schema_parsed.document, &builtin, None,
-                                );
-                                if schema_ta.errors.is_empty() {
-                                    let user_schema = construct_schema(&schema_parsed.document);
-                                    // Validate the constructed user schema first;
-                                    // surface any of its own E2xx errors so the test
-                                    // author sees them.
-                                    for serr in validate_schema(&user_schema) {
-                                        all_errors.push(TelError::with_detail(
-                                            serr.code, 0, 0,
-                                            format!("[schema `{}`] {}", name, serr.detail),
-                                        ));
-                                    }
-                                    // Then type-check the test document against it.
-                                    let doc_ta = type_assign(
-                                        &result.document, &user_schema, None,
-                                    );
-                                    all_errors.extend(doc_ta.errors);
-                                }
-                                // If the schema document itself doesn't parse
-                                // against tel-schema, we don't surface those
-                                // errors here — that's the schema's own bug,
-                                // not the test document's.
-                            }
-                        }
-                    }
-                }
-
+                let test_dir = std::path::Path::new(path).parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let all_errors = document_all_errors(&result, &test_dir);
                 let has_errors = !all_errors.is_empty();
-                let mut output = format!("{}", result.document);
-                if !all_errors.is_empty() {
-                    output.push_str("\nerrors:\n");
-                    for e in &all_errors {
-                        output.push_str(&format!("  {}\n", e));
-                    }
-                }
+                let output = format_document(&result, &test_dir);
                 let check_path = path.replace(".tel", ".check");
                 let _ = fs::write(&check_path, &output);
                 let passed = if expect_errors { has_errors } else { !has_errors };
@@ -3877,6 +4040,51 @@ mod tests {
             }
             Err(_) => {
                 // Timed out — don't join the thread (it may be stuck)
+                (false, "TIMEOUT: parse took > 100ms".into())
+            }
+        }
+    }
+
+    /// Stream fixtures exercise `parse_stream` (§6.1). Unlike the pos/neg
+    /// snapshots, a stream legitimately mixes clean and error-bearing
+    /// documents, so the assertion is a strict golden comparison: the
+    /// generated output (one numbered block per document) must match the
+    /// committed `.check`. The actual output is always written back so that a
+    /// new or intentionally-changed fixture can be reviewed in git and the
+    /// updated `.check` committed.
+    fn run_stream_test_with_timeout(path: &str) -> (bool, String) {
+        let input = match fs::read(path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => return (false, format!("read error: {}", e)),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let input2 = input.clone();
+        let _handle = thread::spawn(move || {
+            let docs: Vec<ParseResult> = parse_stream(&input2).collect();
+            let _ = tx.send(docs);
+        });
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(results) => {
+                let test_dir = std::path::Path::new(path).parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let mut output = String::new();
+                for (i, result) in results.iter().enumerate() {
+                    output.push_str(&format!("=== document {} ===\n", i));
+                    output.push_str(&format_document(result, &test_dir));
+                    output.push('\n');
+                }
+                let check_path = path.replace(".tel", ".check");
+                let expected = fs::read_to_string(&check_path).ok();
+                let _ = fs::write(&check_path, &output);
+                // A missing golden bootstraps (writes and passes); thereafter
+                // the output must match the committed golden exactly.
+                let passed = expected.as_deref().map_or(true, |e| e == output);
+                (passed, output)
+            }
+            Err(_) => {
                 (false, "TIMEOUT: parse took > 100ms".into())
             }
         }
@@ -3917,11 +4125,46 @@ mod tests {
         }
     }
 
+    fn run_stream_dir(dir: &str) {
+        let mut entries: Vec<_> = fs::read_dir(dir).unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "tel").unwrap_or(false))
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('_'))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        let total = entries.len();
+        let mut failures = Vec::new();
+
+        for entry in entries {
+            let path = entry.path();
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let (passed, output) = run_stream_test_with_timeout(path.to_str().unwrap());
+            if !passed {
+                let short = if output.len() > 200 {
+                    let mut cut = 200;
+                    while cut > 0 && !output.is_char_boundary(cut) { cut -= 1; }
+                    &output[..cut]
+                } else { &output };
+                failures.push(format!("  FAIL {}/{}: {}", dir, name, short));
+            }
+        }
+
+        eprintln!("\n{}: {}/{}", dir, total - failures.len(), total);
+        for f in &failures { eprintln!("{}", f); }
+        if !failures.is_empty() {
+            panic!("{} stream tests failed out of {} (committed .check mismatch)", failures.len(), total);
+        }
+    }
+
     #[test]
     fn positive_tests() { run_dir("test/pos", false); }
 
     #[test]
     fn negative_tests() { run_dir("test/neg", true); }
+
+    #[test]
+    fn stream_tests() { run_stream_dir("test/stream"); }
 
     // ── Schema unit tests ───────────────────────────────────────────────────
 

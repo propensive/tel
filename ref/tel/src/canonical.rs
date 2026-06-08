@@ -144,8 +144,21 @@ fn emit_compound_line(
 // ── Scalar value emission with atom-form escalation (§22.2) ─────────────────
 
 fn emit_scalar_payload(value: &str, indent: usize, out: &mut String) {
-    if can_inline(value) {
+    if value.is_empty() {
+        // An empty scalar has no atom text: emitting a leading space would
+        // leave a trailing space on the keyword line (E108). The keyword line
+        // alone re-parses to a compound with no atom, i.e. an empty value.
+        out.push('\n');
+        return;
+    }
+    // Canonical serialization always uses the default sigil `#` (§22.3).
+    if can_inline(value, '#') {
+        // A value containing a soft space must be separated from the keyword by
+        // a hard-space run (two spaces) so the parser switches to hard-space
+        // mode and keeps the space as content (§10.3); otherwise a single space
+        // would split the value into two atoms. A space-free value uses one.
         out.push(' ');
+        if value.contains(' ') { out.push(' '); }
         out.push_str(value);
         out.push('\n');
     } else if can_source(value) {
@@ -172,40 +185,45 @@ fn emit_scalar_payload(value: &str, indent: usize, out: &mut String) {
     }
 }
 
-/// Inline atom predicate per §22.2 escalation rule 1.
-fn can_inline(value: &str) -> bool {
+/// `inline-safe` predicate (§22.2). `sigil` is the document's sigil character.
+/// The value is emitted as `keyword` + separator + value, with a two-space
+/// (hard-space) separator when the value contains a space so its soft spaces
+/// survive as content (§10.3) and a single-space separator otherwise.
+pub(crate) fn can_inline(value: &str, sigil: char) -> bool {
     if value.is_empty() { return true; }
     if value.contains('\n') { return false; }
     if value.starts_with(' ') || value.ends_with(' ') { return false; }
-    // Hard space (2+ consecutive spaces) in the value.
-    let mut prev_space = false;
-    for ch in value.chars() {
-        if ch == ' ' {
-            if prev_space { return false; }
-            prev_space = true;
-        } else {
-            prev_space = false;
-        }
-    }
-    // §22.2 (4): no occurrence of the sigil preceded by a SPACE. We
-    // don't know the sigil here; assume `#` (the default). A more
-    // careful canonicaliser would receive the sigil.
-    let s = value.as_bytes();
-    for i in 1..s.len() {
-        if s[i] == b'#' && s[i - 1] == b' ' { return false; }
-    }
+    // A hard-space run (2+ consecutive spaces) would split the value into
+    // separate atoms in the hard-space mode a spaced value relies on (§10.3).
+    if value.contains("  ") { return false; }
+    // Remark risk (§11.2): the value begins a phrase, so a leading sigil
+    // immediately followed by a soft space would be parsed as a remark. An
+    // internal soft space is content (hard-space mode), so an internal `<space>
+    // <sigil>` is safe; only the phrase-start position matters.
+    let mut chars = value.chars();
+    if chars.next() == Some(sigil) && chars.next() == Some(' ') { return false; }
     true
 }
 
-/// Source atom predicate per §22.2 escalation rule 2.
-fn can_source(value: &str) -> bool {
-    if value.lines().any(|l| l.ends_with(' ')) { return false; }
-    // No blank lines (which would terminate the source atom).
-    if value.contains("\n\n") { return false; }
+/// `source-safe` predicate (§22.2). Under Convention A a source atom carries
+/// one indented line per `\n`-separated segment and cannot represent an empty
+/// line: a blank line neither begins nor continues an atom, and trailing blank
+/// lines are dropped (§14). So every segment must be non-empty — which also
+/// makes a leading or trailing newline (a leading/trailing empty line) require
+/// a literal atom.
+pub(crate) fn can_source(value: &str) -> bool {
+    if value.is_empty() { return false; }
+    // No empty line anywhere (covers leading `\n`, trailing `\n`, and `\n\n`).
+    if value.split('\n').any(|l| l.is_empty()) { return false; }
+    // Trailing spaces are stripped by the parser (§14).
+    if value.split('\n').any(|l| l.ends_with(' ')) { return false; }
+    // The first line's indentation is stripped from every captured line (§14),
+    // so a leading space on the first line could not be recovered.
+    if value.starts_with(' ') { return false; }
     true
 }
 
-fn choose_literal_delim(payload: &str) -> String {
+pub(crate) fn choose_literal_delim(payload: &str) -> String {
     let mut delim = "---".to_string();
     while payload.split('\n').any(|l| l == delim) {
         delim.push('-');
@@ -265,6 +283,73 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
+        }
+    }
+
+    /// Canonicalize a single `note` scalar with `value`, reparse, and return
+    /// the recovered value text together with the atom form chosen. The form
+    /// is re-derived from the value by canonicalization, so the input atom
+    /// kind is irrelevant.
+    fn round_trip_scalar(value: &str) -> (String, &'static str) {
+        let schema = schema_string_field("note", true);
+        let doc = Document {
+            interpreter_directive: None,
+            pragma: Some(crate::Pragma { version: (1, 0), schema: None, sigil: None }),
+            line_endings: crate::LineEndings::LF,
+            children: vec![Block {
+                comments: vec![], tabulation: None, trailing_blank_lines: 0,
+                compounds: vec![Compound {
+                    keyword: "note".to_string(),
+                    atoms: vec![Atom::Inline { text: value.to_string(), preceding_spaces: 1 }],
+                    remark: None, children: vec![],
+                }],
+            }],
+        };
+        let canon = canonicalize(&doc, &schema);
+        let re = parse(&canon).document;
+        let c = re.children.iter().flat_map(|b| b.compounds.iter())
+            .find(|c| c.keyword == "note").expect("note present after round-trip");
+        let form = match c.atoms.first() {
+            None => "inline", // empty value: keyword line only, no atom
+            Some(Atom::Inline { .. }) => "inline",
+            Some(Atom::Source { .. }) => "source",
+            Some(Atom::Literal { .. }) => "literal",
+        };
+        (scalar_value_text(c), form)
+    }
+
+    #[test]
+    fn scalar_round_trips_exactly_across_all_forms() {
+        // (value, expected canonical atom form). Every value MUST survive
+        // parse(canonicalize(value)) byte-for-byte (property P1, §22.4).
+        let cases: &[(&str, &str)] = &[
+            ("",                "inline"),   // empty
+            ("plain",           "inline"),
+            ("a b",             "inline"),   // single soft space
+            ("a  b",            "source"),   // hard space → not inline
+            ("line1\nline2",    "source"),   // multi-line, no trailing newline
+            ("a\nb\nc",         "source"),
+            (" leading",        "literal"),  // leading space (single line)
+            ("trailing ",       "literal"),  // trailing space (single line)
+            (" a\nb",           "literal"),  // leading space on first line
+            ("a\nb ",           "literal"),  // trailing space on a line
+            ("a\nb\n",          "literal"),  // trailing newline → not source-safe
+            ("\nab",            "literal"),  // leading newline
+            ("a\n\nb",          "literal"),  // internal blank line → literal (canonical)
+            ("a\n---\nb",       "source"),   // contains "---" but source-safe
+            ("a\n---\nb\n",     "literal"),  // trailing newline forces literal; delimiter must dodge "---"
+            ("a#b",             "inline"),   // sigil mid-word → fine inline
+            ("#b",              "inline"),   // leading sigil not followed by a space → atom, not remark
+            ("a #b",            "inline"),   // internal space before sigil is content (hard-space mode)
+            ("x #y",            "inline"),   // ditto
+            ("# x",             "source"),   // leading sigil + soft space → remark → not inline
+        ];
+        for (value, want_form) in cases {
+            let (got_value, got_form) = round_trip_scalar(value);
+            assert_eq!(&got_value, value,
+                       "value did not round-trip exactly: input {:?} -> {:?}", value, got_value);
+            assert_eq!(got_form, *want_form,
+                       "unexpected atom form for {:?}: got {}, want {}", value, got_form, want_form);
         }
     }
 
@@ -366,3 +451,4 @@ mod tests {
         assert!(a_pos < b_pos, "a should come before b in canonical form");
     }
 }
+

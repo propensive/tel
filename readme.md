@@ -90,6 +90,41 @@ echo "Greetings from $(hostname)"
 ---
 ```
 
+### Document streams
+
+A single source can hold a sequence of independent documents, one after another, like
+newline-delimited JSON. A line consisting of exactly two sigil characters — `##` by default — is a
+*document separator*: it ends the current document and begins the next on the following line. Each
+document is independent, with its own pragma, sigil, and margin.
+
+```tel
+tel 1.0
+
+greeting hello
+##
+tel 1.0
+
+greeting world
+```
+
+There are two ways to read such a source. The default reads a single document and **stops** at the
+first separator; everything after it is left untouched. That makes a TEL document a convenient
+*header* for some other, possibly non-TEL, content:
+
+```tel
+tel 1.0
+
+title   Release notes
+format  markdown
+##
+# Everything below the separator is opaque to the TEL parser —
+# it could be Markdown, CSV, or a binary blob.
+```
+
+The streaming form instead yields every document in order. A separator inside a literal atom's
+payload is preserved verbatim (it does not split the document); a trailing separator does not
+produce an empty final document.
+
 ### Schemas
 
 A schema is itself a TEL document describing the shape of conforming documents. Three kinds

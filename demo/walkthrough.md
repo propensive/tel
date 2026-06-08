@@ -112,8 +112,27 @@ The signature for a no-layer schema is a 33-byte palimpsest: the schema's
 (see BinTEL §8). The pragma's schema identifier carries the same 33 bytes
 encoded as 33 BASE-256 characters.
 
+## Multi-document streams
+
+A source may hold a sequence of independent documents separated by a
+*document separator* — a line of exactly two sigil characters, `##` by default
+(§6.1 of the TEL Specification). [`document-stream.tel`](document-stream.tel)
+carries three such documents.
+
+There are two ways to read it:
+
+- **Single-document parsing** reads the first document and stops at the first
+  `##`. Everything after the separator is left unparsed, which is how a TEL
+  document can serve as a header for arbitrary trailing content.
+- **Streaming parsing** yields all three documents in order, each parsed
+  independently with its own pragma, sigil, and margin. A trailing separator
+  yields no empty final document; a separator inside a literal-atom payload is
+  preserved verbatim rather than splitting the document.
+
 ## See also
 
+- [`document-stream.tel`](document-stream.tel) — three independent documents
+  in one source, separated by `##`.
 - [`contact-schema.tel`](contact-schema.tel) — a larger example showing
   `define`s, `Reference` types, and a `select` with all-`flag` variants.
 - [`contact-document.tel`](contact-document.tel) — a document conforming

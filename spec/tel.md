@@ -83,7 +83,10 @@ mode of an existing document.
 No Unicode normalization is required or implied. TEL is defined over the exact Unicode code points
 that appear in the serialized text.
 
-A UTF-8 byte order mark MUST NOT appear in a TEL document (**E101**).
+A UTF-8 byte order mark MUST NOT appear in a TEL document (**E101**). In a multi-document source
+(§6.1), the byte order mark is significant only at the very start of the source, and the
+line-ending mode is determined once for the whole source; a document separator terminates the
+preceding document exactly as the true end of input would.
 
 Visually misleading code points, such as zero-width characters, SHOULD be avoided. Control-heavy
 content SHOULD be avoided except where required. TEL is not intended primarily as a binary-data
@@ -122,6 +125,13 @@ The **beginning** of a non-blank line is the first non-space character on the li
 
 An **ordinary line** is any non-blank line that is not a comment line (§11.1), a tabulation line
 (§16.1), or a payload line of a source atom (§14) or literal atom (§15).
+
+A **document separator** is a line whose content is exactly two sigil characters and nothing else:
+no leading spaces, no trailing spaces, and no other characters. It terminates the current document
+as if the end of input had been reached, and begins a new document on the following line (§6.1). A
+document separator is recognised only at the structural level; within a source atom (§14) or a
+literal atom (§15) payload it has no special meaning. A document separator is never a comment
+(§11.1) and never a compound (§12); the two-sigil sequence does not denote a keyword.
 
 ## 6. Root Structure
 
@@ -167,6 +177,40 @@ type Sigil =
   | "|"
   | "~";
 ```
+
+### 6.1 Document Streams
+
+A TEL source MAY contain a sequence of one or more documents, separated by document-separator
+lines (§5). This supports streaming consumption of an unbounded sequence of documents, analogous to
+newline-delimited JSON.
+
+Each document in the sequence is independent. A document has its own interpreter directive (§7),
+its own pragma (§8), its own resolved sigil (§8.3), and its own margin (§9). The document separator
+that terminates a document is matched against **that document's** resolved sigil: a document whose
+sigil is `#` is terminated by `##`, and a document whose pragma sets the sigil to `%` is terminated
+by `%%` (and a `##` line within such a document is ordinary content, not a separator).
+
+A document separator is equivalent to the end of input for the document that precedes it: the
+preceding document ends exactly as it would at the true end of input, and a new document begins on
+the line immediately following the separator. The separator line is part of neither the preceding
+nor the following document, and contributes nothing to either document's presentation model.
+
+A conforming processor MUST offer both of the following parsing modes:
+
+- **Single-document parsing** reads exactly one document and stops at the first document separator,
+  returning that one document. Any content after the separator is not processed and need not be
+  valid TEL. This is the supported way to prefix arbitrary, possibly non-TEL, content with a TEL
+  header: the header is a TEL document, and everything after the separator is opaque to the TEL
+  parser.
+
+- **Streaming parsing** yields the documents of the source in order, each parsed independently. A
+  document separator that is followed only by blank lines, or by nothing, does not yield a trailing
+  empty document. Two consecutive document separators (a separator pair with no content between
+  them) delimit, and therefore yield, an empty document.
+
+Because a document separator is recognised only at the structural level, a UTF-8 byte order mark
+(§4) is significant only at the very start of the source, not after a separator; the line-ending
+mode (§4) is likewise determined once for the whole source.
 
 ## 7. Interpreter Directive
 
@@ -626,25 +670,23 @@ subsequent line until either:
 - the end of the document is reached, or
 - a non-blank line is encountered whose indent is less than the indent of the first source-atom line
 
-Blank lines are permitted within a source atom.
+Blank lines are permitted *between* two non-blank lines of a source atom. Trailing blank lines —
+those between the last non-blank line and the terminating dedent or end-of-file — are not part of
+the atom and are discarded.
 
-The captured lines (in order) are converted to a single `text` string by appending `LF` after
-each line, including the last. The array of captured lines therefore yields a `text` field of
-the form `line_0 LF line_1 LF … LF line_{n-1} LF` — every captured line is `LF`-terminated. A
-source atom that ends at end-of-file inherits the file's trailing `LF` as the terminator of its
-final captured line; a source atom that ends at a dedent likewise inherits the `LF` of the
-preceding non-blank line. A blank line within a source atom contributes a zero-length captured
-line; consecutive blank lines yield consecutive empty captured lines, each contributing one
-`LF`.
+The captured lines (in order, with trailing blank lines removed) are converted to a single `text`
+string by joining them with `LF` as a separator and **no** trailing `LF`: `n` captured lines yield
+a `text` field of the form `line_0 LF line_1 LF … LF line_{n-1}`. Because a source atom begins only
+on a non-blank line and its trailing blank lines are discarded, `text` never begins or ends with
+`LF`. A value that requires a leading or trailing `LF` therefore cannot be carried by a source atom
+and must be written as a literal atom (§15). A blank line between two non-blank lines contributes a
+zero-length segment, yielding two consecutive `LF`s in `text`.
 
 For each non-blank captured line, exactly the indentation of the first source-atom line is stripped
 from the start of the line. Any surplus leading spaces are preserved.
 
 For each captured line, trailing spaces are stripped. (Source-atom lines are not ordinary lines, so
 E108 does not apply to them; trailing spaces are silently removed rather than being an error.)
-
-A blank line within a source atom contributes a zero-length segment, yielding two consecutive
-`LF`s in the joined `text` when the surrounding lines are non-empty.
 
 Line content is otherwise captured literally. In particular, the sigil has no special meaning inside
 a source atom.
@@ -660,6 +702,10 @@ terminates any surrounding tabulated block.
 After a source atom ends, parsing resumes normally. The next non-source-atom line is evaluated for
 indentation relative to the compound that introduced the source atom, as if the source atom lines
 were not present.
+
+A document separator (§6.1) is at column zero, which is below the indent of any source-atom line, so
+it terminates the source atom by dedent and is then recognised as a separator. A source atom is
+therefore never split across a document separator.
 
 ## 15. Literal Atoms
 
@@ -717,6 +763,12 @@ content exactly.
 
 If the end of file is reached before a closing delimiter is encountered, the document is invalid
 (**E115**).
+
+A document separator (§6.1) appearing within a literal-atom payload is ordinary payload content and
+does not terminate the document: a literal atom is terminated only by its closing delimiter. The
+two-sigil sequence is preserved verbatim, like any other payload byte. Consequently, a literal atom
+is never split across a document separator; only the true end of input (not a separator) can leave
+a literal atom unclosed, which is **E115**.
 
 The sigil has no special meaning inside a literal atom.
 
@@ -1146,6 +1198,9 @@ specified in the tables below.
 | E121 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                               | The `CR` character (or `CR LF` pair that violates the established mode)                                                          |
 | E122 | §8.1     | Schema identifier is not a valid URL or bare BASE-256-encoded schema signature                         | The schema identifier atom                                                                                                       |
 | E123 | §8       | Pragma line has extra atoms beyond the expected parameters, or contains a remark                       | The first extra atom, or the remark introducer                                                                                   |
+
+A document separator (§6.1) is always well-formed and carries no error code; it simply ends the
+current document and begins the next.
 
 Schema errors (E2xx) and validation errors (E3xx) arise from violations of the schema language
 rules (§20) and document conformance constraints (§21). Their trigger conditions and diagnostic
@@ -2702,6 +2757,43 @@ path identifying the parent struct plus two member indices identifying the group
 Operations that move or remove a compound MUST update any in-flight paths that referenced that
 compound's position; the caller is responsible for invalidating cached paths after a mutation.
 
+**Atom-form safety predicates.** Three predicates determine whether a `Scalar` value can be carried
+*faithfully* — i.e. parsed back to the identical string — in each atom form. They are used by every
+operation that writes a scalar value (this section) and by canonical serialization (§22.3).
+
+- A value is **inline-safe** if all of the following hold:
+  - it contains no `LF` character;
+  - it contains no run of two or more consecutive `U+0020` SPACE characters (no hard space embedded
+    in the value);
+  - it does not begin or end with `U+0020` SPACE;
+  - it does not begin with the document's sigil character immediately followed by `U+0020` SPACE.
+    (The value is emitted at the start of a phrase, so a leading sigil-then-soft-space would be
+    parsed as the start of a remark, §11.2. An *internal* space-then-sigil is safe: a value that
+    contains a space is emitted with a two-space separator, which puts its phrase into hard-space
+    mode where soft spaces are content, so the sigil is not at a phrase boundary — §10.3, §11.2.)
+- A value is **source-safe** if all of the following hold:
+  - the value is non-empty and contains no empty line — equivalently, it does not begin or end with
+    `LF` and contains no run of two or more consecutive `LF` characters. A source atom carries one
+    indented line per `LF`-separated segment and cannot represent an empty line: a blank line
+    neither begins nor continues a source atom, and trailing blank lines are dropped (§14). In
+    particular, a value with a trailing `LF` is **not** source-safe and requires a literal atom;
+  - no line of the value ends with `U+0020` SPACE (source atoms strip trailing spaces, §14);
+  - the value's first line does not begin with `U+0020` SPACE (a source atom strips the indentation
+    of its first line from every captured line, §14, so a leading space on the first line could not
+    be recovered).
+- A value is **literal-safe with respect to a delimiter D** if D does not appear as a line within
+  the value.
+
+Every value is literal-safe with respect to *some* delimiter (a colliding delimiter can always be
+lengthened until it no longer appears as a line, §22.3), so the literal form is a universal
+fallback that every value can use.
+
+**Atom-form safety invariant.** Whenever an operation writes a `Scalar` value into an atom, it MUST
+emit the value in an atom form for which the value satisfies the corresponding safety predicate
+above: an inline atom only if the value is inline-safe, a source atom only if it is source-safe, and
+a literal atom only with a delimiter for which the value is literal-safe. The *Literal atom delimiter
+invariant* below is the literal-safe case of this general rule.
+
 **Sigil invariant.** A machine MUST NOT change the document's sigil. The sigil in effect when the
 document was parsed is preserved exactly in any reserialized output.
 
@@ -2773,8 +2865,11 @@ If a value cannot be an inline atom, the Scalar is serialized as a compound chil
 explicit keyword and the appropriate atom body, rather than as an inline atom on the parent
 line.
 
-Each inline atom uses a single preceding space (`precedingSpaces = 1`). Each compound child
-is indented by one level (two spaces) relative to its parent.
+Each inline atom whose value contains a `U+0020` SPACE uses two preceding spaces (a hard-space run,
+`precedingSpaces = 2`), which switches the parser into hard-space mode (§10.3) so the value's soft
+spaces are preserved as content rather than splitting the value into separate atoms; an inline atom
+whose value contains no space uses a single preceding space (`precedingSpaces = 1`). Each compound
+child is indented by one level (two spaces) relative to its parent.
 
 **`insert`** — Insert a compound into the child structure of a parent at the natural position for
 its member: after all existing compounds of the same member, within the same block if one exists for
@@ -2798,7 +2893,16 @@ replaced.
 
 **`update-value`** — For a compound or atom whose schema type is `Scalar`, update the atom text
 to a new string. The new string MUST be valid according to the named helper method (§21). All other
-presentation details of the compound are retained.
+presentation details of the compound are retained — except that the atom **form** is subject to the
+*Atom-form safety invariant*: the existing form is kept only while the new value remains safe for
+it. If the new value is not safe for the current form, the operation MUST re-select a form by
+escalating along inline → source → literal: it keeps the current form when the value still satisfies
+that form's safety predicate, and otherwise advances to the first later form whose predicate the
+value satisfies (choosing a delimiter per the *Literal atom delimiter invariant* when escalating to
+a literal atom). Escalation never moves to an earlier form: an `update-value` whose new value would
+be inline-safe but whose atom is currently a literal atom leaves it a literal atom. This best-effort
+preservation of the current form is the one intended divergence from the canonical "first form" rule
+of §22.3.
 
 **`set-flag`** — Add a `Flag`-typed node within a parent, provided the result satisfies the
 `repeatable` constraint for that member. The flag is placed as an inline atom if both of the
@@ -2871,28 +2975,21 @@ Canonical serialization follows the same conventions as the `construct` operatio
 - No blank lines appear between children at any level.
 - The root node has no inline atoms (the document root is a virtual struct with no atom positions),
   so every root-level member is serialized as a compound child.
-- At every non-root level, the **atom form escalation algorithm** below is applied to each
-  Scalar value:
+- At every non-root level, the **atom form escalation algorithm** is applied to each Scalar value,
+  using the atom-form safety predicates defined in §22.2:
 
-  1. **Inline atom** — used if **all** of the following hold:
-     - the value contains no `LF` character;
-     - the value contains no run of two or more consecutive `U+0020` SPACE characters (no hard
-       space embedded in the value);
-     - the value does not begin or end with `U+0020` SPACE;
-     - the value contains no occurrence of the document's sigil character preceded by `U+0020`
-       SPACE (which would be parsed as the start of a remark).
-  2. **Source atom** — used if the inline predicate fails **and** all of the following hold:
-     - no line of the value ends with `U+0020` SPACE (no trailing spaces on any line);
-     - the value contains no blank line (no run of two or more consecutive `U+000A` LF
-       characters), which would terminate the source atom prematurely;
-     - the value does not require byte-exact preservation of any character that source atoms
-       cannot losslessly carry (notably leading SPACE on a line beyond the indentation).
-  3. **Literal atom** — used in every other case.
+  1. **Inline atom** — used if the value is **inline-safe**.
+  2. **Source atom** — used if the value is not inline-safe but is **source-safe**.
+  3. **Literal atom** — used in every other case, with a delimiter chosen so the value is
+     **literal-safe** with respect to it (see the dash-extension rule below).
 
-  The **first** predicate the value satisfies determines the form; predicates further down
-  the list are not consulted. This makes the choice deterministic across implementations even
-  when a value would technically be representable in more than one form.
-- Each inline atom uses a single preceding space (`precedingSpaces = 1`).
+  The **first** form in the order inline → source → literal whose safety predicate the value
+  satisfies determines the form; forms further down the list are not consulted. This makes the
+  choice deterministic across implementations even when a value would technically be representable
+  in more than one form.
+- Each inline atom whose value contains a `U+0020` SPACE uses two preceding spaces (a hard-space
+  run, `precedingSpaces = 2`) so the parser keeps the value's soft spaces as content (§10.3); an
+  inline atom whose value contains no space uses a single preceding space (`precedingSpaces = 1`).
 - Each compound child is indented by one level (two spaces) relative to its parent.
 - Literal atoms use the delimiter `---` unless the payload contains that string as a line. In
   that case, the delimiter is lengthened by one `-` at a time (`----`, `-----`, …) until the
