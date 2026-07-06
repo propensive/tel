@@ -1,0 +1,16 @@
+id = "tel"
+name = "TEL"
+version = "0.1.0"
+schema_version = 1
+authors = ["Jon Pretty <jon.pretty@propensive.com>"]
+description = "TEL (Typed Element Language) support: syntax highlighting plus diagnostics and hover via the Exegesis LSP server."
+repository = "https://github.com/propensive/tel"
+
+[language_servers.tel]
+name = "TEL Language Server"
+languages = ["TEL"]
+
+[grammars.tel]
+repository = "https://github.com/propensive/tel"
+rev = "a44ddc9b0210cb7541c10995c9bfab4ea1ad0f65"
+path = "ref/tree-sitter-tel"

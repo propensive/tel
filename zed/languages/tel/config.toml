@@ -1,0 +1,4 @@
+name = "TEL"
+grammar = "tel"
+path_suffixes = ["tel"]
+line_comments = ["# "]

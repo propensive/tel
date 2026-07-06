@@ -1,0 +1,8 @@
+# Rust build output
+/target
+
+# Zed dev-extension build artifacts: the compiled extension and the grammar Zed clones/builds
+# from the `[grammars]` entry in extension.toml.
+/grammars
+extension.wasm
+*.wasm
