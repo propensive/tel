@@ -74,13 +74,18 @@ module.exports = grammar({
     tabulated_row: $ => seq($._tab_row, $._newline),
 
     compound: $ => seq(
-      field('keyword', $._keyword),
+      field('keyword', $.keyword),
       repeat($._atom),
       optional(field('remark', $.remark)),
       $._newline,
       optional(choice($.source_atom, $.literal_atom)),
       optional($.children),
     ),
+
+    // A visible wrapper around the hidden `_keyword` external token, so a compound's opening keyword
+    // is a queryable node (e.g. for syntax highlighting) rather than an anonymous token. The
+    // `externals` array and the external scanner are unchanged.
+    keyword: $ => $._keyword,
 
     // Each atom carries an explicit preceding-gap node — soft_atom for a
     // 1-space separator (§10.3 initial mode), hard_atom for a 2-or-more-space

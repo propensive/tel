@@ -40,6 +40,16 @@
     "type": "compound",
     "named": true,
     "fields": {
+      "keyword": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "keyword",
+            "named": true
+          }
+        ]
+      },
       "remark": {
         "multiple": false,
         "required": false,
@@ -131,6 +141,11 @@
   },
   {
     "type": "hard_gap",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "keyword",
     "named": true,
     "fields": {}
   },
