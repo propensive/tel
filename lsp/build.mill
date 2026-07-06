@@ -1,0 +1,67 @@
+//| mill-version: 1.1.5
+//| mill-jvm-version: temurin:25
+//| mill-jvm-opts: ["-XX:NonProfiledCodeHeapSize=250m", "-XX:ReservedCodeCacheSize=500m"]
+
+package build
+
+import mill.*
+import scalalib.*
+
+object settings:
+  val scalaVersion = "3.8.4"
+  val soundnessVersion = "0.62.0"
+
+  val scalaOptions = Seq(
+    "-experimental",
+    "-new-syntax",
+    "-feature",
+    "-preview",
+    "-deprecation",
+    "-Wunused:imports",
+    "-Wimplausible-patterns",
+    "-Xmax-inlines", "48",
+    "-Yno-flexible-types",
+    "-Yexplicit-nulls",
+    "-Ycheck-all-patmat",
+    "-language:experimental.modularity",
+    "-language:experimental.dependent",
+    "-language:experimental.relaxedLambdaSyntax",
+    "-language:experimental.genericNumberLiterals",
+    "-language:experimental.into",
+    "-language:experimental.erasedDefinitions",
+    "-language:implicitConversions",
+    "-language:experimental.saferExceptions",
+    "-language:experimental.strictEqualityPatternMatching",
+    "-language:experimental.subCases",
+    "-language:experimental.multiSpreads"
+  )
+
+  // The server's sources are written for the proscenium predef (the Soundness house
+  // predef), so this standalone build replicates `-Yno-predef -Yimports:…`, exactly as Flame does.
+  val predef = Seq("-Yno-predef", "-Yimports:java.lang,scala,proscenium")
+
+  // `soundness-all` (the umbrella) makes `import soundness.*` resolve `Text`, `Optional`, `t"…"` etc.;
+  // `exegesis-core` adds the LSP protocol types and the runnable `LspServer` base.
+  val deps = Seq(
+    mvn"dev.soundness:soundness-all:$soundnessVersion",
+    mvn"dev.soundness:exegesis-core:$soundnessVersion")
+
+trait Project extends Module:
+  def moduleDir = super.moduleDir / os.up / "src"
+
+trait Component(dependencies: ScalaModule*) extends ScalaModule:
+  override def scalaVersion = settings.scalaVersion
+  override def scalacOptions = settings.scalaOptions ++ settings.predef
+  def moduleId: String = moduleDir.last
+  def moduleDeps: Seq[ScalaModule] = dependencies
+  def sources = Task.Sources(moduleDir)
+
+object tel extends Project:
+  // The TEL language server. `LspServer` supplies `main`, the JSON-RPC dispatch, the document store
+  // and the stdio transport, so this module only provides `TelServer`'s handler hooks.
+  object core extends Component():
+    def mvnDeps = settings.deps
+    def finalMainClass = "tel.TelServer"
+    // A clean zip (no shell preamble) so Ethereal's self-packaging can read and rewrite the assembly
+    // when the `build.executable` native launcher is produced.
+    def prependShellScript = ""
