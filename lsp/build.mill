@@ -9,7 +9,7 @@ import scalalib.*
 
 object settings:
   val scalaVersion = "3.8.4"
-  val soundnessVersion = "0.62.0"
+  val soundnessVersion = "0.63.0"
 
   val scalaOptions = Seq(
     "-experimental",
@@ -41,10 +41,12 @@ object settings:
   val predef = Seq("-Yno-predef", "-Yimports:java.lang,scala,proscenium")
 
   // `soundness-all` (the umbrella) makes `import soundness.*` resolve `Text`, `Optional`, `t"…"` etc.;
-  // `exegesis-core` adds the LSP protocol types and the runnable `LspServer` base.
+  // `exegesis-core` adds the LSP protocol types and the runnable `LspServer` base; `stratiform-core`
+  // is the Scala TEL parser (`read[Tel]`, `TelError`) used for diagnostics.
   val deps = Seq(
     mvn"dev.soundness:soundness-all:$soundnessVersion",
-    mvn"dev.soundness:exegesis-core:$soundnessVersion")
+    mvn"dev.soundness:exegesis-core:$soundnessVersion",
+    mvn"dev.soundness:stratiform-core:$soundnessVersion")
 
 trait Project extends Module:
   def moduleDir = super.moduleDir / os.up / "src"
