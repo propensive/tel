@@ -72,8 +72,8 @@ contact alice
 A *source atom* is an indented block whose payload is captured verbatim, with the block's
 own indentation stripped. A *literal atom* uses an arbitrary delimiter line and preserves
 every byte of its payload — including trailing spaces, leading whitespace, and the sigil
-character. Because nothing is stripped, the payload and the closing delimiter both begin at
-column zero; only the opening delimiter line is indented.
+character. Because nothing is stripped, the payload begins at column zero; the closing
+delimiter line mirrors the opening one exactly, indentation included.
 
 ```tel
 fixture sample-payload
@@ -87,7 +87,7 @@ fixture sample-payload
         ---
 #!/usr/bin/env bash
 echo "Greetings from $(hostname)"
----
+        ---
 ```
 
 ### Document streams

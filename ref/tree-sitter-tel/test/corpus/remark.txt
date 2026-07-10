@@ -6,6 +6,7 @@ name alice # this is alice's record
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (remark
@@ -19,6 +20,7 @@ active # currently active
 
 (document
   (compound
+    (keyword)
     (remark
       (soft_gap))))
 
@@ -30,6 +32,7 @@ c#sharp value
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -41,5 +44,6 @@ name #
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))

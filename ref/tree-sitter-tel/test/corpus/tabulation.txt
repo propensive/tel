@@ -36,6 +36,7 @@ parent
 
 (document
   (compound
+    (keyword)
     (children
       (tabulation_block
         (tabulation_line)

@@ -169,9 +169,10 @@ fn emit_scalar_payload(value: &str, indent: usize, out: &mut String) {
             out.push('\n');
         }
     } else {
-        // Literal atom: opening delimiter at +6 indent, closing at margin 0.
+        // Literal atom: the closing delimiter line is byte-identical to the
+        // opening one, at +6 indent (§15).
         out.push('\n');
-        let delim = choose_literal_delim(value);
+        let delim = choose_literal_delim(value, indent + 6);
         push_indent(out, indent + 6);
         out.push_str(&delim);
         out.push('\n');
@@ -179,7 +180,7 @@ fn emit_scalar_payload(value: &str, indent: usize, out: &mut String) {
             out.push_str(line);
             out.push('\n');
         }
-        // Closing at column 0 per the parser convention (no indentation).
+        push_indent(out, indent + 6);
         out.push_str(&delim);
         out.push('\n');
     }
@@ -223,9 +224,31 @@ pub(crate) fn can_source(value: &str) -> bool {
     true
 }
 
-pub(crate) fn choose_literal_delim(payload: &str) -> String {
+/// Dash-extension (§22.3): lengthen `---` until the atom's delimiter line —
+/// the opening indentation followed by the delimiter — no longer appears as a
+/// line in the payload.
+pub(crate) fn choose_literal_delim(payload: &str, indent_chars: usize) -> String {
+    let indent = " ".repeat(indent_chars);
     let mut delim = "---".to_string();
-    while payload.split('\n').any(|l| l == delim) {
+    while payload.split('\n').any(|l| l.len() == indent.len() + delim.len()
+        && l.starts_with(&indent) && l.ends_with(&delim)) {
+        delim.push('-');
+    }
+    delim
+}
+
+/// True if `line` would match a closing delimiter line for `delim` at *some*
+/// indentation — i.e. it consists of zero or more spaces followed exactly by
+/// `delim`. A position-independent sufficient collision test (§23).
+pub(crate) fn collides_at_any_indent(line: &str, delim: &str) -> bool {
+    line.strip_suffix(delim).is_some_and(|prefix| prefix.chars().all(|c| c == ' '))
+}
+
+/// Position-independent dash-extension for callers that do not know the
+/// indentation at which the atom will be serialized (§23 machine editing).
+pub(crate) fn choose_literal_delim_any_indent(payload: &str) -> String {
+    let mut delim = "---".to_string();
+    while payload.split('\n').any(|l| collides_at_any_indent(l, &delim)) {
         delim.push('-');
     }
     delim
@@ -337,7 +360,8 @@ mod tests {
             ("\nab",            "literal"),  // leading newline
             ("a\n\nb",          "literal"),  // internal blank line → literal (canonical)
             ("a\n---\nb",       "source"),   // contains "---" but source-safe
-            ("a\n---\nb\n",     "literal"),  // trailing newline forces literal; delimiter must dodge "---"
+            ("a\n---\nb\n",     "literal"),  // flush-left "---" is inert: closing line carries the opening indent
+            ("a\n      ---\nb\n", "literal"), // line matching the indented delimiter line; dash-extension must dodge
             ("a#b",             "inline"),   // sigil mid-word → fine inline
             ("#b",              "inline"),   // leading sigil not followed by a space → atom, not remark
             ("a #b",            "inline"),   // internal space before sigil is content (hard-space mode)

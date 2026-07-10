@@ -6,6 +6,7 @@ name alice
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -17,6 +18,7 @@ name  Alice Anderson
 
 (document
   (compound
+    (keyword)
     (hard_atom
       (hard_gap))))
 
@@ -28,6 +30,7 @@ name   alice
 
 (document
   (compound
+    (keyword)
     (hard_atom
       (hard_gap))))
 
@@ -39,6 +42,7 @@ name alice  Bob Builder
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (hard_atom
@@ -52,6 +56,7 @@ name  alice  bob
 
 (document
   (compound
+    (keyword)
     (hard_atom
       (hard_gap))
     (hard_atom
@@ -65,6 +70,7 @@ name alice # comment text
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (remark
@@ -78,6 +84,7 @@ name alice  # comment text
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (remark
@@ -91,6 +98,7 @@ name alice  #
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (hard_atom

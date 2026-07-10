@@ -57,6 +57,7 @@ typedef struct {
   uint8_t  expect_literal_body;
   uint8_t  literal_delim_len;
   uint8_t  literal_delim[MAX_DELIM_LEN];
+  uint16_t literal_indent_spaces; // leading spaces of the opening delimiter line
   int8_t   current_indent;     // current open-block indent (units), starts at 0
   uint8_t  indent_depth;
   uint8_t  indent_stack[MAX_INDENT_DEPTH];
@@ -199,7 +200,8 @@ static bool scan_source_atom(Scanner *s, TSLexer *lexer, uint32_t leading_spaces
 // Literal atom OPENING: capture the delimiter (everything after the
 // leading SPACE run on the opening line, up to but not including LF).
 // ---------------------------------------------------------------------------
-static bool scan_literal_open(Scanner *s, TSLexer *lexer) {
+static bool scan_literal_open(Scanner *s, TSLexer *lexer, uint32_t leading_spaces) {
+  s->literal_indent_spaces = (uint16_t)leading_spaces;
   s->literal_delim_len = 0;
   while (lexer->lookahead != 0 && lexer->lookahead != '\n') {
     if (s->literal_delim_len < MAX_DELIM_LEN) {
@@ -218,15 +220,14 @@ static bool scan_literal_open(Scanner *s, TSLexer *lexer) {
 }
 
 // ---------------------------------------------------------------------------
-// Literal atom BODY: scan raw bytes for `LF + delim + LF`. The delimiter
-// is matched against the raw stream starting at column zero — no margin
-// stripping. We include everything from the current position up to and
-// including the closing-delimiter LF in the token.
+// Literal atom BODY: scan raw bytes for `LF + closing delimiter line + LF`,
+// where the closing delimiter line is byte-identical to the opening one:
+// its leading spaces followed by the delimiter (§15). We include everything
+// from the current position up to and including the closing LF in the token.
 // ---------------------------------------------------------------------------
 static bool scan_literal_body(Scanner *s, TSLexer *lexer) {
   // The cursor is positioned right after the LF that ended the opening
-  // delimiter line. Scan bytes until we match LF+delim+LF or hit EOF.
-  uint32_t delim_pos = 0;
+  // delimiter line. Scan bytes until we match the closing line or hit EOF.
   bool at_line_start = true;
   for (;;) {
     int32_t c = lexer->lookahead;
@@ -241,23 +242,30 @@ static bool scan_literal_body(Scanner *s, TSLexer *lexer) {
       return true;
     }
     if (at_line_start) {
-      // Try matching the delimiter against the start of this line.
-      uint32_t i = 0;
-      while (i < s->literal_delim_len && lexer->lookahead == s->literal_delim[i]) {
+      // Try matching the closing delimiter line against this line: the
+      // opening indentation, then the delimiter, then LF.
+      uint32_t sp = 0;
+      while (sp < s->literal_indent_spaces && lexer->lookahead == ' ') {
         advance(lexer);
-        i++;
+        sp++;
       }
-      if (i == s->literal_delim_len && lexer->lookahead == '\n') {
-        // Closing match: consume the trailing LF and mark end.
-        advance(lexer);
-        lexer->mark_end(lexer);
-        lexer->result_symbol = TOK_LITERAL_ATOM_BODY;
-        s->expect_literal_body = 0;
-        s->at_line_start = 1;
-        return true;
+      if (sp == s->literal_indent_spaces) {
+        uint32_t i = 0;
+        while (i < s->literal_delim_len && lexer->lookahead == s->literal_delim[i]) {
+          advance(lexer);
+          i++;
+        }
+        if (i == s->literal_delim_len && lexer->lookahead == '\n') {
+          // Closing match: consume the trailing LF and mark end.
+          advance(lexer);
+          lexer->mark_end(lexer);
+          lexer->result_symbol = TOK_LITERAL_ATOM_BODY;
+          s->expect_literal_body = 0;
+          s->at_line_start = 1;
+          return true;
+        }
       }
-      // Partial or non-match: continue scanning. The chars we consumed
-      // (up to `i`) are now part of the body. Fall through.
+      // Partial or non-match: the chars consumed so far are body content.
       at_line_start = false;
       continue;
     }
@@ -538,7 +546,7 @@ bool tree_sitter_tel_external_scanner_scan(void *payload, TSLexer *lexer, const 
       s->at_line_start = 0;
       s->after_compound_eol = 0;
       reset_line_flags(s);
-      return scan_literal_open(s, lexer);
+      return scan_literal_open(s, lexer, spaces);
     }
 
     if (diff == 1 && valid_symbols[TOK_INDENT]) {

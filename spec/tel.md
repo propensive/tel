@@ -720,10 +720,11 @@ the end of the atom sequence of the immediately preceding compound.
 A compound may have at most one literal atom. Introducing a literal atom when the preceding compound
 already has a source or literal atom is invalid (**E114**).
 
-The opening literal-atom line is not part of the payload.
+The opening literal-atom line is called the **delimiter line**. It is not part of the payload.
 
 The remainder of that opening line, from its beginning up to but excluding the line terminator, is
-the delimiter.
+the **delimiter**. The delimiter line therefore consists of the document margin, the opening
+indentation, and the delimiter.
 
 The delimiter MUST consist only of ASCII characters other than whitespace (spaces, linefeeds,
 carriage returns, tabs, and other ASCII control characters).
@@ -734,59 +735,69 @@ contributes no structural effect. Indentation on a blank line is not significant
 
 The literal payload begins immediately after the `LF` that terminates the delimiter line.
 
-The closing delimiter is identified by scanning for a `LF` immediately followed by the exact
-delimiter characters and then immediately followed by another `LF`. The match is performed
-against the **raw byte stream of the document**, without any margin stripping or indentation
-processing: the closing delimiter line therefore begins at column zero of the document, *not* at
-the opening indent. The scan uses bare `LF` regardless of the document's line-ending mode. The
-payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
-delimiter (exclusive). The `LF` after the closing delimiter terminates the literal atom.
+The **closing delimiter line** is byte-for-byte identical to the opening delimiter line, including
+its leading margin and indentation. It is identified by scanning for a `LF` immediately followed
+by the exact bytes of the opening delimiter line and then immediately followed by another `LF`.
+The match is performed against the **raw byte stream of the document**, without any margin
+stripping or indentation processing: the byte string to match is fully determined once the opening
+delimiter line has been read. The scan uses bare `LF` regardless of the document's line-ending
+mode. The payload is everything between the opening `LF` (exclusive) and the closing `LF` before
+the closing delimiter line (exclusive). The `LF` after the closing delimiter line terminates the
+literal atom.
 
 For example, a literal atom with delimiter `END`, opened three indent levels below its compound
-line `inner`, looks like this (note that the closing `END` is flush left, not indented, and that
-the payload's leading spaces are preserved because no indentation is stripped):
+line `inner`, looks like this (note that the closing delimiter line mirrors the opening one
+exactly, and that the payload's leading spaces are preserved because no indentation is stripped):
 
 ```text
 outer
   inner
         END
         leading-space-preserved-content
-END
+        END
   sibling-of-inner
 ```
 
-Accordingly, an empty literal payload (a `LF` immediately followed by the delimiter and a `LF`) is
-permitted.
+Accordingly, an empty literal payload (a `LF` immediately followed by the closing delimiter line
+and a `LF`) is permitted.
+
+Because the closing delimiter line carries the opening indentation, a payload line consisting of
+the bare delimiter at a different indentation (for example, `END` at column zero in the document
+above) is ordinary payload content and does not terminate the atom. Only a payload line whose
+bytes exactly equal the opening delimiter line cannot be represented with that delimiter; a
+different delimiter must be chosen (§23).
 
 The literal payload preserves leading spaces, trailing spaces, internal spaces, and all other
 content exactly.
 
-If the end of file is reached before a closing delimiter is encountered, the document is invalid
-(**E115**).
+If the end of file is reached before a closing delimiter line is encountered, the document is
+invalid (**E115**).
 
 A document separator (§6.1) appearing within a literal-atom payload is ordinary payload content and
-does not terminate the document: a literal atom is terminated only by its closing delimiter. The
-two-sigil sequence is preserved verbatim, like any other payload byte. Consequently, a literal atom
-is never split across a document separator; only the true end of input (not a separator) can leave
-a literal atom unclosed, which is **E115**.
+does not terminate the document: a literal atom is terminated only by its closing delimiter line.
+The two-sigil sequence is preserved verbatim, like any other payload byte. (A document separator
+has no leading spaces, so it can never match a closing delimiter line, which always begins with at
+least the opening indentation.) Consequently, a literal atom is never split across a document
+separator; only the true end of input (not a separator) can leave a literal atom unclosed, which
+is **E115**.
 
 The sigil has no special meaning inside a literal atom.
 
 The line-ending mode rules of §4 do not apply anywhere inside a literal atom payload, nor to the
 three structural `LF` characters that bound it (the opening `LF`, the `LF` before the closing
-delimiter, and the `LF` after the closing delimiter). Every byte between the opening `LF` and
-the closing-delimiter `LF` — including any `CR`, bare `LF`, or `CR LF` sequence — is payload
-content. Only the bare `LF` characters that frame a closing-delimiter match are structurally
-significant, and only for the purpose of identifying that match.
+delimiter line, and the `LF` after the closing delimiter line). Every byte between the opening
+`LF` and the closing-delimiter-line `LF` — including any `CR`, bare `LF`, or `CR LF` sequence — is
+payload content. Only the bare `LF` characters that frame a closing-delimiter-line match are
+structurally significant, and only for the purpose of identifying that match.
 
 Literal atom payload content is raw: it is not subject to any TEL parsing rules. Indentation,
 trailing spaces, and all other content are preserved exactly. The only termination condition is a
-`LF` immediately followed by the delimiter and another `LF`.
+`LF` immediately followed by the exact bytes of the opening delimiter line and another `LF`.
 
 Literal-atom lines are not compounds and are never members of a tabulated block. A literal atom
 always terminates any surrounding tabulated block.
 
-After the closing delimiter line and its line terminator, parsing resumes normally. The next
+After the closing delimiter line and its terminating `LF`, parsing resumes normally. The next
 non-literal-atom line is evaluated for indentation relative to the compound that introduced the
 literal atom, as if the literal atom lines were not present.
 
@@ -982,7 +993,9 @@ same level). Such a block has no tabulation.
 
 Each `Atom.Inline` records the number of spaces immediately preceding it on its source line. Each
 `Atom.Literal` records the delimiter string used to open and close it, in addition to the payload
-text.
+text. Only the delimiter text is recorded: the full opening and closing delimiter lines are
+reconstructed on serialization from the margin, the compound's indent plus three levels, and the
+delimiter (§15).
 
 ## 18. Presentation Model and Semantic Model
 
@@ -2781,35 +2794,38 @@ operation that writes a scalar value (this section) and by canonical serializati
   - the value's first line does not begin with `U+0020` SPACE (a source atom strips the indentation
     of its first line from every captured line, §14, so a leading space on the first line could not
     be recovered).
-- A value is **literal-safe with respect to a delimiter D** if D does not appear as a line within
-  the value.
+- A value is **literal-safe with respect to a delimiter line L** if L does not appear as a line
+  within the value. The delimiter line is the margin, the opening indentation, and the delimiter D
+  (§15), so this depends on the position at which the atom is written; checking that D does not
+  appear as the trailing content of any line of the value is a position-independent sufficient
+  condition.
 
-Every value is literal-safe with respect to *some* delimiter (a colliding delimiter can always be
-lengthened until it no longer appears as a line, §22.3), so the literal form is a universal
-fallback that every value can use.
+Every value is literal-safe with respect to *some* delimiter line (a colliding delimiter can
+always be lengthened until its delimiter line no longer appears as a line, §22.3), so the literal
+form is a universal fallback that every value can use.
 
 **Atom-form safety invariant.** Whenever an operation writes a `Scalar` value into an atom, it MUST
 emit the value in an atom form for which the value satisfies the corresponding safety predicate
 above: an inline atom only if the value is inline-safe, a source atom only if it is source-safe, and
-a literal atom only with a delimiter for which the value is literal-safe. The *Literal atom delimiter
-invariant* below is the literal-safe case of this general rule.
+a literal atom only with a delimiter whose delimiter line makes the value literal-safe. The
+*Literal atom delimiter invariant* below is the literal-safe case of this general rule.
 
 **Sigil invariant.** A machine MUST NOT change the document's sigil. The sigil in effect when the
 document was parsed is preserved exactly in any reserialized output.
 
-**Literal atom delimiter invariant.** The delimiter of a literal atom MUST NOT appear as a line
-within the atom's payload. When a machine updates the value of a literal atom, it MUST check
-whether the existing delimiter appears verbatim as a line in the new payload. If it does, the
-editor MUST choose a new delimiter that does not appear as a line in the new payload before
-writing the updated atom.
+**Literal atom delimiter invariant.** The delimiter line of a literal atom MUST NOT appear as a
+line within the atom's payload. When a machine updates the value of a literal atom, it MUST check
+whether the atom's delimiter line (at the indentation where the atom is written) appears verbatim
+as a line in the new payload. If it does, the editor MUST choose a new delimiter whose delimiter
+line does not appear as a line in the new payload before writing the updated atom.
 
 This specification does not mandate a delimiter-selection algorithm for editor use. Two common
 strategies are:
 
-- **Dash-extension.** Start from a short fixed delimiter such as `---`; if it appears as a line
-  in the payload, lengthen by one `-` (try `----`, `-----`, …) until no collision remains. This
-  is the strategy used by canonical serialization (§22.3) and is RECOMMENDED for any tool that
-  values diff-stability.
+- **Dash-extension.** Start from a short fixed delimiter such as `---`; if its delimiter line
+  appears as a line in the payload, lengthen by one `-` (try `----`, `-----`, …) until no
+  collision remains. This is the strategy used by canonical serialization (§22.3) and is
+  RECOMMENDED for any tool that values diff-stability.
 - **High-entropy token.** Generate a random or UUID-derived ASCII identifier and use it as the
   delimiter (after verifying the no-collision invariant). This single-pass option suits writers
   that have no need for short, human-readable delimiters.
@@ -2981,7 +2997,7 @@ Canonical serialization follows the same conventions as the `construct` operatio
   1. **Inline atom** — used if the value is **inline-safe**.
   2. **Source atom** — used if the value is not inline-safe but is **source-safe**.
   3. **Literal atom** — used in every other case, with a delimiter chosen so the value is
-     **literal-safe** with respect to it (see the dash-extension rule below).
+     **literal-safe** with respect to its delimiter line (see the dash-extension rule below).
 
   The **first** form in the order inline → source → literal whose safety predicate the value
   satisfies determines the form; forms further down the list are not consulted. This makes the
@@ -2991,11 +3007,12 @@ Canonical serialization follows the same conventions as the `construct` operatio
   run, `precedingSpaces = 2`) so the parser keeps the value's soft spaces as content (§10.3); an
   inline atom whose value contains no space uses a single preceding space (`precedingSpaces = 1`).
 - Each compound child is indented by one level (two spaces) relative to its parent.
-- Literal atoms use the delimiter `---` unless the payload contains that string as a line. In
-  that case, the delimiter is lengthened by one `-` at a time (`----`, `-----`, …) until the
-  delimiter no longer appears as a line in the payload. This dash-extension algorithm is
-  normative for canonical serialization; it is what makes property P3 (canonical determinism)
-  hold for payloads that contain `---`.
+- Literal atoms use the delimiter `---` unless the payload contains the atom's delimiter line
+  (the opening indentation followed by `---`, §15) as a line. In that case, the delimiter is
+  lengthened by one `-` at a time (`----`, `-----`, …) until the delimiter line no longer appears
+  as a line in the payload. This dash-extension algorithm is normative for canonical
+  serialization; it is what makes property P3 (canonical determinism) hold for payloads that
+  contain a colliding line.
 - Line endings use LF mode.
 
 Two documents with identical semantic models, serialized canonically by the same version of the

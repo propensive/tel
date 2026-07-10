@@ -2839,7 +2839,9 @@ impl ParserState {
                     let delimiter: String = chars[delim_start..j].iter().collect();
                     let delimiter = delimiter.trim_end().to_string();
                     if !delimiter.is_empty() && delimiter.chars().all(|c| !c.is_ascii_whitespace()) {
-                        // Scan for closing delimiter
+                        // Scan for the closing delimiter line: byte-identical
+                        // to the opening line (indentation + delimiter, §15).
+                        let closing_line = format!("{}{}", " ".repeat(spaces), delimiter);
                         let payload_start = if j < chars.len() { j + 1 } else { j };
                         let mut k = payload_start;
                         while k < chars.len() {
@@ -2847,7 +2849,7 @@ impl ParserState {
                             let ls = k;
                             while k < chars.len() && chars[k] != '\n' { k += 1; }
                             let line_text: String = chars[ls..k].iter().collect();
-                            if line_text == delimiter {
+                            if line_text == closing_line {
                                 ranges.push((payload_start, ls));
                                 break;
                             }
@@ -3608,12 +3610,14 @@ impl<'a> TreeCtx<'a> {
 
         self.idx += 1; // consume delimiter line
 
-        // Scan raw lines for the closing-delimiter match: a line whose
-        // content (after CR-stripping) equals the delimiter exactly.
+        // Scan raw lines for the closing delimiter line: per §15 it is
+        // byte-for-byte identical to the opening delimiter line, i.e. the
+        // opening indentation followed by the delimiter.
+        let closing_line = format!("{}{}", " ".repeat(indent_chars), delimiter);
         let mut close_idx: Option<usize> = None;
         while self.idx < self.raw.len() {
             let line_text = self.raw[self.idx].text();
-            if line_text == delimiter {
+            if line_text == closing_line {
                 close_idx = Some(self.idx);
                 self.idx += 1; // consume closing delimiter line
                 break;

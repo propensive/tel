@@ -8,6 +8,7 @@ code
 
 (document
   (compound
+    (keyword)
     (source_atom)))
 
 ==================
@@ -20,6 +21,7 @@ description
 
 (document
   (compound
+    (keyword)
     (source_atom)))
 
 ==================
@@ -30,11 +32,12 @@ code
 hello world
   indented
 trailing spaces
-EOF
+      EOF
 ---
 
 (document
   (compound
+    (keyword)
     (literal_atom)))
 
 ==================
@@ -43,11 +46,12 @@ literal atom custom delimiter
 code
       ===
 content
-===
+      ===
 ---
 
 (document
   (compound
+    (keyword)
     (literal_atom)))
 
 ==================
@@ -60,13 +64,16 @@ person Alice 30
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (soft_atom
       (soft_gap))
     (children
       (compound
+        (keyword)
         (children
           (compound
+            (keyword)
             (soft_atom
               (soft_gap))))))))

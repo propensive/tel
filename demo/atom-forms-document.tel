@@ -16,4 +16,4 @@ literal-value
 # this would be a comment without the literal-atom wrapping
 ## subheading
 the value contains a sigil at the start of a line
----
+      ---

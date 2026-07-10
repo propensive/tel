@@ -5,7 +5,8 @@ name
 ---
 
 (document
-  (compound))
+  (compound
+    (keyword)))
 
 ==================
 keyword with inline atom
@@ -15,6 +16,7 @@ name alice
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -26,6 +28,7 @@ phone work +44 20 7946 0958
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))
     (soft_atom
@@ -45,6 +48,7 @@ name  Alice Anderson
 
 (document
   (compound
+    (keyword)
     (hard_atom
       (hard_gap))))
 
@@ -58,11 +62,14 @@ phone
 
 (document
   (compound
+    (keyword)
     (children
       (compound
+        (keyword)
         (soft_atom
           (soft_gap)))
       (compound
+        (keyword)
         (soft_atom
           (soft_gap))))))
 
@@ -75,9 +82,11 @@ email alice@example.org
 
 (document
   (compound
+    (keyword)
     (soft_atom
       (soft_gap)))
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -92,9 +101,13 @@ a
 
 (document
   (compound
+    (keyword)
     (children
       (compound
+        (keyword)
         (children
           (compound
+            (keyword)
             (children
-              (compound))))))))
+              (compound
+                (keyword)))))))))

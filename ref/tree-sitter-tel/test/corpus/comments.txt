@@ -8,6 +8,7 @@ name alice
 (document
   (comment)
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -25,6 +26,7 @@ name alice
   (comment)
   (comment)
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))
 
@@ -38,10 +40,12 @@ b
 ---
 
 (document
-  (compound)
+  (compound
+    (keyword))
   (blank_line)
   (comment)
-  (compound))
+  (compound
+    (keyword)))
 
 ==================
 comment inside child block
@@ -53,9 +57,11 @@ parent
 
 (document
   (compound
+    (keyword)
     (children
       (comment)
-      (compound))))
+      (compound
+        (keyword)))))
 
 ==================
 empty comment
@@ -67,5 +73,6 @@ name alice
 (document
   (comment)
   (compound
+    (keyword)
     (soft_atom
       (soft_gap))))

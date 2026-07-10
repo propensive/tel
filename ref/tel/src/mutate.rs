@@ -90,7 +90,7 @@ pub fn update_value(doc: &mut Document, target: &Path, value: &str) -> Result<()
                 *atom = Atom::Source { text: value.to_string() };
             } else {
                 *atom = Atom::Literal {
-                    delimiter: canonical::choose_literal_delim(value),
+                    delimiter: canonical::choose_literal_delim_any_indent(value),
                     text: value.to_string(),
                 };
             }
@@ -100,16 +100,18 @@ pub fn update_value(doc: &mut Document, target: &Path, value: &str) -> Result<()
                 *text = value.to_string();
             } else {
                 *atom = Atom::Literal {
-                    delimiter: canonical::choose_literal_delim(value),
+                    delimiter: canonical::choose_literal_delim_any_indent(value),
                     text: value.to_string(),
                 };
             }
         }
         Atom::Literal { delimiter, text } => {
             // Keep the existing delimiter unless the new payload collides with
-            // it; only then fall back to a fresh dash-extension delimiter.
-            if value.split('\n').any(|l| l == delimiter) {
-                *delimiter = canonical::choose_literal_delim(value);
+            // its delimiter line; only then fall back to a fresh dash-extension
+            // delimiter. The collision test is position-independent (§23) since
+            // the serialization indent is not known here.
+            if value.split('\n').any(|l| canonical::collides_at_any_indent(l, delimiter)) {
+                *delimiter = canonical::choose_literal_delim_any_indent(value);
             }
             *text = value.to_string();
         }
