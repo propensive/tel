@@ -30,4 +30,4 @@ Document {
     ],
 }
 errors:
-  E122 [0,25): Invalid schema identifier
+  E121 [0,25): Invalid schema identifier

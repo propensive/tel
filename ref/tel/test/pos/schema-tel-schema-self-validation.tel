@@ -26,7 +26,7 @@ name tel-schema
 
 # A `field` declaration at a member position. The four loosen/tighten flags
 # yield the per-axis Polarity (§20). `default` is permitted only on required
-# Scalar-typed fields (E204).
+# Scalar-typed fields (E203).
 
 record Field
   field keyword Identifier
@@ -67,7 +67,7 @@ record Scalar
 
 # A top-level `select` declaration. `exclude` children are permitted
 # lexically but only valid inside a layer's select body; appearing in a
-# base-schema select body raises E217 during construction.
+# base-schema select body raises E216 during construction.
 
 record Select
   field name TypeName
@@ -99,7 +99,7 @@ select Member
   variant select SelectRef
   variant validate Identifier
 
-# Children admissible inside a Select body. `exclude` is layer-only (E217 in
+# Children admissible inside a Select body. `exclude` is layer-only (E216 in
 # a base) but is lexically permitted here.
 
 select SelectChild

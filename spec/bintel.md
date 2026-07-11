@@ -60,11 +60,11 @@ The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas 
 of the TEL Specification — is:
 
 ```
-BLAKE3-256: 626dd8958809da354a2f8bd9f7dac1cfda7f549ecbe047eb0d8c0a17c278d517
-BASE-256:   bmῘƕẈȉῚ5JįẋÙỷῚӁϏῚſTΞϋàGӫḍẌЊЗӂxϕЗ
+BLAKE3-256: d4289b0fc6b7f666c9269a135d509ff3973bcea734fbe777b8f907045d3df8a9
+BASE-256:   ÔШқďÆҷǶfωȦҚГѝPƟỳẗĻώƧ4ûçwᾸùćĄѝĽӸΩ
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` (1651 BinTEL bytes; raw
+A conforming implementation that encodes the canonical `tel-schema.tel` (1641 BinTEL bytes; raw
 bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
@@ -585,7 +585,7 @@ Specification.
 | B07  | A Scalar value's UTF-8 bytes are not a valid UTF-8 sequence.                                  |
 | B08  | The document-root decoding procedure of §7.8 terminates with input bytes remaining (framing error per §6). |
 | B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
-| B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E210 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
+| B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E209 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
 | B11  | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte. |
 | B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tel-schema` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
 

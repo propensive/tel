@@ -54,7 +54,7 @@ impl SchemaIdentifier {
     /// - `http(s)://…#<BASE-256>` — URL with BASE-256 fragment signature.
     /// - `<BASE-256>` — bare signature.
     ///
-    /// Returns `None` for inputs that match none of these forms (E122 at
+    /// Returns `None` for inputs that match none of these forms (E121 at
     /// parse time).
     pub fn parse(s: &str) -> Option<Self> {
         if s.contains("://") {
@@ -91,7 +91,7 @@ pub enum ResolutionError {
     SignatureMismatch { expected: Vec<u8>, actual: Vec<u8> },
     /// The fetcher reported a network or transport error.
     FetchError { detail: String },
-    /// The identifier could not be parsed (would be E122 at TEL parse
+    /// The identifier could not be parsed (would be E121 at TEL parse
     /// time, surfaced here for completeness).
     BadIdentifier,
 }

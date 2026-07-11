@@ -107,7 +107,7 @@ Document {
                     text: "yield the per-axis Polarity (§20). `default` is permitted only on required",
                 },
                 Comment {
-                    text: "Scalar-typed fields (E204).",
+                    text: "Scalar-typed fields (E203).",
                 },
             ],
             tabulation: None,
@@ -580,7 +580,7 @@ Document {
                     text: "lexically but only valid inside a layer's select body; appearing in a",
                 },
                 Comment {
-                    text: "base-schema select body raises E217 during construction.",
+                    text: "base-schema select body raises E216 during construction.",
                 },
             ],
             tabulation: None,
@@ -916,7 +916,7 @@ Document {
         Block {
             comments: [
                 Comment {
-                    text: "Children admissible inside a Select body. `exclude` is layer-only (E217 in",
+                    text: "Children admissible inside a Select body. `exclude` is layer-only (E216 in",
                 },
                 Comment {
                     text: "a base) but is lexically permitted here.",

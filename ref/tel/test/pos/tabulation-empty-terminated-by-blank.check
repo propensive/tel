@@ -20,7 +20,18 @@ Document {
             compounds: [],
             trailing_blank_lines: 1,
         },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "hello",
+                    atoms: [],
+                    remark: None,
+                    children: [],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
     ],
 }
-errors:
-  E116 [14,16): Tabulated row has wrong indentation

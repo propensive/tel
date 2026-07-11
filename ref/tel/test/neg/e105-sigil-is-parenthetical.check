@@ -9,9 +9,7 @@ Document {
             schema: Some(
                 "https://example.com/schema",
             ),
-            sigil: Some(
-                '#',
-            ),
+            sigil: None,
         },
     ),
     line_endings: LF,
@@ -32,4 +30,4 @@ Document {
     ],
 }
 errors:
-  E123 [0,48): Pragma has extra atoms
+  E105 [0,36): Invalid sigil character

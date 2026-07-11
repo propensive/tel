@@ -61,8 +61,8 @@ pub enum ErrorCode {
     E106, E107, E108, E109, E111, E112, E113, E114, E115,
     E116, E117, E118, E119, E120, E121, E122, E123,
     // Schema validity errors (§20.1)
-    E201, E202, E204, E205, E206, E207, E208, E209, E210, E211,
-    E212, E213, E214, E215, E216, E217, E218,
+    E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
+    E211, E212, E213, E214, E215, E216, E217,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
 }
@@ -86,29 +86,29 @@ impl ErrorCode {
             Self::E115 => "Unclosed literal atom",
             Self::E116 => "Tabulated row has wrong indentation",
             Self::E117 => "Hard space does not end at a column boundary",
-            Self::E118 => "Consecutive spaces within column value",
-            Self::E119 => "Column value exceeds maximum width",
-            Self::E120 => "Malformed tabulation heading",
-            Self::E121 => "Line-ending inconsistency",
-            Self::E122 => "Invalid schema identifier",
-            Self::E123 => "Pragma has extra atoms",
+            Self::E118 => "Column value exceeds maximum width",
+            Self::E119 => "Malformed tabulation heading",
+            Self::E120 => "Line-ending inconsistency",
+            Self::E121 => "Invalid schema identifier",
+            Self::E122 => "Pragma has extra atoms",
+            Self::E123 => "Document is not well-formed UTF-8",
             Self::E201 => "Duplicate keyword within a Struct",
             Self::E202 => "Select member has empty variants list",
-            Self::E204 => "Scalar has non-null default but member is not required",
-            Self::E205 => "Two or more Layers share the same name",
-            Self::E206 => "Layer Select variant keyword overlaps existing keyword in base Struct",
-            Self::E207 => "Layer Field merge requires both base and layer types to be Struct",
-            Self::E208 => "Schema.sigil character is not permitted",
-            Self::E209 => "Keyword `tel` is reserved and must not be used as a Field or Variant keyword",
-            Self::E210 => "Reference does not resolve to a Definition in the schema",
-            Self::E211 => "Two or more Definitions share the same name",
-            Self::E212 => "`exclude K` names a keyword that does not identify a Select variant in the merged Struct",
-            Self::E213 => "`exclude K` would empty a required Select",
-            Self::E214 => "Layer attempts to add a variant to an existing Select in a non-subtyping way",
-            Self::E215 => "Layer cannot loosen a required member to optional",
-            Self::E216 => "Layer cannot loosen an irrepeatable member to repeatable",
-            Self::E217 => "Exclude operation appears outside a layer's SelectDefinition body",
-            Self::E218 => "Reference/SelectRef kind mismatch (Reference resolved to a SelectDefinition, or SelectRef resolved to a Record/Scalar)",
+            Self::E203 => "Scalar has non-null default but member is not required",
+            Self::E204 => "Two or more Layers share the same name",
+            Self::E205 => "Layer Select variant keyword overlaps existing keyword in base Struct",
+            Self::E206 => "Layer Field merge requires both base and layer types to be Struct",
+            Self::E207 => "Schema.sigil character is not permitted",
+            Self::E208 => "Keyword `tel` is reserved and must not be used as a Field or Variant keyword",
+            Self::E209 => "Reference does not resolve to a Definition in the schema",
+            Self::E210 => "Two or more Definitions share the same name",
+            Self::E211 => "`exclude K` names a keyword that does not identify a Select variant in the merged Struct",
+            Self::E212 => "`exclude K` would empty a required Select",
+            Self::E213 => "Layer attempts to add a variant to an existing Select in a non-subtyping way",
+            Self::E214 => "Layer cannot loosen a required member to optional",
+            Self::E215 => "Layer cannot loosen an irrepeatable member to repeatable",
+            Self::E216 => "Exclude operation appears outside a layer's SelectDefinition body",
+            Self::E217 => "Reference/SelectRef kind mismatch (Reference resolved to a SelectDefinition, or SelectRef resolved to a Record/Scalar)",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -274,7 +274,7 @@ pub struct SelectDefinition {
 /// `Type::Reference(name)` resolves (per §20.2) to either a `Struct` formed
 /// from the named record's `members`, a `Scalar` formed from the named
 /// scalar's `validators`, or one of the built-in types `Flag`, `String`,
-/// `Identifier`, `Sigil`. Resolving to a `SelectDefinition` is **E218**
+/// `Identifier`, `Sigil`. Resolving to a `SelectDefinition` is **E217**
 /// — sums at a single-keyword position are written as `SelectRef`, not
 /// `Reference`.
 #[derive(Debug, Clone, PartialEq)]
@@ -306,7 +306,7 @@ pub struct Scalar {
 
 /// Per-axis declaration state for `Field` and `SelectRef`. The tristate is
 /// retained through schema construction and layer merge so §20.3 can
-/// distinguish a layer that loosens an already-tight axis (E215/E216)
+/// distinguish a layer that loosens an already-tight axis (E214/E215)
 /// from a redundant restatement. Effective booleans are derived:
 ///   effective `required`   = `(polarity != Loose)`
 ///   effective `repeatable` = `(polarity == Loose)`
@@ -343,7 +343,7 @@ pub enum Member {
     /// Layer-only operation: declared inside a layer's `select N` body to
     /// remove a variant from the merged SelectDefinition (§20.3). It MUST
     /// NOT appear inside any Struct (root, RecordDefinition body, or
-    /// overlay); appearing there is **E217**.
+    /// overlay); appearing there is **E216**.
     Exclude(String),
 }
 
@@ -356,7 +356,7 @@ pub struct Field {
     /// Per-use-site default value, applied when a required Scalar-typed
     /// field is absent from the document. Valid only when the effective
     /// `required` is `true` and the resolved `type` is `Scalar`
-    /// (E204 otherwise).
+    /// (E203 otherwise).
     pub default: Option<String>,
     /// Optional human-readable description of this field. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
@@ -813,7 +813,7 @@ pub fn builtin_tel_schema() -> Schema {
     };
 
     // Children admissible inside a Select body. `exclude` is lexically
-    // permitted (E217 if it appears outside a layer's Select body at
+    // permitted (E216 if it appears outside a layer's Select body at
     // construction time).
     let s_select_child = SelectDefinition {
         name: "SelectChild".to_string(),
@@ -867,7 +867,7 @@ pub const BUILTIN_TYPE_NAMES: &[&str] = &["Flag", "String", "Identifier", "Sigil
 
 /// Resolve a `Reference` to a record's `Member` slice. Returns `None` if the
 /// name doesn't resolve to a record. Used by `Field.type` resolution; a
-/// `Field` whose Reference resolves to a `SelectDefinition` is E218 and
+/// `Field` whose Reference resolves to a `SelectDefinition` is E217 and
 /// should be caught at schema-validity time.
 pub(crate) fn resolve_reference<'a>(name: &str, schema: &'a Schema) -> Option<&'a [Member]> {
     schema.records.iter()
@@ -890,7 +890,7 @@ pub(crate) fn resolve_select_ref<'a>(name: &str, schema: &'a Schema) -> Option<&
 /// `Sigil`, `TypeName`) short-circuit to owned built-in types. Records
 /// resolve to a member-slice borrow; scalars resolve to an owned `Scalar`
 /// synthesized from the definition's validators. A Reference that
-/// resolves to a `SelectDefinition` is the E218 condition and is not
+/// resolves to a `SelectDefinition` is the E217 condition and is not
 /// considered resolved here.
 pub(crate) enum ResolvedType<'a> {
     Struct(&'a [Member]),
@@ -900,9 +900,9 @@ pub(crate) enum ResolvedType<'a> {
     /// when it's a built-in or a named scalar definition.
     Scalar(std::borrow::Cow<'a, Scalar>),
     Flag,
-    Unresolved, // Reference whose name doesn't resolve (E210)
+    Unresolved, // Reference whose name doesn't resolve (E209)
     /// Reference whose name resolves to a `SelectDefinition` — invalid in
-    /// a `Field.type` / `Variant.type` position (E218).
+    /// a `Field.type` / `Variant.type` position (E217).
     KindMismatch,
 }
 
@@ -949,7 +949,7 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
             }));
         }
     }
-    // Select definitions: E218 in this position.
+    // Select definitions: E217 in this position.
     if resolve_select_ref(name, schema).is_some() {
         return ResolvedType::KindMismatch;
     }
@@ -1111,7 +1111,7 @@ fn type_assign_compound(
 ) {
     match resolve(t, schema) {
         ResolvedType::Unresolved | ResolvedType::KindMismatch => {
-            // Schema-validity reports E210/E218; nothing more to do here.
+            // Schema-validity reports E209/E217; nothing more to do here.
         }
         ResolvedType::Flag => {
             // E311: Flag compound must have no atoms and no compound children.
@@ -1484,7 +1484,7 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
 /// (at schema root or inside a `layer` body). Walks `variant`, `validate`,
 /// and (layer-only) `exclude` children. `exclude` is accumulated into
 /// `layer_excludes` to be consumed by `MergeSelect`; in a base schema
-/// `layer_excludes` should be empty (E217 if not, reported by
+/// `layer_excludes` should be empty (E216 if not, reported by
 /// `validate_schema`).
 fn construct_select_definition(c: &Compound) -> SelectDefinition {
     let name = first_inline_atom(c);
@@ -1559,7 +1559,7 @@ fn construct_layer(c: &Compound) -> Layer {
 /// `record`'s body, or an `overlay` block) and collect both Members
 /// (`field`, `select` → SelectRef, `validate`) and its struct-level
 /// validators. `Exclude` MUST NOT appear in a struct-shaped body (§20.3);
-/// if it does, that's E217, reported by `validate_schema`. To remain
+/// if it does, that's E216, reported by `validate_schema`. To remain
 /// permissive at construction time and let the validator report cleanly,
 /// the constructor accepts `Member::Exclude` here without complaint.
 fn construct_struct_body(blocks: &[Block]) -> (Vec<Member>, Vec<String>) {
@@ -1725,13 +1725,13 @@ fn construct_variant(c: &Compound) -> Variant {
 pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     let mut errors = Vec::new();
 
-    // E211: duplicate definition names across the base schema's three
+    // E210: duplicate definition names across the base schema's three
     // Definition lists (records, scalars, selects). They share one
     // namespace.
     let mut seen_base: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let push_dup = |name: &str, errs: &mut Vec<SchemaError>| {
         errs.push(SchemaError {
-            code: ErrorCode::E211,
+            code: ErrorCode::E210,
             detail: format!("duplicate definition name `{}` in base schema", name),
         });
     };
@@ -1749,7 +1749,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     for d in &s.records {
         if BUILTIN_TYPE_NAMES.contains(&d.name.as_str()) {
             errors.push(SchemaError {
-                code: ErrorCode::E211,
+                code: ErrorCode::E210,
                 detail: format!("record `{}` collides with a built-in TypeName", d.name),
             });
         }
@@ -1757,7 +1757,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     for sd in &s.scalars {
         if BUILTIN_TYPE_NAMES.contains(&sd.name.as_str()) {
             errors.push(SchemaError {
-                code: ErrorCode::E211,
+                code: ErrorCode::E210,
                 detail: format!("scalar `{}` collides with a built-in TypeName", sd.name),
             });
         }
@@ -1765,7 +1765,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     for sl in &s.selects {
         if BUILTIN_TYPE_NAMES.contains(&sl.name.as_str()) {
             errors.push(SchemaError {
-                code: ErrorCode::E211,
+                code: ErrorCode::E210,
                 detail: format!("select `{}` collides with a built-in TypeName", sl.name),
             });
         }
@@ -1776,7 +1776,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         for d in &layer.records {
             if !seen_in_layer.insert(&d.name) {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!("duplicate definition name `{}` within layer `{}`",
                         d.name, layer.name),
                 });
@@ -1785,7 +1785,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         for sd in &layer.scalars {
             if !seen_in_layer.insert(&sd.name) {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!("duplicate definition name `{}` within layer `{}`",
                         sd.name, layer.name),
                 });
@@ -1794,7 +1794,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         for sl in &layer.selects {
             if !seen_in_layer.insert(&sl.name) {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!("duplicate definition name `{}` within layer `{}`",
                         sl.name, layer.name),
                 });
@@ -1815,13 +1815,13 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
             });
         }
     }
-    // E217: an `exclude` declared inside a *base* SelectDefinition (i.e.
+    // E216: an `exclude` declared inside a *base* SelectDefinition (i.e.
     // `layer_excludes` non-empty on a base select) is layer-only and not
     // allowed here. Layer-side excludes are valid; we trust them.
     for sl in &s.selects {
         for kw in &sl.layer_excludes {
             errors.push(SchemaError {
-                code: ErrorCode::E217,
+                code: ErrorCode::E216,
                 detail: format!(
                     "`exclude {}` appears in base SelectDefinition `{}`; exclude is layer-only",
                     kw, sl.name,
@@ -1830,22 +1830,22 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E205: duplicate layer names
+    // E204: duplicate layer names
     let mut seen_layer_names = std::collections::HashSet::new();
     for l in &s.layers {
         if !seen_layer_names.insert(&l.name) {
             errors.push(SchemaError {
-                code: ErrorCode::E205,
+                code: ErrorCode::E204,
                 detail: format!("duplicate Layer name `{}`", l.name),
             });
         }
     }
 
-    // E208: sigil character check
+    // E207: sigil character check
     if let Some(c) = s.sigil {
         if matches!(validate_sigil(&c.to_string()), ValidationResponse::Invalid(_)) {
             errors.push(SchemaError {
-                code: ErrorCode::E208,
+                code: ErrorCode::E207,
                 detail: format!("Schema.sigil `{}` is not a permitted sigil character", c),
             });
         }
@@ -1863,7 +1863,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E217 (alternative path): `Member::Exclude` MUST NOT appear inside any
+    // E216 (alternative path): `Member::Exclude` MUST NOT appear inside any
     // struct-shaped body. (Layer-side exclude lives on `SelectDefinition.layer_excludes`
     // which is collected by `construct_select_definition`, not as a Member.)
     check_no_exclude_in_struct(&s.document.members, "document", &mut errors);
@@ -1879,18 +1879,18 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E209: reserved keyword `tel` — check every Field/Variant keyword.
+    // E208: reserved keyword `tel` — check every Field/Variant keyword.
     for kw in collect_all_keywords(s) {
         if kw == "tel" {
             errors.push(SchemaError {
-                code: ErrorCode::E209,
+                code: ErrorCode::E208,
                 detail: "keyword `tel` is reserved (§8)".to_string(),
             });
         }
     }
 
     // Run the full composition algorithm to surface any merge-time errors
-    // (E206/E207/E212/E213/E214). The simulation in the legacy code is
+    // (E205/E206/E211/E212/E213). The simulation in the legacy code is
     // subsumed by compose_schema.
     if !s.layers.is_empty() {
         let (_, compose_errs) = compose_schema(s);
@@ -1900,7 +1900,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     errors
 }
 
-/// Collect every Field/Variant keyword reachable from the schema (for E209 check).
+/// Collect every Field/Variant keyword reachable from the schema (for E208 check).
 fn collect_all_keywords(s: &Schema) -> Vec<String> {
     let mut out = Vec::new();
     let visit_members = |out: &mut Vec<String>, members: &[Member]| {
@@ -1931,8 +1931,8 @@ fn collect_all_keywords(s: &Schema) -> Vec<String> {
 
 /// Apply every `Layer` in `s.layers` to produce a fully composed schema
 /// per §20.3. Returns the composed `Schema` (with empty `layers`) plus
-/// any `SchemaError`s raised during composition (E206, E207, E211, E212,
-/// E213, E214). The returned schema is always a best-effort result.
+/// any `SchemaError`s raised during composition (E205, E206, E210, E211,
+/// E212, E213). The returned schema is always a best-effort result.
 pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
     let mut errors: Vec<SchemaError> = Vec::new();
     let mut records: Vec<RecordDefinition> = s.records.clone();
@@ -1948,7 +1948,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 || selects.iter().any(|sl| sl.name == def.name)
             {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!(
                         "layer `{}` declares record `{}` but a Definition of another kind with that name already exists",
                         layer.name, def.name,
@@ -1988,7 +1988,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 || selects.iter().any(|sl| sl.name == sd.name)
             {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!(
                         "layer `{}` declares scalar `{}` but a Definition of another kind with that name already exists",
                         layer.name, sd.name,
@@ -2013,13 +2013,13 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
         // Select merge: same-name SelectDefinition → MergeSelect (exclude
         // variants per layer's `layer_excludes`; append validators). Adding
         // a variant in a layer (i.e. layer's SelectDefinition has a variant
-        // keyword absent from the base) is E214.
+        // keyword absent from the base) is E213.
         for sl in &layer.selects {
             if records.iter().any(|d| d.name == sl.name)
                 || scalars.iter().any(|sd| sd.name == sl.name)
             {
                 errors.push(SchemaError {
-                    code: ErrorCode::E211,
+                    code: ErrorCode::E210,
                     detail: format!(
                         "layer `{}` declares select `{}` but a Definition of another kind with that name already exists",
                         layer.name, sl.name,
@@ -2038,7 +2038,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 if !sl.layer_excludes.is_empty() {
                     for kw in &sl.layer_excludes {
                         errors.push(SchemaError {
-                            code: ErrorCode::E212,
+                            code: ErrorCode::E211,
                             detail: format!(
                                 "layer `{}` exclude `{}` in fresh select `{}`: no base SelectDefinition to exclude from",
                                 layer.name, kw, sl.name,
@@ -2075,9 +2075,9 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
 }
 
 /// Merge a layer's SelectDefinition into the base SelectDefinition with the
-/// same name. Variant addition by the layer is E214; an Exclude that names
-/// a non-existent variant is E212; emptying a SelectDefinition referenced
-/// by any required SelectRef would be E213 (deferred: we don't know the
+/// same name. Variant addition by the layer is E213; an Exclude that names
+/// a non-existent variant is E211; emptying a SelectDefinition referenced
+/// by any required SelectRef would be E212 (deferred: we don't know the
 /// referencing SelectRefs at this layer; the validity check is left to
 /// downstream schema validation that observes the composed schema).
 fn merge_select_def(
@@ -2089,11 +2089,11 @@ fn merge_select_def(
     let mut variants = base.variants.clone();
     // Variants in `layer.variants` MUST identify existing base variants
     // (variant restatement, allowed); a layer variant whose keyword is
-    // absent from the base is E214.
+    // absent from the base is E213.
     for lv in &layer.variants {
         if !variants.iter().any(|v| v.keyword == lv.keyword) {
             errors.push(SchemaError {
-                code: ErrorCode::E214,
+                code: ErrorCode::E213,
                 detail: format!(
                     "layer `{}` introduces variant `{}` in SelectDefinition `{}` not present in base (would widen the sum)",
                     layer_name, lv.keyword, base.name,
@@ -2107,7 +2107,7 @@ fn merge_select_def(
         variants.retain(|v| v.keyword != *kw);
         if variants.len() == before {
             errors.push(SchemaError {
-                code: ErrorCode::E212,
+                code: ErrorCode::E211,
                 detail: format!(
                     "layer `{}` exclude `{}` in SelectDefinition `{}`: no such variant in base",
                     layer_name, kw, base.name,
@@ -2131,8 +2131,8 @@ fn merge_select_def(
 }
 
 /// Merge per-axis Polarity (§20.3): tightening or restatement allowed;
-/// loosening an already-tight or default axis is E215 (required axis) or
-/// E216 (repeatable axis).
+/// loosening an already-tight or default axis is E214 (required axis) or
+/// E215 (repeatable axis).
 fn merge_polarity(
     base: Polarity,
     layer: Polarity,
@@ -2147,7 +2147,7 @@ fn merge_polarity(
         (Polarity::Loose, Polarity::Loose) => Polarity::Loose,
         (Polarity::Default, Polarity::Loose) | (Polarity::Tight, Polarity::Loose) => {
             errors.push(SchemaError {
-                code: if is_required_axis { ErrorCode::E215 } else { ErrorCode::E216 },
+                code: if is_required_axis { ErrorCode::E214 } else { ErrorCode::E215 },
                 detail: format!(
                     "layer `{}` in {}: cannot loosen a {} axis whose merged polarity is {}",
                     layer_name, where_,
@@ -2190,7 +2190,7 @@ fn merge_field_with(
         (a, b) if a == b => a.clone(),
         _ => {
             errors.push(SchemaError {
-                code: ErrorCode::E207,
+                code: ErrorCode::E206,
                 detail: format!(
                     "layer `{}` field `{}` in {}: type mismatch",
                     layer_name, layer.keyword, where_,
@@ -2290,10 +2290,10 @@ fn merge_members(
             Member::Exclude(kw) => {
                 // Exclude is layer-only and lives in a layer's SelectDefinition
                 // body, not in a struct-shaped member list. Reaching here is a
-                // validity error (E217) — but the validate_schema path
+                // validity error (E216) — but the validate_schema path
                 // typically catches it first. Report defensively.
                 errors.push(SchemaError {
-                    code: ErrorCode::E217,
+                    code: ErrorCode::E216,
                     detail: format!(
                         "layer `{}` exclude `{}` in {}: `exclude` is only valid inside a layer's `select` body, not in a struct-shaped member list",
                         layer_name, kw, where_,
@@ -2314,14 +2314,14 @@ fn member_types(m: &Member) -> Vec<&Type> {
     }
 }
 
-/// E217 (§20.3): scan a member list (a struct-shaped body) for `Member::Exclude`
+/// E216 (§20.3): scan a member list (a struct-shaped body) for `Member::Exclude`
 /// and report each as an error.
 fn check_no_exclude_in_struct(members: &[Member], where_: &str, errors: &mut Vec<SchemaError>) {
     for m in members {
         match m {
             Member::Exclude(kw) => {
                 errors.push(SchemaError {
-                    code: ErrorCode::E217,
+                    code: ErrorCode::E216,
                     detail: format!(
                         "`exclude {}` appears in {} but `exclude` is only valid inside a layer's `select` body",
                         kw, where_,
@@ -2380,7 +2380,7 @@ fn check_members_recursive(
     for m in members {
         match m {
             Member::Field(f) => {
-                // E204: Field.default requires required + Scalar resolution.
+                // E203: Field.default requires required + Scalar resolution.
                 if let Some(def_val) = &f.default {
                     let is_required = f.required.effective_required();
                     let resolves_to_scalar = matches!(&f.r#type, Type::Scalar(_)) ||
@@ -2393,7 +2393,7 @@ fn check_members_recursive(
                         };
                     if !is_required {
                         errors.push(SchemaError {
-                            code: ErrorCode::E204,
+                            code: ErrorCode::E203,
                             detail: format!(
                                 "Field `{}` has default `{}` but is not required",
                                 f.keyword, def_val,
@@ -2401,7 +2401,7 @@ fn check_members_recursive(
                         });
                     } else if !resolves_to_scalar {
                         errors.push(SchemaError {
-                            code: ErrorCode::E204,
+                            code: ErrorCode::E203,
                             detail: format!(
                                 "Field `{}` has default `{}` but its type is not Scalar",
                                 f.keyword, def_val,
@@ -2409,12 +2409,12 @@ fn check_members_recursive(
                         });
                     }
                 }
-                // E210/E218: type-name resolution.
+                // E209/E217: type-name resolution.
                 if let Type::Reference(n) = &f.r#type {
                     match resolve_name(n, schema) {
                         ResolvedType::Unresolved => {
                             errors.push(SchemaError {
-                                code: ErrorCode::E210,
+                                code: ErrorCode::E209,
                                 detail: format!(
                                     "Reference `{}` (Field `{}`) does not resolve to any Definition",
                                     n, f.keyword,
@@ -2423,7 +2423,7 @@ fn check_members_recursive(
                         }
                         ResolvedType::KindMismatch => {
                             errors.push(SchemaError {
-                                code: ErrorCode::E218,
+                                code: ErrorCode::E217,
                                 detail: format!(
                                     "Reference `{}` (Field `{}`) resolves to a SelectDefinition; use `select <Name>` at this position instead",
                                     n, f.keyword,
@@ -2439,11 +2439,11 @@ fn check_members_recursive(
                 }
             }
             Member::SelectRef(s) => {
-                // E210/E218: SelectRef must resolve to a SelectDefinition.
+                // E209/E217: SelectRef must resolve to a SelectDefinition.
                 match resolve_name(&s.reference, schema) {
                     ResolvedType::Unresolved => {
                         errors.push(SchemaError {
-                            code: ErrorCode::E210,
+                            code: ErrorCode::E209,
                             detail: format!(
                                 "SelectRef `{}` does not resolve to any Definition",
                                 s.reference,
@@ -2452,7 +2452,7 @@ fn check_members_recursive(
                     }
                     ResolvedType::Struct(_) | ResolvedType::Scalar(_) => {
                         errors.push(SchemaError {
-                            code: ErrorCode::E218,
+                            code: ErrorCode::E217,
                             detail: format!(
                                 "SelectRef `{}` resolves to a Record or Scalar (not a SelectDefinition)",
                                 s.reference,
@@ -2466,7 +2466,7 @@ fn check_members_recursive(
                         // resolve_select_ref helper confirms it.
                         if resolve_select_ref(&s.reference, schema).is_none() {
                             errors.push(SchemaError {
-                                code: ErrorCode::E210,
+                                code: ErrorCode::E209,
                                 detail: format!(
                                     "SelectRef `{}` does not resolve to a SelectDefinition",
                                     s.reference,
@@ -2534,6 +2534,64 @@ pub fn parse(input: &str) -> ParseResult {
 /// source, stopping at the first document separator (§6.1).
 pub fn parse_with_schema(input: &str, schema: &Schema) -> ParseResult {
     parse_inner(input, Some(schema))
+}
+
+/// Decode a byte sequence as UTF-8, replacing each maximal ill-formed
+/// subsequence with `U+FFFD` REPLACEMENT CHARACTER (Unicode §3.9 "maximal
+/// subpart" practice, per the E123 recovery of §19.5) and recording one E123
+/// error per replacement. Error spans are code-point offsets into the
+/// decoded text, so they line up with every other diagnostic span (§19.3).
+fn decode_utf8_tracked(bytes: &[u8]) -> (String, Vec<TelError>) {
+    let mut out = String::new();
+    let mut errors = Vec::new();
+    let mut char_count = 0usize;
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(s) => {
+                out.push_str(s);
+                break;
+            }
+            Err(e) => {
+                let valid = std::str::from_utf8(&rest[..e.valid_up_to()]).unwrap();
+                out.push_str(valid);
+                char_count += valid.chars().count();
+                errors.push(TelError::new(ErrorCode::E123, char_count, char_count + 1));
+                out.push('\u{FFFD}');
+                char_count += 1;
+                // error_len() is the length of the maximal ill-formed
+                // subsequence; None means the input ends with a truncated
+                // (but so far well-formed) sequence.
+                let skip = e.error_len().unwrap_or(rest.len() - e.valid_up_to());
+                rest = &rest[e.valid_up_to() + skip..];
+                if rest.is_empty() {
+                    break;
+                }
+            }
+        }
+    }
+    (out, errors)
+}
+
+/// Parse a byte sequence as a single TEL document. A well-formed UTF-8
+/// sequence parses exactly as [`parse`] on the decoded text; each maximal
+/// ill-formed subsequence is reported as **E123** (§4), replaced with
+/// `U+FFFD` per §19.5, and parsing continues on the decoded text.
+pub fn parse_bytes(input: &[u8]) -> ParseResult {
+    let (text, mut errors) = decode_utf8_tracked(input);
+    let mut result = parse(&text);
+    errors.append(&mut result.errors);
+    result.errors = errors;
+    result
+}
+
+/// Schema-aware variant of [`parse_bytes`]; see [`parse_with_schema`].
+pub fn parse_bytes_with_schema(input: &[u8], schema: &Schema) -> ParseResult {
+    let (text, mut errors) = decode_utf8_tracked(input);
+    let mut result = parse_with_schema(&text, schema);
+    errors.append(&mut result.errors);
+    result.errors = errors;
+    result
 }
 
 /// Parse a stream of independent TEL documents (§6.1), separated by document
@@ -2638,7 +2696,7 @@ impl ParserState {
     }
 
     /// File-level prelude shared by every document in the source: handle a
-    /// leading BOM (E101), detect the line-ending mode (E121), and split the
+    /// leading BOM (E101), detect the line-ending mode (E120), and split the
     /// input into raw lines. Computed once per source.
     fn prelude(&mut self) -> Prelude {
         let mut start = 0;
@@ -2649,7 +2707,7 @@ impl ParserState {
             start = 1;
         }
 
-        // Detect line endings and check E121 (file-wide; one mode per source).
+        // Detect line endings and check E120 (file-wide; one mode per source).
         let line_endings = self.detect_line_endings(start);
 
         // Split into raw lines.
@@ -2790,11 +2848,11 @@ impl ParserState {
             if chars[i] == '\r' {
                 if i + 1 >= chars.len() || chars[i + 1] != '\n' {
                     self.errors.push(TelError::with_detail(
-                        ErrorCode::E121, i, i + 1, "CR not followed by LF",
+                        ErrorCode::E120, i, i + 1, "CR not followed by LF",
                     ));
                 } else if established && mode == LineEndings::LF {
                     self.errors.push(TelError::with_detail(
-                        ErrorCode::E121, i, i + 2, "CRLF in LF-mode document",
+                        ErrorCode::E120, i, i + 2, "CRLF in LF-mode document",
                     ));
                 }
                 i += 2;
@@ -2803,7 +2861,7 @@ impl ParserState {
             if chars[i] == '\n' && established && mode == LineEndings::CRLF {
                 if i == start || chars[i - 1] != '\r' {
                     self.errors.push(TelError::with_detail(
-                        ErrorCode::E121, i, i + 1, "bare LF in CRLF-mode document",
+                        ErrorCode::E120, i, i + 1, "bare LF in CRLF-mode document",
                     ));
                 }
             }
@@ -2819,7 +2877,7 @@ impl ParserState {
         let mut ranges = Vec::new();
         // Very simple heuristic: look for lines that are heavily indented (6+ spaces from margin)
         // and have non-whitespace content that could be a delimiter, then scan for closing.
-        // This is a rough scan — we just need to avoid false E121 inside literal payloads.
+        // This is a rough scan — we just need to avoid false E120 inside literal payloads.
 
         let mut i = start;
         while i < chars.len() {
@@ -2893,9 +2951,9 @@ impl ParserState {
             after.split_whitespace().collect()
         };
 
-        // E123: extra atoms or remark
+        // E122: extra atoms or remark
         if atoms.len() > 3 {
-            self.errors.push(TelError::new(ErrorCode::E123, line_start, line_start + trimmed.len()));
+            self.errors.push(TelError::new(ErrorCode::E122, line_start, line_start + trimmed.len()));
         }
 
         let version = if !atoms.is_empty() {
@@ -2908,7 +2966,7 @@ impl ParserState {
         let schema = if atoms.len() >= 2 {
             let s = atoms[1];
             if !self.is_valid_schema_id(s) {
-                self.errors.push(TelError::new(ErrorCode::E122, line_start, line_start + trimmed.len()));
+                self.errors.push(TelError::new(ErrorCode::E121, line_start, line_start + trimmed.len()));
             }
             Some(s.to_string())
         } else {
@@ -2920,6 +2978,7 @@ impl ParserState {
             let ch = s.chars().next().unwrap_or(' ');
             if s.len() != 1 || ch.is_ascii_alphanumeric() || ch.is_ascii_control()
                 || ch == ' ' || ch == '\n' || ch == '\r'
+                || matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}')
             {
                 self.errors.push(TelError::new(ErrorCode::E105, line_start, line_start + trimmed.len()));
                 None
@@ -3247,8 +3306,9 @@ impl<'a> TreeCtx<'a> {
 
                 blank_count += 1;
                 self.idx += 1;
-                // Blank line terminates a tabulated block
-                if cur.tabulation.is_some() && !cur.compounds.is_empty() {
+                // Blank line terminates a tabulated block (even one with no
+                // rows: the tabulation line is preserved as an empty block)
+                if cur.tabulation.is_some() {
                     cur.trailing_blank_lines = blank_count;
                     blocks.push(cur);
                     cur = Block { comments: vec![], tabulation: None, compounds: vec![], trailing_blank_lines: 0 };
@@ -3326,8 +3386,11 @@ impl<'a> TreeCtx<'a> {
                 }
 
                 LineKind::Tabulation(tab) => {
-                    // Close prev tabulated block
-                    if cur.tabulation.is_some() && !cur.compounds.is_empty() {
+                    // Close prev tabulated block. A second tabulation line
+                    // always starts a new block, even when the previous
+                    // tabulated block has no rows — both tabulation lines
+                    // are preserved for faithful reserialization.
+                    if cur.tabulation.is_some() {
                         blocks.push(cur);
                         cur = Block { comments: vec![], tabulation: None, compounds: vec![], trailing_blank_lines: 0 };
                     } else if blank_count > 0 && !cur.compounds.is_empty() {
@@ -3440,7 +3503,7 @@ impl<'a> TreeCtx<'a> {
             }
         }
 
-        // E119: column width check
+        // E118: column width check
         for col_idx in 0..tab.marker_offsets.len() {
             let m_i = tab.marker_offsets[col_idx];
             if m_i == 0 { continue; } // skip M_0
@@ -3464,7 +3527,7 @@ impl<'a> TreeCtx<'a> {
                 let width = col_end - col_start;
                 if width > max_width {
                     self.errors.push(TelError::new(
-                        ErrorCode::E119,
+                        ErrorCode::E118,
                         self.raw[ri].start + margin + col_start,
                         self.raw[ri].start + margin + col_end,
                     ));
@@ -3805,7 +3868,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
         }
         if after[0] != ' ' {
             errors.push(TelError::with_detail(
-                ErrorCode::E120, line_start + pos, line_start + pos + 2, "non-space after marker",
+                ErrorCode::E119, line_start + pos, line_start + pos + 2, "non-space after marker",
             ));
             headings.push(String::new());
             continue;
@@ -3816,7 +3879,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
             let next_pos = spaces;
             if next_pos < after.len() && after[next_pos] != sigil {
                 errors.push(TelError::with_detail(
-                    ErrorCode::E120,
+                    ErrorCode::E119,
                     line_start + pos,
                     line_start + pos + next_pos + 1,
                     "hard space not followed by marker",
@@ -3832,7 +3895,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
             let heading: String = txt[..end].iter().collect();
             if heading.contains(sigil) {
                 errors.push(TelError::with_detail(
-                    ErrorCode::E120, line_start + pos, line_start + pos + 2 + end, "heading contains sigil",
+                    ErrorCode::E119, line_start + pos, line_start + pos + 2 + end, "heading contains sigil",
                 ));
             }
             headings.push(heading);
@@ -4170,6 +4233,57 @@ mod tests {
     #[test]
     fn stream_tests() { run_stream_dir("test/stream"); }
 
+    // ── UTF-8 byte-level parsing (E123, §4) ─────────────────────────────────
+
+    #[test]
+    fn parse_bytes_wellformed_matches_parse() {
+        let src = "key value\n  child\n";
+        let a = parse_bytes(src.as_bytes());
+        let b = parse(src);
+        assert_eq!(format!("{:?}", a.document), format!("{:?}", b.document));
+        assert!(a.errors.is_empty());
+    }
+
+    #[test]
+    fn parse_bytes_invalid_byte_e123() {
+        // A lone 0xFF is a maximal ill-formed subsequence of length 1: it is
+        // replaced by U+FFFD and reported as E123 with a code-point span.
+        let result = parse_bytes(b"key\xFF value\n");
+        let e123: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == ErrorCode::E123).collect();
+        assert_eq!(e123.len(), 1);
+        assert_eq!((e123[0].start, e123[0].end), (3, 4));
+        assert_eq!(result.document.children[0].compounds[0].keyword, "key\u{FFFD}");
+    }
+
+    #[test]
+    fn parse_bytes_overlong_and_surrogate_e123() {
+        // Overlong encoding of '/' (C0 AF) and a surrogate half (ED A0 80)
+        // decompose into maximal subparts, each replaced and reported.
+        let overlong = parse_bytes(b"k\xC0\xAF\n");
+        assert!(overlong.errors.iter().filter(|e| e.code == ErrorCode::E123).count() >= 1);
+        assert!(overlong.document.children[0].compounds[0].keyword.contains('\u{FFFD}'));
+        let surrogate = parse_bytes(b"k\xED\xA0\x80\n");
+        assert!(surrogate.errors.iter().filter(|e| e.code == ErrorCode::E123).count() >= 1);
+        assert!(surrogate.document.children[0].compounds[0].keyword.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn parse_bytes_truncated_sequence_e123() {
+        // Input ends mid-way through a well-formed sequence (truncated €):
+        // one replacement, one E123.
+        let result = parse_bytes(b"ok \xE2\x82");
+        let e123: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == ErrorCode::E123).collect();
+        assert_eq!(e123.len(), 1);
+        let atoms = &result.document.children[0].compounds[0].atoms;
+        assert_eq!(atoms.len(), 1);
+        match &atoms[0] {
+            Atom::Inline { text, .. } => assert_eq!(text, "\u{FFFD}"),
+            other => panic!("expected inline atom, got {:?}", other),
+        }
+    }
+
     // ── Schema unit tests ───────────────────────────────────────────────────
 
     #[test]
@@ -4298,8 +4412,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_schema_catches_e204_default_on_optional() {
-        // Field.default on a non-required field is invalid (E204).
+    fn validate_schema_catches_e203_default_on_optional() {
+        // Field.default on a non-required field is invalid (E203).
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -4317,12 +4431,12 @@ mod tests {
             layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E204),
-                "expected E204, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E203),
+                "expected E203, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e208_bad_sigil() {
+    fn validate_schema_catches_e207_bad_sigil() {
         let s = Schema {
             name: "test".to_string(),
             document: Struct { members: vec![], validators: vec![] },
@@ -4331,12 +4445,12 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E208),
-                "expected E208, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E207),
+                "expected E207, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e209_reserved_keyword() {
+    fn validate_schema_catches_e208_reserved_keyword() {
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -4351,12 +4465,12 @@ mod tests {
             layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E209),
-                "expected E209, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E208),
+                "expected E208, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e210_unresolved_reference() {
+    fn validate_schema_catches_e209_unresolved_reference() {
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -4371,12 +4485,12 @@ mod tests {
             layers: vec![], sigil: None, records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E210),
-                "expected E210, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E209),
+                "expected E209, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e211_duplicate_definition() {
+    fn validate_schema_catches_e210_duplicate_definition() {
         let dup = || RecordDefinition { description: None,
             name: "Dup".to_string(),
             members: vec![], validators: Vec::new(),
@@ -4389,14 +4503,14 @@ mod tests {
             records: vec![dup(), dup()], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E211),
-                "expected E211, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E210),
+                "expected E210, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e217_exclude_in_document() {
+    fn validate_schema_catches_e216_exclude_in_document() {
         // `exclude K` may appear only inside a layer's root. An exclude
-        // in the base schema's document is E217.
+        // in the base schema's document is E216.
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -4408,13 +4522,13 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E217),
-                "expected E217, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E216),
+                "expected E216, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e217_exclude_in_base_definition() {
-        // An exclude inside a base Definition is also E217 (Definitions
+    fn validate_schema_catches_e216_exclude_in_base_definition() {
+        // An exclude inside a base Definition is also E216 (Definitions
         // are part of the base schema namespace).
         let s = Schema {
             name: "test".to_string(),
@@ -4428,14 +4542,14 @@ mod tests {
             }], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E217),
-                "expected E217, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E216),
+                "expected E216, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_accepts_exclude_in_layer_select_def() {
         // `exclude` inside a layer's SelectDefinition body is the valid
-        // path — NOT E217. Base schema declares a named Select with
+        // path — NOT E216. Base schema declares a named Select with
         // variants {a, b}; the layer declares a same-name Select with
         // `exclude b` to narrow.
         let base_select = SelectDefinition { description: None,
@@ -4469,12 +4583,12 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: vec![base_select],
         };
         let errors = validate_schema(&s);
-        assert!(!errors.iter().any(|e| e.code == ErrorCode::E217),
-                "expected no E217, got: {:?}", errors);
+        assert!(!errors.iter().any(|e| e.code == ErrorCode::E216),
+                "expected no E216, got: {:?}", errors);
     }
 
     #[test]
-    fn validate_schema_catches_e205_duplicate_layer() {
+    fn validate_schema_catches_e204_duplicate_layer() {
         let l = || Layer {
             name: "dup".to_string(),
             overlay: Struct { members: vec![], validators: vec![] },
@@ -4488,8 +4602,8 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let errors = validate_schema(&s);
-        assert!(errors.iter().any(|e| e.code == ErrorCode::E205),
-                "expected E205, got: {:?}", errors);
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E204),
+                "expected E204, got: {:?}", errors);
     }
 
     // ── Type assignment unit tests ──────────────────────────────────────────
@@ -4859,7 +4973,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_exclude_variant_unknown_keyword_is_e212() {
+    fn compose_exclude_variant_unknown_keyword_is_e211() {
         let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
             variants: vec![Variant { description: None, keyword: "active".to_string(), r#type: Type::Flag }],
@@ -4885,14 +4999,14 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: vec![base_status],
         };
         let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E212),
-                "expected E212, got: {:?}", errs);
+        assert!(errs.iter().any(|e| e.code == ErrorCode::E211),
+                "expected E211, got: {:?}", errs);
     }
 
     #[test]
-    fn compose_select_variant_addition_is_e214() {
+    fn compose_select_variant_addition_is_e213() {
         // A layer tries to introduce a fresh variant `extra` in an existing
-        // SelectDefinition — variant addition is forbidden (E214 — would
+        // SelectDefinition — variant addition is forbidden (E213 — would
         // widen the sum).
         let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
@@ -4919,8 +5033,8 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: vec![base_status],
         };
         let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E214),
-                "expected E214, got: {:?}", errs);
+        assert!(errs.iter().any(|e| e.code == ErrorCode::E213),
+                "expected E213, got: {:?}", errs);
     }
 
     #[test]
@@ -5050,8 +5164,8 @@ mod tests {
     }
 
     #[test]
-    fn compose_layer_cannot_loosen_required_to_optional_is_e215() {
-        // Base required; layer attempts to mark optional → E215.
+    fn compose_layer_cannot_loosen_required_to_optional_is_e214() {
+        // Base required; layer attempts to mark optional → E214.
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
@@ -5073,13 +5187,13 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E215),
-                "expected E215, got: {:?}", errs);
+        assert!(errs.iter().any(|e| e.code == ErrorCode::E214),
+                "expected E214, got: {:?}", errs);
     }
 
     #[test]
-    fn compose_layer_cannot_loosen_irrepeatable_to_repeatable_is_e216() {
-        // Base irrepeatable; layer attempts to mark repeatable → E216.
+    fn compose_layer_cannot_loosen_irrepeatable_to_repeatable_is_e215() {
+        // Base irrepeatable; layer attempts to mark repeatable → E215.
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
@@ -5101,8 +5215,8 @@ mod tests {
             records: vec![], scalars: Vec::new(), selects: Vec::new(),
         };
         let (_composed, errs) = compose_schema(&base);
-        assert!(errs.iter().any(|e| e.code == ErrorCode::E216),
-                "expected E216, got: {:?}", errs);
+        assert!(errs.iter().any(|e| e.code == ErrorCode::E215),
+                "expected E215, got: {:?}", errs);
     }
 
     #[test]

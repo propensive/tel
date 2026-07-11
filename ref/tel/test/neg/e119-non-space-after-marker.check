@@ -30,5 +30,5 @@ Document {
     ],
 }
 errors:
-  E120 [0,2): Malformed tabulation heading: non-space after marker
-  E120 [4,6): Malformed tabulation heading: non-space after marker
+  E119 [0,2): Malformed tabulation heading: non-space after marker
+  E119 [4,6): Malformed tabulation heading: non-space after marker
