@@ -7,7 +7,7 @@ and maintained by _humans_, intelligent _agents_ or deterministic _processors_.
 
 TEL defines a **presentation model**, which preserves the document as written, and a
 schema-driven **semantic model**, which ascribes a type to every element of the tree; the two
-are connected by a deterministic type-assignment algorithm (§3). A companion specification,
+are connected by a deterministic type-assignment algorithm (§20.2). A companion specification,
 [BinTEL](bintel.md), defines a compact binary encoding that provides an unambiguous
 serialization of the semantic model.
 
@@ -68,9 +68,11 @@ in §15, are exempt from all of them):
 
 1. The line-ending style is uniform across the entire document: either every line ends with `LF`, or
    every line ends with `CR LF`.
-2. The **line-ending mode** is determined by the first `CR` or `LF` character in the document: if it
-   is `CR`, the mode is **CRLF mode**; otherwise the mode is **LF mode**. A document containing
-   neither `CR` nor `LF` (a single line with no terminator) is in LF mode.
+2. The **line-ending mode** is determined by the first `LF` character in the document that is not
+   within a literal atom payload: if that `LF` is immediately preceded by `CR`, the mode is
+   **CRLF mode**; otherwise the mode is **LF mode**. A document containing no such `LF` is in LF
+   mode (a lone `CR` does not establish CRLF mode; it is **E120**). Characters within literal
+   atom payloads do not participate in mode determination.
 3. In CRLF mode, `CR` and `LF` may only appear as part of a `CR LF` line ending, except within
    literal atoms (**E120**).
 4. In LF mode, `CR` may not appear anywhere in the document, except within literal atoms (**E120**).
@@ -124,8 +126,12 @@ A **phrase** is a maximal contiguous sequence of non-linefeed, non-separator cha
 where separators are determined by the phrase-separation rules. A phrase MAY contain soft spaces;
 see §10.3.
 
-An **ordinary line** is any non-blank line that is not a comment line (§11.1), a tabulation line
-(§16.1), or a payload line of a source atom (§14) or literal atom (§15).
+An **ordinary line** is any non-blank line that is not an interpreter directive line (§7), the
+pragma line (§8), a document separator (below), a comment line (§11.1), a tabulation line
+(§16.1), or a line consumed by a source atom (§14) or a literal atom (§15). The lines consumed
+by a literal atom include its opening and closing delimiter lines, which are matched verbatim
+and are not subject to the ordinary-line rules (in particular E108: §15 removes trailing spaces
+from the opening delimiter instead).
 
 A **document separator** is a line whose content is exactly two sigil characters and nothing else:
 no leading spaces, no trailing spaces, and no other characters. It terminates the current document
@@ -237,9 +243,10 @@ content of the document, but MUST be preserved unchanged by reserialization.
 ## 8. Pragma
 
 If present, the pragma MUST be the first non-blank line after any interpreter directive line
-(**E102**). Its content is parsed by the phrase-separation rules of an ordinary line (§10). The
-pragma line is identified by its `tel` keyword; it is exempt from the margin and indentation
-rules of §9 and does not set the margin.
+(**E102**). Its content is parsed as a sequence of phrases separated by runs of one or more
+spaces; the phrase-separation rules of §10.3 do not apply on the pragma line (a hard-space run
+is an ordinary separator and does not change mode). The pragma line is identified by its `tel`
+keyword; it is exempt from the margin and indentation rules of §9 and does not set the margin.
 
 If present, the entire pragma line MUST be fully contained within the first 4096 bytes of the
 document (**E103**).
@@ -249,9 +256,9 @@ The first phrase on the pragma line (its keyword, as defined in §10) MUST be `t
 `Variant.keyword` in any `SelectDefinition`, within a schema (**E208**).
 
 The pragma line MUST contain at most three phrases after `tel` (version, schema identifier, and
-sigil). Any additional phrases are invalid (**E122**). A pattern of the form `<sigil> <text>` that
-would otherwise be treated as an inline comment does not apply on the pragma line; any such content
-is invalid (**E122**).
+sigil). Any additional phrases are invalid (**E122**). Remarks (§11.2) are not recognised on the
+pragma line: a `<sigil> <text>` pattern there is simply a sequence of extra phrases, and is
+invalid for the same reason (**E122**).
 
 The positional form of the pragma is:
 
@@ -278,6 +285,11 @@ The following rules govern how the version number changes across revisions of th
 - A revision that accepts documents which would not have been accepted by an earlier revision, but
   does not reject or reinterpret any previously valid document, MUST keep the same major version and
   increment the minor version.
+
+A well-formed version that names a version unknown to the implementation is not an error. The
+implementation MUST parse the document using the most recent minor version it knows of the same
+major version; if the major version itself is unknown, it MUST use the latest version it knows
+overall.
 
 The schema identifier parameter is optional.
 
@@ -306,27 +318,18 @@ The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §
 signature is distinguished from a URL by the absence of a `://` substring. The BASE-256 alphabet
 (see the [BASE-256 Specification](base256.md) §4) consists entirely of Unicode letters and
 ASCII digits — no whitespace or punctuation — so a schema identifier always occupies a single
-phrase and is selected as a single word by a double-click in any conforming text-handling
-environment.
+phrase.
 
-A **schema signature** is a deterministic byte string derived from the 256-bit BLAKE3 hashes of
-the schema's components (base schema and any layers, in order). It is constructed as a
-**palimpsest** of those hashes at the BinTEL-pinned parameters `(H, k_i, k_r) = (32, 4, 2)` —
-i.e. an initial cadence of 4 bytes between the base hash and the first layer hash, and a
-regular cadence of 2 bytes between subsequent layer hashes, followed by a one-byte cadence
-trailer (see §8 of the [BinTEL Specification](bintel.md) and the
-[Palimpsest Specification](palimpsest.md)). The palimpsest form is what the pragma carries: it
-not only identifies the fully composed schema but also encodes the **identities of the base and
-each layer in order**, so that a receiver holding a library of known schemas and layers can
-decode the signature to reconstruct the exact composition.
-
-For a non-layered schema (one component), the signature is 33 bytes (33 BASE-256 characters) —
-the 32-byte base value hash followed by the one-byte cadence trailer. For a schema with `n ≥ 2`
-total components, the signature is `37 + 2·(n − 2)` bytes (37, 39, 41, … BASE-256 characters
-for `n = 2, 3, 4, …`). A producer that wishes to extend a schema with additional layers
-publishes a new signature by appending each layer's hash to the palimpsest body (and recomputing
-the cadence trailer); a consumer that decodes the signature against its library reconstructs
-the same composition that the producer intended (§20.3 of this specification).
+A **schema signature** is a deterministic byte string derived from the 256-bit BLAKE3 value
+hashes of the schema's components (base schema and any layers, in order), constructed as a
+**palimpsest** of those hashes; the construction, its pinned parameters, and its decoding are
+defined in §8 of the [BinTEL Specification](bintel.md) (see also the
+[Palimpsest Specification](palimpsest.md)). The signature not only identifies the fully
+composed schema but also encodes the **identities of the base and each layer in order**: a
+receiver holding a library of known schemas and layers can decode it to reconstruct the exact
+composition (§20.3), and a producer extends a schema by appending each new layer's hash to the
+palimpsest body. A one-component signature is 33 bytes (33 BASE-256 characters); a signature
+with `n ≥ 2` components is `37 + 2·(n − 2)` bytes (37, 39, 41, … for `n = 2, 3, 4, …`).
 
 ### 8.2 Schema Resolution
 
@@ -387,9 +390,9 @@ order:
    the parser MUST use that composed `Schema` and skip the remaining steps. Step 0 applies only
    to BinTEL inputs in self-contained mode; for TEL-source inputs and external-mode BinTEL
    inputs, resolution begins at step 1.
-1. **Built-in lookup.** If the document schema's signature equals the value hash of the built-in
-   `tel-schema` schema (§20.5), the parser MUST use the built-in `Schema` and skip the remaining
-   steps.
+1. **Built-in lookup.** If the document schema's signature equals the built-in `tel-schema`
+   schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), the parser MUST
+   use the built-in `Schema` and skip the remaining steps.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema signature.
    If the cache contains a `Schema` whose composed signature equals the document schema's
    signature, the parser MUST use that cached `Schema`.
@@ -598,11 +601,11 @@ comment line, the start of the document (i.e., a comment may be the very first n
 or a non-blank line at a **strictly lesser indent** than the comment itself — that is, the
 comment opens a new (deeper) child block of that preceding compound (**E109**). In particular,
 a comment placed between two peer compounds without a preceding blank line is invalid: comments
-belong to the head of a `Block` (§17), so a comment among peers must be preceded by a blank
-line, which closes the current block and lets the comment open the next one. This keeps comment
-attachment unambiguous — a comment always precedes the block it belongs to, and never floats
-between siblings of an existing block. Because a blank line terminates any active tabulated
-block, the rule also ensures that comments cannot appear inside tabulated blocks. Example:
+belong to the head of a `Block` (§17), so a comment always precedes the block it belongs to and
+never floats between siblings of an existing block — among peers, it must be preceded by a
+blank line, which closes the current block and lets the comment open the next one. Because a
+blank line terminates any active tabulated block, the rule also ensures that comments cannot
+appear inside tabulated blocks. Example:
 
 ```text
 parent              # indent 0
@@ -650,8 +653,9 @@ Remarks do not terminate or split a tabulated block.
 
 ## 12. Compound Tree Structure
 
-Each non-comment non-tabulation ordinary line defines a `Compound` node whose keyword is the line
-keyword.
+Each ordinary line (§5) defines a `Compound` node whose keyword is the line keyword. Such a
+line is called a **compound line**; §13–§16 state their rules in terms of compound lines when
+contrasting them with comment and tabulation lines.
 
 Each subsequent inline atom after the keyword defines an `Atom.Inline` attached to that compound,
 unless superseded by the remark rule.
@@ -671,7 +675,8 @@ line (i.e., excluding comment lines and tabulation lines):
   compound line
 - if its indent is less than that of the previous compound line, it closes one or more open
   compounds and becomes a peer of the nearest preceding compound line with the same indent; if no
-  preceding compound line has the same indent, the document is invalid (**E110**)
+  preceding compound line has the same indent, the document is invalid (**E110** — a reserved
+  code that the canonical recursive parser never emits; see §19.5)
 
 A line may not have indent greater than one plus the indent of the previous compound line, except
 where the source-atom or literal-atom rules apply (**E111**).
@@ -909,6 +914,10 @@ Lines within a tabulated block (other than the tabulation line itself) are calle
 In the presentation model, a tabulated block is represented as a `Block` (§17) whose `tabulation`
 field holds the tabulation line and whose `compounds` list holds the rows.
 
+All character positions in this section — the marker offsets `M_i` and every position on a row —
+are measured in the frame of §16.1: code-point offsets from the start of the line after removing
+the document margin.
+
 A second tabulation line appearing before any intervening blank line — whether or not any rows
 have appeared under the first — terminates the current `Block` and begins a new `Block` with
 the new tabulation. Both tabulation lines are preserved (the first block then simply has no
@@ -944,10 +953,11 @@ characters at both position M_i − 2 and position M_i − 1 (the mandatory mini
 separator). Column i is **absent** from a row if the row ends before reaching position M_i − 2; a
 row need not specify all columns and may omit any suffix of columns.
 
-A present column has an **empty value** if position M_i is itself a space character or the row ends
-at position M_i − 1. An empty value requires that the subsequent column (if any) is also present,
-since otherwise the separator spaces at M_i − 2 and M_i − 1 would be trailing spaces, which are not
-permitted. A row MUST NOT have trailing spaces (**E108**).
+A present column has an **empty value** if position M_i is itself a space character. An empty
+value requires that the subsequent column is also present, since otherwise the separator spaces
+at M_i − 2 and M_i − 1 would be trailing spaces, which are not permitted. A row MUST NOT have
+trailing spaces (**E108**); in particular, a row cannot end at position M_i − 1, and an empty
+value in the final present column is therefore not representable.
 
 **Column values and typing.** For type assignment (§20.2), a row is an ordinary compound line:
 its keyword, pre-column atoms, and column values are the line's keyword and inline atoms, in
@@ -1078,8 +1088,8 @@ model:
 
 - Blank line content MAY be normalized to empty lines (rather than space-only lines).
 - A minimum hard space (exactly two spaces) MAY be used before remark introducers.
-- Multiple consecutive trailing blank lines at the end of a block MAY be collapsed to the recorded
-  `trailingBlankLines` count.
+- Blank lines preceding the first block of the document (§9) are not recorded in the
+  presentation model and are dropped on reserialization.
 
 ### 18.2 Semantic Model
 
@@ -1184,32 +1194,17 @@ would have assigned the same type deterministically.
 
 ### 19.2 Positional Assignment
 
-For a given parent type, the schema defines an ordered sequence of child specifications.
+Inline atoms are assigned to members positionally, in the member order declared by the parent's
+schema type. The normative algorithm is the atom phase of §20.2 (step 3); this subsection
+summarises its consequences.
 
-The order in which child types are specified in the schema determines the order in which inline
-atoms are assigned types.
-
-Inline atoms may be assigned types from that ordered sequence so long as the applicable child
-specifications are non-repeatable.
-
-If an atom position is assigned to a repeatable child type, then all subsequent inline atoms on that
-same compound line must be assigned to that same repeatable child type. Consequently, a repeatable
-`Scalar` member may only consume atoms if it is the last atom-assignable member in member order;
-no further atoms may be assigned to subsequent members.
-
-Similarly, once atoms are assigned to a *repeatable* all-`Flag` `Select` member, no further
-atoms may be assigned to subsequent members: every remaining atom is matched against the
-Select's variant keywords, since a repeatable member does not advance the atom phase (§20.2
-step 3e). A non-repeatable Select member consumes one atom and advances normally.
-
-For a `repeatable` member, occurrences may be split across both of the following:
-
-- inline atoms on the parent compound line, and
-- subsequent compound children of the parent with the same keyword
-
-These two assignment mechanisms may be combined freely. The E309 contiguity rule already prohibits
-differently-typed compound children from being interleaved between such occurrences. Remark lines do
-not affect this rule.
+- A repeatable member, once assigned an atom, consumes every remaining atom on the line (§20.2
+  step 3e). A repeatable `Scalar` member, or a repeatable all-`Flag` `Select` member, can
+  therefore usefully consume atoms only as the last atom-assignable member in member order.
+- Occurrences of a `repeatable` member may be split freely between inline atoms on the parent
+  compound line and subsequent compound children of the parent with the same keyword; the
+  contiguity rule (**E309**, §20.2 step 4c) prohibits differently-typed compound children from
+  being interleaved between such occurrences. Remarks do not affect this rule.
 
 ### 19.3 Error Taxonomy
 
@@ -1234,9 +1229,9 @@ specified in the tables below.
 | E102 | §8       | Pragma is not the first non-blank line after any interpreter directive                                 | The `tel` keyword on the misplaced line                                                                                          |
 | E103 | §8       | Pragma line extends beyond the first 4096 bytes                                                        | The entire pragma line                                                                                                           |
 | E104 | §8       | Pragma version parameter is absent or does not have the form `x.y` with non-negative integers          | The version atom (or the `tel` keyword when absent)                                                                              |
-| E105 | §8       | Pragma sigil parameter is not a single sigil-valid character (§6)                                       | The sigil atom                                                                                                                   |
-| E106 | §9       | Non-blank line begins with fewer than the margin number of spaces                                      | The leading spaces of the line (zero-width at line start if no spaces)                                                           |
-| E107 | §9       | Relative indentation after the margin is odd                                                           | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see Indentation Recovery below) |
+| E105 | §8       | Pragma sigil parameter is not a single sigil-valid character (§6)                                       | The entire pragma line                                                                                                           |
+| E106 | §9       | Non-blank line does not begin with the margin (too few leading spaces, or a non-space within it)       | The leading spaces of the line (zero-width at line start if no spaces)                                                           |
+| E107 | §9       | Relative indentation after the margin is odd                                                           | The leading spaces of the line                                                                                                   |
 | E108 | §9, §16  | Trailing spaces on a non-blank ordinary line or tabulated row                                          | The trailing space characters                                                                                                    |
 | E109 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                                                 |
 | E110 | §13      | Line indent does not match any open compound's indent (reserved; see §19.5)                            | The leading spaces of the line |
@@ -1250,8 +1245,8 @@ specified in the tables below.
 | E118 | §16      | Column value exceeds the maximum width for that column                                                 | The overflowing column value                                                                                                     |
 | E119 | §16.1    | Malformed tabulation line heading                                                                      | The malformed heading region (from the marker to the next marker or end of line)                                                 |
 | E120 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                               | The `CR` character (or `CR LF` pair that violates the established mode)                                                          |
-| E121 | §8.1     | Schema identifier is not a valid URL or bare BASE-256-encoded schema signature                         | The schema identifier atom                                                                                                       |
-| E122 | §8       | Pragma line has extra atoms beyond the expected parameters, or contains a remark                       | The first extra atom, or the remark introducer                                                                                   |
+| E121 | §8.1     | Schema identifier is not a valid URL or bare BASE-256-encoded schema signature                         | The entire pragma line                                                                                                           |
+| E122 | §8       | Pragma line has more than three phrases after the `tel` keyword                                        | The entire pragma line                                                                                                           |
 | E123 | §4       | Document is not a well-formed UTF-8 byte sequence (one error per maximal ill-formed subsequence)       | The replacement `U+FFFD` code point in the decoded text                                                                          |
 
 A document separator (§6.1) is always well-formed and carries no error code; it simply ends the
@@ -1293,25 +1288,25 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E101 | Ignore the BOM and continue parsing from the next byte.                                                                                                                                                                                                                                                                             |
 | E102 | Restart parsing the entire document using the version, schema identifier, and sigil extracted from the misplaced pragma.                                                                                                                                                                                                            |
 | E103 | Allow the pragma line to exceed the 4096-byte limit and continue parsing its content normally.                                                                                                                                                                                                                                      |
-| E104 | If the version parameter is absent or cannot be parsed as `x.y` at all, parse with the latest known version. If it has the correct format but names an unknown version, use the most recent minor version of the same major version if one is known; if the major version itself is unknown, use the latest known version overall. |
+| E104 | Parse with the latest version known to the implementation. (A well-formed version naming an *unknown* version is not E104; see §8 for the version-selection rule that applies in that case.)                                                                                                                                       |
 | E105 | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                   |
-| E106 | If the line has exactly one fewer leading space than the current margin, insert a synthetic leading space and parse the line at the current indentation level normally. If the line has two or more fewer leading spaces than the current margin, reset the margin to the line's actual indentation level from that point forward.  |
+| E106 | Parse the line as if it consisted of the margin followed by its content at indent `0`. The margin itself is unchanged for subsequent lines.                                                                                                                                                                                        |
 | E107 | Parse the line's keyword; check which of the two candidate indent levels (±1 space) makes the keyword valid according to the schema; place the line at the chosen candidate depth. See indentation recovery algorithm below.                                                                                                        |
 | E108 | Ignore trailing spaces and parse the remainder of the line normally.                                                                                                                                                                                                                                                                |
 | E109 | Ignore the missing preceding blank line (or other required predecessor) and treat the comment as normally attached to the following node.                                                                                                                                                                                           |
 | E110 | Same indentation recovery as E107.                                                                                                                                                                                                                                                                                                  |
 | E111 | The over-indented line is skipped (omitted from the presentation model) and parsing continues with the following line at the original expected indent.                                                                                                                                                                              |
-| E112 | Same indentation recovery as E107: the line cannot be a child of its apparent parent (a comment, tabulation, or row), so treat it as if indented one level less and use the schema to validate the adjusted placement.                                                                                                              |
+| E112 | The offending line is skipped (omitted from the presentation model), as for E111; parsing continues with the following line.                                                                                                                                                                                                        |
 | E113 | Ignore the duplicate source atom; use the first one encountered.                                                                                                                                                                                                                                                                    |
 | E114 | Ignore the duplicate literal atom; use the first one encountered.                                                                                                                                                                                                                                                                   |
 | E115 | Treat the unclosed literal atom's payload as everything from the opening delimiter line to the end of file (excluding the final `LF`, if any).                                                                                                                                                                                      |
-| E116 | Interpret the tabulated row according to its actual hard-space positions regardless of alignment with column markers. Suppress any further alignment errors (E117, E118) on the same row.                                                                                                                                           |
-| E117 | Same as E116.                                                                                                                                                                                                                                                                                                                       |
-| E118 | Same as E116.                                                                                                                                                                                                                                                                                                                       |
-| E119 | Report the error and continue parsing, but disable column-alignment checking for the remainder of the current tabulated block.                                                                                                                                                                                                      |
-| E120 | Treat any malformed sequence of consecutive `CR` and `LF` characters as a single line break if it contains at most one `CR` and at most one `LF`; treat it as two line breaks if either `CR` or `LF` appears more than once in the sequence.                                                                                        |
+| E116 | The wrong-indent row is skipped (omitted from the presentation model); parsing continues with the following line. Because the row is not parsed, no E117 or E118 errors arise from it.                                                                                                                                              |
+| E117 | Interpret the row according to its actual hard-space positions regardless of alignment with column markers; the row is retained in the presentation model.                                                                                                                                                                          |
+| E118 | Same as E117.                                                                                                                                                                                                                                                                                                                       |
+| E119 | Record the malformed heading as the empty string and continue parsing the tabulation line and its block normally; the column-alignment checks (E117, E118) still apply to the block's rows.                                                                                                                                         |
+| E120 | Record the error and continue: lines are delimited by `LF` alone, a `CR` immediately preceding an `LF` is part of that line's terminator, and any other `CR` remains in the line's content as an ordinary character.                                                                                                                |
 | E121 | Ignore the invalid schema identifier and continue parsing as if no schema identifier were specified. The document is treated as untyped.                                                                                                                                                                                            |
-| E122 | Ignore the extra atoms and any remark on the pragma line. Parse the pragma using only the first three atoms (version, schema identifier, sigil).                                                                                                                                                                                    |
+| E122 | Ignore the extra phrases; parse the pragma using only the first three (version, schema identifier, sigil).                                                                                                                                                                                                                          |
 | E123 | Replace each maximal ill-formed byte subsequence with a single `U+FFFD` REPLACEMENT CHARACTER (per Unicode §3.9, "maximal subpart" practice) and continue parsing the resulting code-point sequence.                                                                                                                                 |
 
 #### Schema Errors
@@ -1475,20 +1470,11 @@ interface Reference {
 // SelectDefinition.excludes above.)
 type Member = Field | SelectRef;
 
-// Per-axis declaration state. "default" means no flag was declared on this
-// axis (its effective value is the schema-language default — required=true,
-// repeatable=false). "loose" means the loosening flag was declared on the
-// base side (`optional` or `repeatable`). "tight" means the tightening flag
-// was declared on the layer side (`required` or `irrepeatable`).
-//
-// Effective booleans are derived from polarity:
-//   required   = (member.required   != "loose")
-//   repeatable = (member.repeatable == "loose")
-//
-// The tristate is retained (rather than collapsing to booleans during schema
-// construction) so that the layer-merge of §20.3 can detect loosening of an
-// already-tight axis (E214, E215) regardless of whether the layer's declared
-// flag agrees with or contradicts the base's effective value.
+// Per-axis declaration state: "default" (no flag declared on this axis),
+// "loose" (`optional` or `repeatable` declared), "tight" (`required` or
+// `irrepeatable` declared). The derived effective booleans, and the reason
+// the tristate is retained through schema construction, are given in the
+// prose below; the merge rule is MergePolarity (§20.3).
 type Polarity = "default" | "loose" | "tight";
 
 interface Field {
@@ -1575,9 +1561,12 @@ to those of a `Struct`: a `RecordDefinition` is, in effect, a named `Struct`.
 `RecordDefinition.validators` mirrors `Struct.validators` (§21.6) and applies to every instance
 of the Definition.
 
-A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) and a list of
-`validators`; it is a named `Scalar`. Layer-merge of same-name `ScalarDefinition`s concatenates
-the `validators` lists in declaration order, deduplicated.
+A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) and a non-empty
+list of `validators`; it is a named `Scalar`. A `scalar` declaration MUST carry at least one
+`validate` line (this is enforced structurally by the `tel-schema` schema, whose `Scalar`
+record makes `validate` a required repeatable member; an unconstrained scalar names the
+built-in `String` instead). Layer-merge of same-name `ScalarDefinition`s concatenates the
+`validators` lists in declaration order, deduplicated.
 
 A `SelectDefinition` has a `name` (subject to the same uniqueness rule), a non-empty list of
 `variants`, and a list of `validators`. It is a named sum type. Each variant has a kebab-case
@@ -1765,18 +1754,21 @@ helper method names in `Scalar.validators` and `Struct.validators` and the edit 
 identifiers of §22.2 — use **kebab-case**: a sequence of lowercase ASCII words separated by hyphens
 (e.g. `update-value`, `attach-remark`). Schemas SHOULD use kebab-case for validator names.
 
-Every kebab-case identifier corresponds to a unique sequence of lowercase words. Implementations
-SHOULD represent these identifiers idiomatically in their host language by applying the equivalent
-convention:
+Every identifier defined by this specification is a hyphen-separated sequence of purely
+alphabetic lowercase words. Implementations SHOULD represent these identifiers idiomatically in
+their host language by applying the equivalent convention:
 
 - **kebab-case** (`update-value`) — the canonical form used in schemas and in this specification
 - **snake_case** (`update_value`) — e.g. Rust, Python
 - **camelCase** (`updateValue`) — e.g. Java, TypeScript, JavaScript
 - **PascalCase** (`UpdateValue`) — e.g. C#, Go exported names
 
-The mapping between these conventions is an isomorphism over sequences of lowercase words:
+Over hyphen-separated sequences of purely alphabetic lowercase words — which covers every
+identifier this specification defines — the four conventions are in one-to-one correspondence:
 implementors SHOULD expect identifiers to appear in the idiomatic style of the host language and
-MUST map them back to kebab-case when comparing against schema-defined names.
+MUST map them back to kebab-case when comparing against schema-defined names. User-defined
+identifiers containing leading primes or digit-initial segments (§20.7) have no defined
+host-language mapping and SHOULD be used in their kebab-case form directly.
 
 ### 20.1 Schema Validity Constraints
 
@@ -2278,7 +2270,8 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `irrepeatable`  | Tightens to `repeatable: "tight"` (Flag, layer-side override of `repeatable`). Permitted but redundant in a base, since the default is already tight. |
 | `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). Kebab-case. |
 | `variant`       | A `Variant` of a `SelectDefinition`. First inline atom is the variant's kebab-case `keyword`; second inline atom is the `TypeName` of its `type`. |
-| `type`          | The type-name field of a `Field`, a `Variant`, or a `SelectRef`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
+| `type`          | The type-name field of a `Field` or a `Variant`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
+| `reference`     | `SelectRef.reference` — the `TypeName` of the referenced `SelectDefinition`. Carried as the first inline atom of a member-position `select` compound (or, less commonly, as an explicit `reference <TypeName>` child compound). |
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E203 otherwise). |
 | `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
@@ -2447,8 +2440,8 @@ fields of the `Schema` model:
    Within a `SelectRef`:
    - The four loosen/tighten Flag children compute `SelectRef.required` and
      `SelectRef.repeatable`.
-   - The first inline atom (or the `name` / `type` child compound; the schema-of-schemas uses
-     the first inline atom) is a `TypeName` and becomes `SelectRef.reference`.
+   - The first inline atom (or the explicit `reference` child compound; the schema-of-schemas
+     uses the first inline atom) is a `TypeName` and becomes `SelectRef.reference`.
 
    Within a `Variant`:
    - `keyword` child or first inline atom → `Variant.keyword` (kebab-case).
@@ -2969,20 +2962,30 @@ context. The constructed compound carries no remark and has no attached comments
 appear between its children. No tabulation is added. The canonical presentation form is determined
 by iterating the struct's members in member order:
 
-1. Starting from the first member, each non-repeatable `Field` member whose type is `Scalar` is
-   serialized as an inline atom, in member order, for as long as consecutive members satisfy this
-   condition and the value can be represented as an inline atom (see the atom-form escalation
-   algorithm in §22.3).
-2. If the next member after the initial run of non-repeatable scalars is an all-`Flag` `Select`,
-   each present flag is serialized as an inline atom.
-3. Otherwise, if the next member is a `repeatable` `Field` whose type is `Scalar`, each
-   occurrence is serialized as an inline atom — unless any occurrence is not inline-safe, in
-   which case **every** occurrence of that member is serialized as a compound child. (Mixing
-   the two forms would reorder occurrences: atoms precede compound children in semantic order,
-   per §18.3, so serializing occurrences 1 and 3 inline but occurrence 2 as a child would
-   permute the sequence.)
-4. All remaining children — including any `Field` members whose type is `Struct`, mixed-variant
-   `Select` members, and any members beyond the first repeatable scalar — are serialized as compound
+1. **Inline run.** Starting from the first member, members are serialized as inline atoms, in
+   member order, until a member terminates the run:
+   - A non-repeatable `Field` member whose type resolves to `Scalar`, which is present and whose
+     value is inline-safe, is serialized as an inline atom; the run continues.
+   - A non-repeatable `Field` member whose type resolves to `Flag` contributes its keyword as an
+     inline atom when present and contributes nothing when absent (it MUST then be non-required);
+     the run continues in either case, because the atom phase (§20.2 step 3a) skips an absent
+     non-required `Flag` member whose keyword the next atom does not match.
+   - Any other member terminates the run — in particular, a `Scalar` member that is **absent**
+     (including a required member elided in favour of its `default`) or whose value is **not
+     inline-safe**. Termination is required in those cases because the atom phase never skips a
+     `Scalar` member (§20.8): an atom emitted for a later member would be re-parsed into the
+     earlier one.
+2. If the member that terminated the run is an all-`Flag` `Select`, each present flag is
+   serialized as an inline atom.
+3. Otherwise, if the member that terminated the run is a `repeatable` `Field` whose type is
+   `Scalar`, each occurrence is serialized as an inline atom — unless any occurrence is not
+   inline-safe, in which case **every** occurrence of that member is serialized as a compound
+   child. (Mixing the two forms would reorder occurrences: atoms precede compound children in
+   semantic order, per §18.3, so serializing occurrences 1 and 3 inline but occurrence 2 as a
+   child would permute the sequence.)
+4. All remaining children — including the terminating member itself when neither step 2 nor
+   step 3 applied to it, any `Field` members whose type is `Struct`, mixed-variant `Select`
+   members, and any members beyond the first repeatable scalar — are serialized as compound
    children with explicit keywords.
 
 **Atom-form escalation.** When serializing a `Scalar` value to TEL source, the atom form is
@@ -3092,13 +3095,13 @@ representation. Canonical serialization is defined only for documents that carry
 those whose semantic model exists. An untyped document (§8.2) has no semantic model and
 therefore no canonical form; its presentation model is its only stable representation.
 
-Canonical serialization follows the same conventions as the `construct` operation
-(§22.2) for individual compounds, extended to the entire document:
+Canonical serialization is defined by the following rules:
 
 - The document margin is zero.
 - No interpreter directive is included.
-- A pragma line is included, specifying the TEL version of the serializer and the schema identifier.
-  The sigil is not specified in the pragma (the default `#` is used).
+- A pragma line is included, carrying the document's pragma version (`1.0` when the document has
+  no pragma) and the schema identifier. The sigil is not specified in the pragma (the default
+  `#` is used).
 - When the schema is identified by both a URL and a signature (as a URL with a fragment, per §8.1),
   canonical serialization emits the **bare BASE-256-encoded signature** alone — the URL component is
   omitted. The signature is content-addressed and stable across resolver changes; a URL is a
@@ -3110,10 +3113,14 @@ Canonical serialization follows the same conventions as the `construct` operatio
 - No comments or remarks are included anywhere in the document.
 - No tabulation lines are included; all compounds are serialized as ordinary (non-tabulated) lines.
 - No blank lines appear between children at any level.
-- The root node has no inline atoms (the document root is a virtual struct with no atom positions),
-  so every root-level member is serialized as a compound child.
-- At every non-root level, **atom-form escalation** — the algorithm defined by this rule and
-  cited by that name throughout this specification — is applied to each Scalar value,
+- Every member, at every level, is serialized as a compound child with an explicit keyword;
+  canonical serialization never packs members into inline atoms on a parent line. (This differs
+  deliberately from the `construct` operation of §22.2, which favours inline atoms for
+  human-oriented output: the compound-child form is uniform, and uniformity is what makes the
+  canonical text a single well-defined byte string.) The only atom in canonical output is a
+  `Scalar`-typed compound's own value, carried on (or under) its keyword line.
+- **Atom-form escalation** — the algorithm defined by this rule and cited by that name
+  throughout this specification — is applied to each such Scalar value,
   using the atom-form safety predicates defined in §22.2:
 
   1. **Inline atom** — used if the value is **inline-safe**.
@@ -3202,19 +3209,23 @@ documents (including pathological cases: multi-line scalar values requiring sour
 form, repeatable Fields with multiple atoms, layered schemas, exclude operations, and
 Reference cycles).
 
-### 22.5 Concurrent Edit Composition
+### 22.5 Concurrent Edit Composition (Informative)
+
+This subsection is **informative** in v1.0: the merge procedure below is a recommended design
+that is not yet exercised by the reference implementation, and conformance to this
+specification does not require implementing it.
 
 When two agents independently apply sequences of machine operations (§22.2) to the same
-baseline document, the resulting documents diverge. This subsection specifies a merge
+baseline document, the resulting documents diverge. This subsection describes a merge
 procedure that always produces a schema-valid result and exhibits strong eventual consistency
 for the semantic model. The procedure exploits TEL's presentation-only constructs (remarks,
 attached comments — §11.1, §11.2) to record conflicts without distorting the semantic content.
 
-**Operation ordering.** Every operation MUST carry a **Lamport timestamp** (a monotonically
-increasing integer per agent) and an **agent identifier** (a stable kebab-case string unique
-to the originating agent). The total order over operations is `(timestamp, agent_id)` —
-lexicographic on the pair, with `timestamp` compared as integers and `agent_id` compared
-lexicographically by code point.
+**Operation ordering.** Every operation MUST carry a **sequence number** (a monotonically
+increasing integer per agent, written `timestamp` below) and an **agent identifier** (a stable
+kebab-case string unique to the originating agent). The total order over operations is
+`(timestamp, agent_id)` — lexicographic on the pair, with `timestamp` compared as integers and
+`agent_id` compared lexicographically by code point.
 This ordering is deterministic and depends only on the operation set, not on the order of
 arrival.
 
@@ -3303,7 +3314,7 @@ operations. For some operations, conflicts are particularly common:
   ordered after the `delete` no longer resolves and is demoted.
 - Concurrent `insert-before` / `insert-after` at the same position: both succeed (each
   inserts a new element); their relative order in the resulting document is determined by
-  the Lamport order of the two operations.
+  the total order of the two operations.
 - Concurrent `reorder-*` and `replace`: the higher-ordered operation is demoted when the
   lower-ordered one has left its target unresolvable or the result schema-invalid.
 
