@@ -3,12 +3,26 @@
 The `tel` executable, built in Scala with the Soundness ecosystem and packaged in the same style as
 [Flame](https://github.com/propensive/flame) (Mill + an Ethereal self-fetching native launcher).
 
+> **Build note:** the LSP depends on the locally-published Soundness **0.63.0**, which is built with
+> the propensive Scala fork (`3.9.0-RC1-propensive`); the build (`build.mill`) routes through that
+> fork toolchain via `$SOUNDNESS_SCALA_HOME`. `make publishLocal` in `~/work/soundness` produces the
+> 0.63.0 artifacts.
+
 It is organised around subcommands:
 
 - **`tel lsp`** — run a Language Server for [TEL](../readme.md) documents over stdio (what an editor
   launches).
-- **`tel lsp --log`** — stream, live, the messages a running server receives (a debugging aid; see
-  below). More subcommands can be added later.
+- **`tel lsp --log`** — stream, live, the messages a running server sends/receives (a debugging aid).
+- **`tel schema list`** — list registered schemas as a table (name, BASE-256 id, layers).
+- **`tel schema add <file>`** — validate a schema against the tel-schema meta-schema and add it to the
+  registry (an *absolute* path for now).
+- **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
+  with the named layers (in order; none = the base schema).
+
+The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
+CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against
+it to validate ordinary documents (see below). The built-in **tel-schema** meta-schema is always
+preloaded, so it appears in `list` (and is resolvable) even on a fresh cache.
 
 Features so far:
 
@@ -29,6 +43,24 @@ Features so far:
 - **Go-to-definition**, **find references**, and **hover** for named types — a `record`/`scalar`/
   `select` compound defines a type; a `field`/`variant` references one by its inline atom. Hover over
   the pragma still shows the document's version.
+- **Cross-file link-to-definition into the schema** — from a document that resolves to a registered
+  schema, go-to-definition on a compound keyword jumps *across* into the schema file, at the
+  `field`/`variant` that declares it (descending through record references for nested compounds), and
+  go-to-definition on the pragma opens the schema file at its head. The target is the registry's copy,
+  which is stored **read-only**, so an editor that honours filesystem permissions presents it read-only.
+- **Schema-aware hover and completion** — when a document resolves to a registered schema, the server
+  navigates the schema alongside the document's compound tree (descending into `record` references and
+  flattening `select` variants):
+  - **hover** over a compound keyword shows the member's type, cardinality (`optional`/`repeatable`),
+    default, and **description**;
+  - **completion** is driven by the schema at the cursor's position:
+    - at a **keyword** slot — the members valid for the enclosing struct (`field`s and flattened
+      `select` variants), each with its type as the detail and its **description** as the documentation;
+    - at a **value** slot of a `select`-typed field — that select's variant keywords;
+    - and, because a schema document is itself checked against the built-in **meta-schema**, editing a
+      schema completes meta-keywords (`record`, `field`, `validate`, …) at a keyword slot and the
+      available **type names** (the document's own `record`/`scalar`/`select` definitions plus the
+      built-ins `String`, `Identifier`, `TypeName`, `Sigil`, `Flag`) at a `field`/`variant` type slot.
 
 The whole tool is a single object, `tel.TelServer`, in
 [`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala): it extends `exegesis.LspServer` (which
@@ -82,21 +114,30 @@ rather than printed by the server itself.
 See [`../zed`](../zed) for the companion Zed extension (which launches `tel lsp`) and step-by-step
 testing instructions.
 
+## Schema resolution (how the LSP validates ordinary documents)
+
+The LSP resolves a document's pragma schema against the registry and validates the document with
+`Tel.Type.assign`. Note that TEL's pragma grammar admits a schema identifier that is a **URL** or a
+**bare BASE-256 signature** — not a kebab-case name (a hyphenated name is a parse error, `E122`). So a
+document references a *registered* schema by its **signature** (from `tel schema signature`):
+
+```tel
+tel 1.0 ḡǼJûĿΫęôқδfΊzžμȑωûĺǑЬǨỵξϋ4SṽζẄǽOḁ
+…
+```
+
+The LSP matches that signature against each cached schema's base or fully-composed signature. Schema
+*documents* (pragma names `tel-schema`) are still validated against the built-in meta-schema.
+
 ## Known gaps / next steps
 
-- **No schema resolver.** Documents reference schemas by URL, and Stratiform does not dereference
-  them. Only *schema* documents (validated against the built-in meta-schema) get semantic validation;
-  validating a regular document against its external schema needs a resolution mechanism (workspace
-  registry or fetch) that is a deliberate design decision, not yet built.
-
-Natural extensions:
-
+- **`tel schema add` needs an absolute path** (relative-path resolution wants the invoker's
+  `WorkingDirectory` threaded through the daemon's CLI context — deferred).
 - **Deeper schema validity** — `assign`/`fromTel` catch malformed schema *syntax* but not semantic
   E2xx (unresolved references, duplicate definitions, empty selects); surfacing those needs
   Stratiform's §20.1 schema-validity pass.
-- **Formatting** wired to Stratiform's canonical printer (`tel.show`).
-- **Completion** and **rename**.
-- **External-schema resolution** so regular documents can be validated against their schema.
-- **Per-node structure ranges from positions** — the outline/folding currently use a source scan
-  because `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings); an
-  index/`Pointer`-based lookup would let structure features use real spans too.
+- **Resolution by name / URL** — only signature (and all-alphanumeric name) lookups work; mapping a
+  URL or kebab-case name to a cached schema would need a stored URL↔schema/name index.
+- **Formatting** (`tel.show`), **completion**, and **rename**.
+- **Per-node structure ranges from positions** — outline/folding use a source scan because
+  `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings).

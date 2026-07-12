@@ -6,9 +6,18 @@ package build
 
 import mill.*
 import scalalib.*
+import os.Path
 
 object settings:
-  val scalaVersion = "3.8.4"
+  // Soundness 0.63.0 is built with the propensive Scala fork (`3.9.0-RC1-propensive`), and its
+  // published TASTy is only readable by that compiler, so this build uses it too (see the `toolchain`
+  // module below). `SOUNDNESS_SCALA_HOME` points at the fork's `release` directory.
+  val scalaVersion = "3.9.0-RC1-propensive"
+
+  val scalaHome =
+    sys.env.getOrElse
+      ("SOUNDNESS_SCALA_HOME", "/Users/propensive/work/worktrees/scala/soundness-390/release")
+
   val soundnessVersion = "0.63.0"
 
   val scalaOptions = Seq(
@@ -46,12 +55,102 @@ object settings:
   val deps = Seq(
     mvn"dev.soundness:soundness-all:$soundnessVersion",
     mvn"dev.soundness:exegesis-core:$soundnessVersion",
-    mvn"dev.soundness:stratiform-core:$soundnessVersion")
+    mvn"dev.soundness:stratiform-core:$soundnessVersion",
+    // Schema registry: BinTEL schema signatures + palimpsests (binary), BASE-256 tokens (base256),
+    // table rendering (escritoire), the XDG cache dir (ambience), and filesystem access (galilei).
+    mvn"dev.soundness:stratiform-binary:$soundnessVersion",
+    mvn"dev.soundness:stratiform-base256:$soundnessVersion",
+    mvn"dev.soundness:escritoire-core:$soundnessVersion",
+    mvn"dev.soundness:ambience-core:$soundnessVersion",
+    mvn"dev.soundness:galilei-jvm:$soundnessVersion")
+
+// Exposes the fork compiler's `release/lib` directory as a Maven-layout repository, generated on
+// demand: the unversioned jars are copied to versioned coordinates with minimal POMs. (Mirrors the
+// `toolchain` module in the Soundness build; third-party dependency versions match that build.)
+object toolchain extends Module:
+  def distribution: T[PathRef] = Task.Input:
+    PathRef(os.Path(settings.scalaHome) / "lib")
+
+  def repo: T[PathRef] = Task:
+    val lib = distribution().path
+    val v = settings.scalaVersion
+    val sl = "org.scala-lang"
+
+    val artifacts = Seq(
+      (sl, "scala-library", "scala-library.jar", Seq()),
+      (sl, "scala3-library_3", "scala3-library.jar", Seq((sl, "scala-library", v))),
+      (sl, "scala3-interfaces", "scala3-interfaces.jar", Seq()),
+      (sl, "tasty-core_3", "tasty-core.jar", Seq((sl, "scala-library", v))),
+      (sl, "scala3-compiler_3", "scala3-compiler.jar", Seq(
+        (sl, "scala3-interfaces", v),
+        (sl, "tasty-core_3", v),
+        (sl, "scala3-library_3", v),
+        ("org.scala-lang.modules", "scala-asm", "9.9.0-scala-1"),
+        ("org.scala-sbt", "compiler-interface", "1.10.7"),
+        ("org.scala-sbt", "util-interface", "1.10.7"))),
+      (sl, "scala3-repl_3", "scala3-repl.jar", Seq(
+        (sl, "scala3-compiler_3", v),
+        ("org.jline", "jline-reader", "3.29.0"),
+        ("org.jline", "jline-terminal", "3.29.0"),
+        ("org.jline", "jline-terminal-jni", "3.29.0"),
+        ("io.get-coursier", "interface", "1.0.28"),
+        ("org.virtuslab", "using_directives", "1.1.4"),
+        ("com.lihaoyi", "pprint_3", "0.9.3"))),
+      (sl, "scala3-sbt-bridge", "scala3-sbt-bridge.jar", Seq(
+        (sl, "scala3-compiler_3", v),
+        (sl, "scala3-repl_3", v))),
+      (sl, "scala3-staging_3", "scala3-staging.jar", Seq((sl, "scala3-compiler_3", v))),
+      (sl, "scala3-tasty-inspector_3", "scala3-tasty-inspector.jar", Seq(
+        (sl, "scala3-compiler_3", v))))
+
+    artifacts.map: (group, id, jar, dependencies) =>
+      val dir = Task.dest / os.SubPath(group.replace('.', '/')) / id / v
+      os.makeDir.all(dir)
+      os.copy(lib / jar, dir / s"$id-$v.jar", replaceExisting = true)
+
+      val deps = dependencies.map: (dGroup, dId, dVersion) =>
+        s"<dependency><groupId>$dGroup</groupId><artifactId>$dId</artifactId>" +
+          s"<version>$dVersion</version></dependency>"
+      . mkString
+
+      os.write.over(dir / s"$id-$v.pom",
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+           |<project xmlns="http://maven.apache.org/POM/4.0.0">
+           |  <modelVersion>4.0.0</modelVersion>
+           |  <groupId>$group</groupId>
+           |  <artifactId>$id</artifactId>
+           |  <version>$v</version>
+           |  <dependencies>$deps</dependencies>
+           |</project>
+           |""".stripMargin)
+
+    PathRef(Task.dest)
+
+// Routes a Scala module through the fork toolchain: the generated repository for all coursier
+// resolutions, plus direct paths to the compiler classpath and the compiled sbt bridge.
+trait Toolchain extends ScalaModule:
+  override def repositories: T[Seq[String]] = Task:
+    super.repositories() :+ s"file://${toolchain.repo().path}"
+
+  override def scalaCompilerClasspath: T[Seq[PathRef]] = Task:
+    // Zinc locates the standard library within this classpath by filename
+    // (`scala-library-<version>*.jar`), so the fork jars come from the versioned repository view;
+    // third-party jars (already versioned in the distribution) come straight from `release/lib`.
+    val versioned = os.walk(toolchain.repo().path).filter(_.ext == "jar")
+
+    val thirdParty =
+      os.list(toolchain.distribution().path).filter: jar =>
+        jar.ext == "jar" && jar.baseName.exists(_.isDigit)
+
+    (versioned ++ thirdParty).map(PathRef(_))
+
+  override def scalaCompilerBridge: T[Option[PathRef]] = Task:
+    Some(PathRef(toolchain.distribution().path / "scala3-sbt-bridge.jar"))
 
 trait Project extends Module:
   def moduleDir = super.moduleDir / os.up / "src"
 
-trait Component(dependencies: ScalaModule*) extends ScalaModule:
+trait Component(dependencies: ScalaModule*) extends Toolchain:
   override def scalaVersion = settings.scalaVersion
   override def scalacOptions = settings.scalaOptions ++ settings.predef
   def moduleId: String = moduleDir.last
@@ -59,8 +158,9 @@ trait Component(dependencies: ScalaModule*) extends ScalaModule:
   def sources = Task.Sources(moduleDir)
 
 object tel extends Project:
-  // The TEL language server. `LspServer` supplies `main`, the JSON-RPC dispatch, the document store
-  // and the stdio transport, so this module only provides `TelServer`'s handler hooks.
+  // The TEL command-line tool + language server. `LspServer` supplies the JSON-RPC dispatch, the
+  // document store and the stdio transport, so this module provides `TelServer`'s handler hooks and
+  // the `tel schema` registry.
   object core extends Component():
     def mvnDeps = settings.deps
     def finalMainClass = "tel.TelServer"
