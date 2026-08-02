@@ -1,0 +1,33 @@
+tel 1.0 https://tel-lang.org/schema/tel-schema
+
+# A schema demonstrating scalar encodings (§21.7 of the TEL Specification).
+# Each `encoding` line names a codec — an application-defined encoder/decoder
+# pair — that gives the scalar a compact binary representation in BinTEL and
+# acts as one further validity constraint: a value the encoder rejects is
+# invalid (E312), so every valid value is "valid by construction of its
+# binary representation". In TEL text form the values are ordinary strings;
+# only the BinTEL wire form (and therefore the value hash) is affected.
+
+name asset-manifest
+
+scalar Fingerprint
+  validate hex
+  encoding hex-bytes
+  description
+      A BLAKE3-256 digest written as 64 lowercase hex digits; carried in
+      BinTEL as its 32 raw bytes.
+
+scalar ByteSize
+  validate decimal
+  encoding decimal-varint
+  description
+      A file size in bytes, written in decimal; carried in BinTEL as a
+      variable-length integer.
+
+record Asset
+  field path String
+  field size ByteSize
+  field digest Fingerprint
+
+document
+  field asset Asset optional repeatable

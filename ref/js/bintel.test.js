@@ -412,3 +412,110 @@ test("value hash is mode-invariant: external and self-contained produce identica
   // Therefore value hash is identical too.
   assert.deepEqual(stubBlake3(externalRoot), stubBlake3(selfContainedRoot));
 });
+
+// ── Scalar encodings / codecs (TEL §21.7, BinTEL §7.1) ───────────────────────
+
+// A Schema whose `amount` scalar declares the `decimal-varint` encoding.
+const codecSchema = {
+  name: "codec-demo",
+  document: {
+    members: [{
+      kind: "field", keyword: "amount",
+      type: { kind: "reference", name: "Amount" },
+    }],
+    validators: [],
+  },
+  layers: [], sigil: null, records: [],
+  scalars: [{ name: "Amount", validators: ["string"], encoding: "decimal-varint" }],
+  selects: [],
+};
+
+// Toy codec: canonical decimal integer text ↔ varint bytes. The decoder is
+// deliberately lenient about overlong varints, which the B15 test exploits.
+const decimalVarintCodec = {
+  encode(text) {
+    const canonical = /^(0|[1-9][0-9]*)$/.test(text);
+    if (!canonical) throw new Error("not a canonical decimal integer");
+    return encodeVarint(Number(text));
+  },
+  decode(bytes) {
+    const { value, consumed } = decodeVarint(bytes, 0);
+    if (consumed !== bytes.length) throw new Error("trailing bytes after varint");
+    return String(value);
+  },
+};
+
+const codecBinding = (name) => name === "decimal-varint" ? decimalVarintCodec : null;
+
+test("encoded scalar: exact bytes and round-trip", () => {
+  const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
+  const root = encodeRoot(children, codecSchema, codecBinding);
+  // child count 1, keyword index 0, byte length 2, varint(300) = AC 02.
+  assert.deepEqual(Array.from(root), [0x01, 0x00, 0x02, 0xAC, 0x02]);
+
+  const doc = encodeDocument(children, codecSchema, [new Uint8Array(HASH_LEN)], codecBinding);
+  const { children: decoded } = decodeDocument(doc, codecSchema, codecBinding, true);
+  assert.deepEqual(decoded, children);
+});
+
+test("valueHash reflects codec bytes", () => {
+  const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
+  const viaCodec = valueHash(children, codecSchema, stubBlake3, codecBinding);
+  assert.deepEqual(viaCodec, stubBlake3(Uint8Array.from([0x01, 0x00, 0x02, 0xAC, 0x02])));
+});
+
+test("encode without codec binding throws", () => {
+  const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
+  assert.throws(() => encodeRoot(children, codecSchema),
+    /does not resolve/);
+});
+
+test("encode with codec-rejected value throws", () => {
+  const children = [{ keyword: "amount", kind: "scalar", text: "007" }];
+  assert.throws(() => encodeRoot(children, codecSchema, codecBinding),
+    /rejected by codec/);
+});
+
+test("decode with unresolved encoding → B13", () => {
+  const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
+  const doc = encodeDocument(children, codecSchema, [new Uint8Array(HASH_LEN)], codecBinding);
+  assert.throws(() => decodeDocument(doc, codecSchema),
+    (e) => e instanceof BintelDecodeError && e.code === BCode.B13);
+});
+
+test("decode with codec-rejected bytes → B14", () => {
+  // Root: 1 child, kidx 0, len 1, byte 0x80 (a varint that never terminates).
+  const badRoot = Uint8Array.from([0x01, 0x00, 0x01, 0x80]);
+  assert.throws(() => decodeRoot(badRoot, codecSchema, codecBinding),
+    (e) => e instanceof BintelDecodeError && e.code === BCode.B14);
+});
+
+test("non-canonical bytes pass leniently, then B15 with checkCanonical", () => {
+  // Overlong varint for 300: AC 82 00 — decodes to "300" but re-encodes to AC 02.
+  const overlong = Uint8Array.from([0x01, 0x00, 0x03, 0xAC, 0x82, 0x00]);
+  const decoded = decodeRoot(overlong, codecSchema, codecBinding);
+  assert.equal(decoded[0].text, "300");
+  assert.throws(() => decodeRoot(overlong, codecSchema, codecBinding, true),
+    (e) => e instanceof BintelDecodeError && e.code === BCode.B15);
+});
+
+test("resolveByName carries encoding into the resolved scalar", () => {
+  // Codec must be consulted through a Reference-resolved type: the inline
+  // `type: {kind: "reference", name: "Amount"}` resolves to a scalar whose
+  // encoding is decimal-varint (exercised implicitly by the tests above);
+  // a directly-declared scalar type carries `encoding` too.
+  const inlineSchema = {
+    name: "inline-codec-demo",
+    document: {
+      members: [{
+        kind: "field", keyword: "amount",
+        type: { kind: "scalar", validators: ["string"], encoding: "decimal-varint" },
+      }],
+      validators: [],
+    },
+    layers: [], sigil: null, records: [], scalars: [], selects: [],
+  };
+  const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
+  const root = encodeRoot(children, inlineSchema, codecBinding);
+  assert.deepEqual(Array.from(root), [0x01, 0x00, 0x02, 0xAC, 0x02]);
+});

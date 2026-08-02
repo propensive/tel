@@ -70,13 +70,15 @@ record Record
   select Member optional repeatable
   field description String optional
 
-# A `scalar` declaration: a named scalar definition (one or more validators).
+# A `scalar` declaration: a named scalar definition (one or more validators
+# and an optional binary encoding).
 
 record Scalar
   description
-      A scalar declaration: a named scalar definition with one or more validators.
+      A scalar declaration: a named scalar definition with one or more validators and an optional encoding.
   field name TypeName
   field validate Identifier repeatable
+  field encoding Identifier optional
   field description String optional
 
 # A top-level `select` declaration. `exclude` children are permitted

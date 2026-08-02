@@ -51,6 +51,9 @@ export const BCode = Object.freeze({
   B10: "B10", // Reference does not resolve to a Definition
   B11: "B11", // embedded-schema signature mismatch (self-contained)
   B12: "B12", // embedded schema does not decode under tel-schema (self-contained)
+  B13: "B13", // scalar's declared encoding not resolved by the codec binding
+  B14: "B14", // encoded scalar's value bytes rejected by the codec decoder
+  B15: "B15", // codec canonicality check failed (re-encoded bytes differ)
 });
 
 export class BintelDecodeError extends Error {
@@ -113,10 +116,10 @@ export function decodeVarint(bytes, offset = 0) {
 // Field types after resolution).
 const BUILT_INS = Object.freeze({
   Flag:       { kind: "flag" },
-  String:     { kind: "scalar", validators: ["string"] },
-  Identifier: { kind: "scalar", validators: ["identifier"] },
-  Sigil:      { kind: "scalar", validators: ["sigil"] },
-  TypeName:   { kind: "scalar", validators: ["type-name"] },
+  String:     { kind: "scalar", validators: ["string"], encoding: null },
+  Identifier: { kind: "scalar", validators: ["identifier"], encoding: null },
+  Sigil:      { kind: "scalar", validators: ["sigil"], encoding: null },
+  TypeName:   { kind: "scalar", validators: ["type-name"], encoding: null },
 });
 
 // Resolve a Type to one of { kind: "struct"|"scalar"|"flag" } or null if
@@ -125,7 +128,7 @@ export function resolveType(type, schema) {
   if (!type) return null;
   switch (type.kind) {
     case "struct": return { kind: "struct", members: type.members, validators: type.validators ?? [] };
-    case "scalar": return { kind: "scalar", validators: type.validators ?? [] };
+    case "scalar": return { kind: "scalar", validators: type.validators ?? [], encoding: type.encoding ?? null };
     case "flag":   return { kind: "flag" };
     case "reference": return resolveByName(type.name, schema);
     default: return null;
@@ -140,7 +143,7 @@ function resolveByName(name, schema) {
     if (def.name === name) return { kind: "struct", members: def.members, validators: def.validators ?? [] };
   }
   for (const def of schema.scalars ?? []) {
-    if (def.name === name) return { kind: "scalar", validators: def.validators ?? [] };
+    if (def.name === name) return { kind: "scalar", validators: def.validators ?? [], encoding: def.encoding ?? null };
   }
   for (const def of schema.selects ?? []) {
     if (def.name === name) return { kind: "kindMismatch" }; // use SelectRef, not Reference
@@ -232,18 +235,68 @@ function concatBytes(parts) {
   return out;
 }
 
+// Resolve-once cache over a codec binding (TEL §21.7). `codecs` is a
+// callable `(name) => Codec | null` where a Codec is
+// `{ encode(text) -> Uint8Array, decode(bytes) -> string }`, both throwing
+// on rejection. Each distinct encoding name is resolved at most once; the
+// resolved codec is reused for every value.
+function makeCodecCache(codecs) {
+  const cache = new Map();
+  return {
+    configured: codecs != null,
+    resolve(name) {
+      if (codecs == null) return null;
+      if (!cache.has(name)) cache.set(name, codecs(name) ?? null);
+      return cache.get(name);
+    },
+  };
+}
+
 // Encode a list of root children as a bare document-root byte sequence
 // (the bytes hashed for the value hash, §3). Excludes magic and signature.
-export function encodeRoot(children, schema) {
+// `codecs` (optional) is the codec binding (TEL §21.7), required whenever
+// the schema declares any scalar encoding.
+export function encodeRoot(children, schema, codecs) {
+  const codecCache = makeCodecCache(codecs);
   const parts = [];
   parts.push(encodeVarint(children.length));
   for (const child of children) {
-    encodeElement(child, schema.document.members, schema, parts);
+    encodeElement(child, schema.document.members, schema, codecCache, parts);
   }
   return concatBytes(parts);
 }
 
-function encodeElement(elem, parentMembers, schema, parts) {
+// Encode a scalar payload (length varint + value bytes) per §7.1: UTF-8
+// text when the type declares no encoding, the bound codec's bytes
+// otherwise. Encode-side codec failures throw a plain Error (the E312/E313
+// conditions at the TEL layer): the encoder MUST fail without emitting a
+// document.
+function encodeScalarPayload(resolved, text, keyword, codecCache, parts) {
+  if (resolved.encoding == null) {
+    const bytes = TEXT_ENCODER.encode(text);
+    parts.push(encodeVarint(bytes.length));
+    parts.push(bytes);
+    return;
+  }
+  const codec = codecCache.resolve(resolved.encoding);
+  if (!codec) {
+    throw new Error(
+      `encodeScalarPayload: scalar "${keyword}" declares encoding "${resolved.encoding}", ` +
+      `which the codec binding does not resolve`);
+  }
+  let bytes;
+  try {
+    bytes = codec.encode(text);
+  } catch (e) {
+    throw new Error(
+      `encodeScalarPayload: scalar "${keyword}" value rejected by codec ` +
+      `"${resolved.encoding}": ${e.message ?? e}`);
+  }
+  parts.push(encodeVarint(bytes.length));
+  parts.push(bytes);
+}
+
+function encodeElement(elem, parentMembers, schema, codecCache, parts) {
   const k = keywordIndex(parentMembers, elem.keyword, schema);
   if (k < 0) {
     throw new Error(`encodeElement: keyword "${elem.keyword}" is not a member of the parent struct`);
@@ -258,14 +311,11 @@ function encodeElement(elem, parentMembers, schema, parts) {
     case "struct": {
       const children = elem.children ?? [];
       parts.push(encodeVarint(children.length));
-      for (const c of children) encodeElement(c, resolved.members, schema, parts);
+      for (const c of children) encodeElement(c, resolved.members, schema, codecCache, parts);
       return;
     }
     case "scalar": {
-      const text = elem.text ?? "";
-      const bytes = TEXT_ENCODER.encode(text);
-      parts.push(encodeVarint(bytes.length));
-      parts.push(bytes);
+      encodeScalarPayload(resolved, elem.text ?? "", elem.keyword, codecCache, parts);
       return;
     }
     case "flag":
@@ -307,10 +357,12 @@ class Cursor {
 
 // Decode a bare document-root bytes into a flat list of SemanticElement
 // children. Used both for the outer document root (in either mode) and for
-// the embedded schema body in self-contained mode.
-export function decodeRoot(bytes, schema) {
+// the embedded schema body in self-contained mode. `codecs` (optional) is
+// the codec binding (TEL §21.7); `checkCanonical` enables the OPTIONAL
+// re-encode verification (B15 on mismatch).
+export function decodeRoot(bytes, schema, codecs, checkCanonical = false) {
   const cur = new Cursor(bytes);
-  const out = decodeRootFromCursor(cur, schema);
+  const out = decodeRootFromCursor(cur, schema, makeCodecCache(codecs), checkCanonical);
   if (cur.remaining() !== 0) {
     throw new BintelDecodeError(BCode.B08,
       `${cur.remaining()} byte(s) remained after document root`);
@@ -318,16 +370,16 @@ export function decodeRoot(bytes, schema) {
   return out;
 }
 
-function decodeRootFromCursor(cur, schema) {
+function decodeRootFromCursor(cur, schema, codecCache, checkCanonical) {
   const childCount = cur.readVarint("malformed root child-count varint");
   const children = [];
   for (let i = 0; i < childCount; i++) {
-    children.push(decodeChild(cur, schema.document.members, schema));
+    children.push(decodeChild(cur, schema.document.members, schema, codecCache, checkCanonical));
   }
   return children;
 }
 
-function decodeChild(cur, parentMembers, schema) {
+function decodeChild(cur, parentMembers, schema, codecCache, checkCanonical) {
   const k = cur.readVarint("malformed keyword-index varint");
   const lookup = lookupByIndex(parentMembers, k, schema);
   if (!lookup) {
@@ -345,7 +397,7 @@ function decodeChild(cur, parentMembers, schema) {
       const childCount = cur.readVarint(`malformed child-count varint for "${keyword}"`);
       const children = [];
       for (let i = 0; i < childCount; i++) {
-        children.push(decodeChild(cur, resolved.members, schema));
+        children.push(decodeChild(cur, resolved.members, schema, codecCache, checkCanonical));
       }
       return { keyword, kind: "struct", children };
     }
@@ -357,9 +409,37 @@ function decodeChild(cur, parentMembers, schema) {
       }
       const bytes = cur.next(vlen);
       let text;
-      try { text = TEXT_DECODER.decode(bytes); }
-      catch (_) {
-        throw new BintelDecodeError(BCode.B07, `scalar "${keyword}" is not valid UTF-8`);
+      if (resolved.encoding == null) {
+        try { text = TEXT_DECODER.decode(bytes); }
+        catch (_) {
+          throw new BintelDecodeError(BCode.B07, `scalar "${keyword}" is not valid UTF-8`);
+        }
+      } else {
+        const codec = codecCache.resolve(resolved.encoding);
+        if (!codec) {
+          throw new BintelDecodeError(BCode.B13,
+            `scalar "${keyword}" declares encoding "${resolved.encoding}", ` +
+            `which the codec binding does not resolve`);
+        }
+        try { text = codec.decode(bytes); }
+        catch (e) {
+          throw new BintelDecodeError(BCode.B14,
+            `scalar "${keyword}": codec "${resolved.encoding}" rejected value bytes: ${e.message ?? e}`);
+        }
+        if (checkCanonical) {
+          // OPTIONAL hardening (TEL §21.7 law C3).
+          let reencoded;
+          try { reencoded = codec.encode(text); }
+          catch (e) {
+            throw new BintelDecodeError(BCode.B15,
+              `scalar "${keyword}": codec "${resolved.encoding}" rejected its own decode output: ${e.message ?? e}`);
+          }
+          if (!bytesEqual(reencoded, bytes)) {
+            throw new BintelDecodeError(BCode.B15,
+              `scalar "${keyword}": re-encoded bytes differ from input ` +
+              `(codec "${resolved.encoding}" canonicality violation)`);
+          }
+        }
       }
       return { keyword, kind: "scalar", text };
     }
@@ -401,21 +481,23 @@ export function schemaSignatureFromHashes(componentHashes) {
 
 // ── External-mode file layout (§6.1) ─────────────────────────────────────────
 
-export function encodeDocument(rootChildren, schema, componentHashes) {
+export function encodeDocument(rootChildren, schema, componentHashes, codecs) {
   const signature = schemaSignatureFromHashes(componentHashes);
   const sigLenVarint = encodeVarint(signature.length);
-  const root = encodeRoot(rootChildren, schema);
+  const root = encodeRoot(rootChildren, schema, codecs);
   return concatBytes([MAGIC, sigLenVarint, signature, root]);
 }
 
 // Decode an external-mode BinTEL document. Returns { signature, children }.
 // `schema` is the composed schema the caller has already obtained via the
-// §8.2 resolution protocol.
-export function decodeDocument(bytes, schema) {
+// §8.2 resolution protocol. `codecs` (optional) is the codec binding
+// (TEL §21.7), required whenever the schema declares any scalar encoding;
+// `checkCanonical` enables the OPTIONAL re-encode verification.
+export function decodeDocument(bytes, schema, codecs, checkCanonical = false) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC, "external");
   const signature = readSignature(cur);
-  const children = decodeRootFromCursor(cur, schema);
+  const children = decodeRootFromCursor(cur, schema, makeCodecCache(codecs), checkCanonical);
   if (cur.remaining() !== 0) {
     throw new BintelDecodeError(BCode.B08,
       `${cur.remaining()} byte(s) remained after document root`);
@@ -479,13 +561,15 @@ function bytesEqual(a, b) {
 //     match the composed signature of `schemaChildren`; the caller is
 //     responsible for ensuring consistency.
 export function encodeDocumentSelfContained({
-  rootChildren, composedSchema, schemaChildren, telSchema, componentHashes,
+  rootChildren, composedSchema, schemaChildren, telSchema, componentHashes, codecs,
 }) {
   const signature = schemaSignatureFromHashes(componentHashes);
   const sigLenVarint = encodeVarint(signature.length);
+  // The embedded schema body is governed by tel-schema, which declares no
+  // encodings — no codec binding is needed for it.
   const schemaBytes = encodeRoot(schemaChildren, telSchema);
   const schemaLenVarint = encodeVarint(schemaBytes.length);
-  const root = encodeRoot(rootChildren, composedSchema);
+  const root = encodeRoot(rootChildren, composedSchema, codecs);
   return concatBytes([
     MAGIC_SELF_CONTAINED, sigLenVarint, signature,
     schemaLenVarint, schemaBytes, root,
@@ -508,7 +592,7 @@ export function encodeDocumentSelfContained({
 //
 // Throws B11 if the recomputed signature doesn't match the carried one,
 // B12 if the embedded schema body fails to decode or fails to construct.
-export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema }) {
+export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema, codecs, checkCanonical = false }) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC_SELF_CONTAINED, "selfContained");
   const signature = readSignature(cur);
@@ -542,7 +626,7 @@ export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema }) {
       `does not equal the carried signature (${signature.length} bytes)`);
   }
 
-  const children = decodeRootFromCursor(cur, composedSchema);
+  const children = decodeRootFromCursor(cur, composedSchema, makeCodecCache(codecs), checkCanonical);
   if (cur.remaining() !== 0) {
     throw new BintelDecodeError(BCode.B08,
       `${cur.remaining()} byte(s) remained after document root`);
@@ -570,8 +654,9 @@ export function schemaToBintel(schemaChildren, telSchema, telSchemaValueHash) {
 // Compute the BinTEL value hash (§3) of a list of root children under the
 // given schema, using a pluggable BLAKE3 implementation. `blake3` is a
 // callable that takes a Uint8Array and returns a 32-byte Uint8Array.
-export function valueHash(children, schema, blake3) {
-  return blake3(encodeRoot(children, schema));
+// `codecs` (optional) is the codec binding (TEL §21.7).
+export function valueHash(children, schema, blake3, codecs) {
+  return blake3(encodeRoot(children, schema, codecs));
 }
 
 // JSDoc typedefs — informational, no runtime effect.
@@ -594,6 +679,6 @@ export function valueHash(children, schema, blake3) {
 //   | {kind:"exclude", keyword:string}} Member
 //
 // @typedef {{kind:"struct", members:Member[], validators?:string[]}
-//   | {kind:"scalar", validators?:string[]}
+//   | {kind:"scalar", validators?:string[], encoding?:string|null}
 //   | {kind:"flag"}
 //   | {kind:"reference", name:string}} Type

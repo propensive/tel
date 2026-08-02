@@ -300,7 +300,7 @@ mod tests {
                     required: if required { Polarity::Default } else { Polarity::Loose },
                     repeatable: Polarity::Default,
                     keyword: keyword.to_string(),
-                    r#type: Type::Scalar(Scalar {
+                    r#type: Type::Scalar(Scalar { encoding: None,
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
@@ -449,13 +449,13 @@ mod tests {
                     Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "a".to_string(),
-                        r#type: Type::Scalar(Scalar {
+                        r#type: Type::Scalar(Scalar { encoding: None,
                             validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
-                        r#type: Type::Scalar(Scalar {
+                        r#type: Type::Scalar(Scalar { encoding: None,
                             validators: vec!["string".to_string()]}), default: None,
                     }),
                 ],

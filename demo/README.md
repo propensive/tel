@@ -16,6 +16,7 @@ machine operations.
 | [`struct-validator-document.tel`](struct-validator-document.tel) | A document triggering the struct validator's failure path; see `tests::struct_validator_worked_example` for the runnable companion test. |
 | [`atom-forms-schema.tel`](atom-forms-schema.tel) | A schema for a document carrying three Scalar values, one in each atom form (inline, source, literal). |
 | [`atom-forms-document.tel`](atom-forms-document.tel) | A document showing the three atom forms in use, including a literal atom with a `#`-prefixed line and a source atom carrying embedded JSON. |
+| [`encoding-schema.tel`](encoding-schema.tel) | A schema whose scalars declare `encoding` codecs (§21.7), giving hex digests and decimal sizes compact binary representations in BinTEL. |
 | [`tel-schema.bintel.hex`](tel-schema.bintel.hex) | The BinTEL document root encoding of `/tel-schema.tel`, used to recompute the normative value hash pinned in §20.5 of the TEL Specification. |
 | [`tel-schema.hash`](tel-schema.hash) | The BLAKE3-256 and BASE-256 forms of the `tel-schema.tel` value hash. |
 
@@ -27,6 +28,10 @@ Several examples exercise the validator model defined in §21 of the TEL Specifi
   three built-in scalar validators — `identifier`, `sigil`, and `string` — are required
   by every conforming TEL parser; everything else is application-defined. Multiple scalar
   validators on the same Field apply in AND-conjunction.
+- **Scalar encodings** (§21.7) attach a codec to a scalar Definition via an `encoding`
+  line. The codec's encoder doubles as a validator (a value it rejects is E312-invalid)
+  and defines the scalar's binary representation in BinTEL (§7.1 of the BinTEL
+  Specification). `encoding-schema.tel` is the worked example.
 - **Struct validators** (§21.6) attach to Definitions and inline Struct types, and inspect
   the entire struct element. They are the natural place to express cross-field constraints
   ("postcode is required when country is UK", "start date must precede end date").

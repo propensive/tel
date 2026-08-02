@@ -23,7 +23,10 @@ pub mod canonical;
 pub mod mutate;
 pub mod resolver;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 /// The canonical `tel-schema.tel` source text, baked into the crate so the
@@ -62,9 +65,10 @@ pub enum ErrorCode {
     E116, E117, E118, E119, E120, E121, E122, E123,
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
-    E211, E212, E213, E214, E215, E216, E217,
+    E211, E212, E213, E214, E215, E216, E217, E218,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
+    E312, E313,
 }
 
 impl ErrorCode {
@@ -109,6 +113,7 @@ impl ErrorCode {
             Self::E215 => "Layer cannot loosen an irrepeatable member to repeatable",
             Self::E216 => "Exclude operation appears outside a layer's SelectDefinition body",
             Self::E217 => "Reference/SelectRef kind mismatch (Reference resolved to a SelectDefinition, or SelectRef resolved to a Record/Scalar)",
+            Self::E218 => "Layer declares a conflicting encoding for an existing scalar",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -120,6 +125,8 @@ impl ErrorCode {
             Self::E309 => "Compound children of the same member are not contiguous",
             Self::E310 => "Scalar value failed validation",
             Self::E311 => "Flag-typed compound has atoms or compound children",
+            Self::E312 => "Scalar value rejected by its type's codec encoder",
+            Self::E313 => "Scalar type names a codec the codec binding does not provide",
         }
     }
 }
@@ -245,6 +252,11 @@ pub struct RecordDefinition {
 pub struct ScalarDefinition {
     pub name: String,
     pub validators: Vec<String>,
+    /// Optional codec name (§21.7). When present, values of this scalar
+    /// are carried in BinTEL as the codec's bytes rather than as UTF-8
+    /// text, and the codec's encoder acts as one further validity
+    /// constraint (E312 on rejection).
+    pub encoding: Option<String>,
     /// Optional human-readable description of this type. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
     pub description: Option<String>,
@@ -302,6 +314,9 @@ pub struct Scalar {
     /// scalar's value text. Multiple validators apply in AND-conjunction.
     /// An empty list means the Scalar accepts any text.
     pub validators: Vec<String>,
+    /// Optional codec name (§21.7), copied from the resolved
+    /// `ScalarDefinition.encoding`. Null on the built-in scalars.
+    pub encoding: Option<String>,
 }
 
 /// Per-axis declaration state for `Field` and `SelectRef`. The tristate is
@@ -542,6 +557,53 @@ pub struct Span {
 /// the validator name and on the request kind (Scalar vs Struct).
 pub type ValidatorFn = dyn Fn(&ValidationRequest) -> ValidationResponse + Send + Sync;
 
+/// A codec (§21.7): the encoder/decoder pair behind a scalar's declared
+/// `encoding`. `encode` is total on the codec's accepted texts (rejection
+/// is invalidity, E312) and carries a scalar-kind `Diagnostic` on failure;
+/// `decode` is partial, succeeding exactly on the image of `encode` (law
+/// C3), and reports failure as a plain message (surfaced as B14).
+pub trait Codec {
+    fn encode(&self, text: &str) -> Result<Vec<u8>, Diagnostic>;
+    fn decode(&self, bytes: &[u8]) -> Result<String, String>;
+}
+
+/// Codec binding (§21.7): resolves an encoding name to a codec, or `None`
+/// when the name is not recognised. Resolution is performed once per
+/// distinct encoding name (see `CodecResolver`); the returned codec is
+/// then invoked once per value with no further lookup.
+pub type CodecBindingFn = dyn Fn(&str) -> Option<Rc<dyn Codec>>;
+
+/// Resolve-once cache over a `CodecBindingFn`, shared by the validation
+/// path (E312/E313) and the BinTEL encode/decode paths (B13/B14/B15).
+/// A `None` cache entry records a definitive "unknown name" answer.
+pub struct CodecResolver<'a> {
+    binding: Option<&'a CodecBindingFn>,
+    cache: RefCell<HashMap<String, Option<Rc<dyn Codec>>>>,
+}
+
+impl<'a> CodecResolver<'a> {
+    pub fn new(binding: Option<&'a CodecBindingFn>) -> Self {
+        CodecResolver { binding, cache: RefCell::new(HashMap::new()) }
+    }
+
+    /// Whether any binding is configured at all. With no binding,
+    /// encoding checks are skipped during validation (§21.7 mirrors the
+    /// §21.4 no-callback rule).
+    pub fn configured(&self) -> bool {
+        self.binding.is_some()
+    }
+
+    /// Resolve `name`, consulting the binding at most once per name.
+    pub fn resolve(&self, name: &str) -> Option<Rc<dyn Codec>> {
+        let binding = self.binding?;
+        self.cache
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_insert_with(|| binding(name))
+            .clone()
+    }
+}
+
 fn scalar_invalid(msg: &str, end: usize) -> ValidationResponse {
     ValidationResponse::Invalid(Diagnostic::Scalar {
         message: msg.to_string(),
@@ -753,15 +815,17 @@ pub fn builtin_tel_schema() -> Schema {
         description: Some("A record declaration: a named struct definition.".to_string()),
     };
 
-    // A `scalar` declaration: name + one or more validators.
+    // A `scalar` declaration: name + one or more validators + optional
+    // encoding.
     let r_scalar = RecordDefinition {
         name: "Scalar".to_string(),
         members: vec![
             field(dflt, dflt, "name", tn_type()),
             field(dflt, loose, "validate", id_type()),
+            field(loose, dflt, "encoding", id_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A scalar declaration: a named scalar definition with one or more validators.".to_string()),
+        description: Some("A scalar declaration: a named scalar definition with one or more validators and an optional encoding.".to_string()),
     };
 
     // A top-level `select` declaration.
@@ -923,15 +987,19 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
         "Flag" => return ResolvedType::Flag,
         "String" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["string".to_string()],
+            encoding: None,
         })),
         "Identifier" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["identifier".to_string()],
+            encoding: None,
         })),
         "Sigil" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["sigil".to_string()],
+            encoding: None,
         })),
         "TypeName" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["type-name".to_string()],
+            encoding: None,
         })),
         _ => {}
     }
@@ -946,6 +1014,7 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
         if s.name == name {
             return ResolvedType::Scalar(Cow::Owned(Scalar {
                 validators: s.validators.clone(),
+                encoding: s.encoding.clone(),
             }));
         }
     }
@@ -977,6 +1046,20 @@ pub fn type_assign(
     schema: &Schema,
     validator_cb: Option<&ValidatorFn>,
 ) -> TypeAssignment {
+    type_assign_with_codecs(doc, schema, validator_cb, None)
+}
+
+/// `type_assign` with a codec binding (§21.7). With a binding configured,
+/// each scalar whose type declares an `encoding` is additionally checked
+/// against the bound codec's encoder: rejection is E312, an unresolved
+/// name is E313. With no binding, encoding checks are skipped (the §21.4
+/// no-callback rule applied to codecs).
+pub fn type_assign_with_codecs(
+    doc: &Document,
+    schema: &Schema,
+    validator_cb: Option<&ValidatorFn>,
+    codec_binding: Option<&CodecBindingFn>,
+) -> TypeAssignment {
     let mut errors = Vec::new();
     // Compose layers (§20.3) before walking, so layer-introduced
     // keywords are resolvable. The composed schema is also our
@@ -988,9 +1071,10 @@ pub fn type_assign(
         composed_owned = compose_schema(schema).0;
         &composed_owned
     };
+    let codecs = CodecResolver::new(codec_binding);
     let root_members = &schema.document.members;
     // Root has no atoms (per §20.2 Document root), so we go straight to compounds.
-    assign_compound_children_at_root(&doc.children, root_members, schema, validator_cb, &mut errors);
+    assign_compound_children_at_root(&doc.children, root_members, schema, validator_cb, &codecs, &mut errors);
     TypeAssignment { errors }
 }
 
@@ -1000,6 +1084,7 @@ fn assign_compound_children_at_root(
     members: &[Member],
     schema: &Schema,
     cb: Option<&ValidatorFn>,
+    codecs: &CodecResolver,
     errors: &mut Vec<TelError>,
 ) {
     let k = build_keyword_map(members, schema);
@@ -1032,7 +1117,7 @@ fn assign_compound_children_at_root(
                     }
                     fill_counts[i] += 1;
                     // Recurse into the compound with the child's type
-                    type_assign_compound(compound, child_type, schema, cb, errors);
+                    type_assign_compound(compound, child_type, schema, cb, codecs, errors);
                 }
             }
         }
@@ -1077,6 +1162,10 @@ fn build_keyword_map(members: &[Member], schema: &Schema) -> std::collections::H
 /// implementation would translate spans to document offsets; for now
 /// this records the message and (if present) the value-relative span.
 fn emit_e310(diag: &Diagnostic, ctx: &str, errors: &mut Vec<TelError>) {
+    emit_validation_error(ErrorCode::E310, diag, ctx, errors)
+}
+
+fn emit_validation_error(code: ErrorCode, diag: &Diagnostic, ctx: &str, errors: &mut Vec<TelError>) {
     match diag {
         Diagnostic::Scalar { message, span } => {
             let (start, end) = match span {
@@ -1084,18 +1173,57 @@ fn emit_e310(diag: &Diagnostic, ctx: &str, errors: &mut Vec<TelError>) {
                 None => (0, 0),
             };
             errors.push(TelError::with_detail(
-                ErrorCode::E310, start, end,
+                code, start, end,
                 format!("`{}` failed validation: {}", ctx, message),
             ));
         }
         Diagnostic::Struct { message, fields } => {
             errors.push(TelError::with_detail(
-                ErrorCode::E310, 0, 0,
+                code, 0, 0,
                 format!("`{}` failed struct validation: {}", ctx, message),
             ));
             for (kw, child) in fields {
                 let child_ctx = format!("{}.{}", ctx, kw);
-                emit_e310(child, &child_ctx, errors);
+                emit_validation_error(code, child, &child_ctx, errors);
+            }
+        }
+    }
+}
+
+/// Validate a scalar value: run its declared validators (E310 on failure)
+/// and, when the type declares an `encoding` and a codec binding is
+/// configured, the encoding check (§21.7): unresolved name is E313, encoder
+/// rejection is E312. With no binding configured the encoding check is
+/// skipped.
+fn validate_scalar_value(
+    sc: &Scalar,
+    value: &str,
+    ctx: &str,
+    cb: Option<&ValidatorFn>,
+    codecs: &CodecResolver,
+    errors: &mut Vec<TelError>,
+) {
+    for validator in &sc.validators {
+        let req = ValidationRequest::Scalar { method: validator, value };
+        if let ValidationResponse::Invalid(diag) = validate_with_builtins(&req, cb) {
+            emit_e310(&diag, ctx, errors);
+        }
+    }
+    if let Some(name) = &sc.encoding {
+        if codecs.configured() {
+            match codecs.resolve(name) {
+                None => errors.push(TelError::with_detail(
+                    ErrorCode::E313, 0, 0,
+                    format!("`{}` declares encoding `{}`, which the codec binding does not resolve", ctx, name),
+                )),
+                Some(codec) => {
+                    if let Err(diag) = codec.encode(value) {
+                        // A codec diagnostic is always scalar-kind; a
+                        // struct-kind diagnostic is a contract violation
+                        // handled by emit_validation_error uniformly.
+                        emit_validation_error(ErrorCode::E312, &diag, ctx, errors);
+                    }
+                }
             }
         }
     }
@@ -1107,6 +1235,7 @@ fn type_assign_compound(
     t: &Type,
     schema: &Schema,
     cb: Option<&ValidatorFn>,
+    codecs: &CodecResolver,
     errors: &mut Vec<TelError>,
 ) {
     match resolve(t, schema) {
@@ -1142,14 +1271,9 @@ fn type_assign_compound(
                     format!("compound `{}` has children but its type is Scalar, not Struct", c.keyword),
                 ));
             }
-            // E310: invoke each validator on the scalar's value; all must
-            // return Valid (AND-conjunction).
-            for validator in &sc.validators {
-                let req = ValidationRequest::Scalar { method: validator, value: &value };
-                if let ValidationResponse::Invalid(diag) = validate_with_builtins(&req, cb) {
-                    emit_e310(&diag, &c.keyword, errors);
-                }
-            }
+            // E310/E312/E313: validators then the encoding check, in one
+            // AND-conjunction (§21.7).
+            validate_scalar_value(&sc, &value, &c.keyword, cb, codecs, errors);
         }
         ResolvedType::Struct(members) => {
             // §20.2: T MUST be a Struct (it is, after resolution). Run atom phase
@@ -1240,14 +1364,7 @@ fn type_assign_compound(
                                 }
                             }
                             ResolvedType::Scalar(sc) => {
-                                for validator in &sc.validators {
-                                    let req = ValidationRequest::Scalar {
-                                        method: validator, value: &atom_text,
-                                    };
-                                    if let ValidationResponse::Invalid(diag) = validate_with_builtins(&req, cb) {
-                                        emit_e310(&diag, &f.keyword, errors);
-                                    }
-                                }
+                                validate_scalar_value(&sc, &atom_text, &f.keyword, cb, codecs, errors);
                             }
                             _ => {}
                         }
@@ -1297,7 +1414,7 @@ fn type_assign_compound(
                                 current_member = i as i32;
                             }
                             fill_counts[i] += 1;
-                            type_assign_compound(child, child_type, schema, cb, errors);
+                            type_assign_compound(child, child_type, schema, cb, codecs, errors);
                         }
                     }
                 }
@@ -1458,26 +1575,31 @@ pub fn construct_schema(doc: &Document) -> Schema {
 }
 
 fn construct_record(c: &Compound) -> RecordDefinition {
-    // The `record` compound's first inline atom is the TypeName.
-    let name = first_inline_atom(c);
+    // The `record` compound's first inline atom (or explicit `name`
+    // child, §20.6) is the TypeName.
+    let name = definition_name(c);
     let (members, validators) = construct_struct_body(&c.children);
     let description = description_of(c);
     RecordDefinition { name, members, validators, description }
 }
 
 fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
-    // `scalar <Name>` with one or more `validate <name>` children.
-    let name = first_inline_atom(c);
+    // `scalar <Name>` with one or more `validate <name>` children and an
+    // optional `encoding <name>` child (§21.7).
+    let name = definition_name(c);
     let mut validators: Vec<String> = Vec::new();
+    let mut encoding: Option<String> = None;
     for block in &c.children {
         for child in &block.compounds {
-            if child.keyword == "validate" {
-                validators.push(scalar_value_text(child));
+            match child.keyword.as_str() {
+                "validate" => validators.push(scalar_value_text(child)),
+                "encoding" => encoding = Some(scalar_value_text(child)),
+                _ => {}
             }
         }
     }
     let description = description_of(c);
-    ScalarDefinition { name, validators, description }
+    ScalarDefinition { name, validators, encoding, description }
 }
 
 /// Construct a `SelectDefinition` from a top-level `select <Name>` compound
@@ -1487,7 +1609,7 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
 /// `layer_excludes` should be empty (E216 if not, reported by
 /// `validate_schema`).
 fn construct_select_definition(c: &Compound) -> SelectDefinition {
-    let name = first_inline_atom(c);
+    let name = definition_name(c);
     let mut variants: Vec<Variant> = Vec::new();
     let mut validators: Vec<String> = Vec::new();
     let mut layer_excludes: Vec<String> = Vec::new();
@@ -1509,6 +1631,22 @@ fn construct_select_definition(c: &Compound) -> SelectDefinition {
 /// extracting the keyword/name from compounds whose first atom is the name.
 fn first_inline_atom(c: &Compound) -> String {
     c.atoms.first().map(atom_text).unwrap_or_default()
+}
+
+/// A Definition's name: the first inline atom, or (per §20.6, e.g. in a
+/// BinTEL-decoded document where every element is an explicit compound
+/// child) the `name` child compound's text.
+fn definition_name(c: &Compound) -> String {
+    let inline = first_inline_atom(c);
+    if !inline.is_empty() { return inline; }
+    for block in &c.children {
+        for child in &block.compounds {
+            if child.keyword == "name" {
+                return scalar_value_text(child);
+            }
+        }
+    }
+    String::new()
 }
 
 /// Scan a compound's children for a `description` member and return its text,
@@ -1932,7 +2070,7 @@ fn collect_all_keywords(s: &Schema) -> Vec<String> {
 /// Apply every `Layer` in `s.layers` to produce a fully composed schema
 /// per §20.3. Returns the composed `Schema` (with empty `layers`) plus
 /// any `SchemaError`s raised during composition (E205, E206, E210, E211,
-/// E212, E213). The returned schema is always a best-effort result.
+/// E212, E213, E218). The returned schema is always a best-effort result.
 pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
     let mut errors: Vec<SchemaError> = Vec::new();
     let mut records: Vec<RecordDefinition> = s.records.clone();
@@ -1998,9 +2136,30 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
             }
             if let Some(pos) = scalars.iter().position(|x| x.name == sd.name) {
                 let merged = merge_validators(&scalars[pos].validators, &sd.validators);
+                // MergeScalar's encoding rule (§20.3): a layer MAY add an
+                // encoding where the base has none, MAY restate the base's,
+                // MUST NOT change it (E218). Removal has no syntax.
+                let merged_encoding = match (&scalars[pos].encoding, &sd.encoding) {
+                    (base, None) => base.clone(),
+                    (None, layer_enc @ Some(_)) => layer_enc.clone(),
+                    (Some(base_enc), Some(layer_enc)) if base_enc == layer_enc => {
+                        Some(base_enc.clone())
+                    }
+                    (Some(base_enc), Some(layer_enc)) => {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E218,
+                            detail: format!(
+                                "layer `{}` declares encoding `{}` for scalar `{}`, conflicting with the base's encoding `{}`",
+                                layer.name, layer_enc, sd.name, base_enc,
+                            ),
+                        });
+                        Some(base_enc.clone()) // best-effort: keep the base's
+                    }
+                };
                 scalars[pos] = ScalarDefinition {
                     name: sd.name.clone(),
                     validators: merged,
+                    encoding: merged_encoding,
                     // Layer description overrides base; else inherit base.
                     description: sd.description.clone()
                         .or_else(|| scalars[pos].description.clone()),
@@ -4422,7 +4581,7 @@ mod tests {
                         required: Polarity::Loose, // not required, so default is illegal
                         repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
-                        r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()] }),
+                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()] }),
                         default: Some("bar".to_string()),
                     }),
                 ],
@@ -4641,7 +4800,7 @@ mod tests {
     }
 
     fn scalar_string() -> Type {
-        Type::Scalar(Scalar { validators: vec!["string".to_string()]})
+        Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]})
     }
 
     #[test]
@@ -4685,7 +4844,7 @@ mod tests {
             Member::Field(Field { description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
-                r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()] }),
+                r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()] }),
                 default: Some("Anonymous".to_string()),
             }),
         ]);
@@ -4712,7 +4871,7 @@ mod tests {
             Member::Field(Field { description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
-                r#type: Type::Scalar(Scalar { validators: vec!["identifier".to_string()]}), default: None,
+                r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["identifier".to_string()]}), default: None,
             }),
         ]);
         // "FOO" is not a valid identifier (uppercase)
@@ -5938,13 +6097,13 @@ layer fancy
                                 Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
-                                    r#type: Type::Scalar(Scalar {
+                                    r#type: Type::Scalar(Scalar { encoding: None,
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
-                                    r#type: Type::Scalar(Scalar {
+                                    r#type: Type::Scalar(Scalar { encoding: None,
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                             ],
@@ -6000,7 +6159,7 @@ layer fancy
                     Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
-                        r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6047,7 +6206,7 @@ layer fancy
                                 Member::Field(Field { description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
-                                    r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
+                                    r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field { description: None,
                                     required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6086,7 +6245,7 @@ layer fancy
                     Member::Field(Field { description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
-                        r#type: Type::Scalar(Scalar { validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field { description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6133,6 +6292,110 @@ layer fancy
         eprintln!("tel-schema.tel value hash (base-256): {}", b256);
         let bintel_hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         eprintln!("tel-schema.tel BinTEL root (hex):     {}", bintel_hex);
+    }
+
+    // ── Scalar encodings / codecs (§21.7) ───────────────────────────────
+
+    /// Toy codec for tests: lowercase even-length hex text ↔ raw bytes.
+    /// Image-exact (law C3): decode always produces lowercase hex, which
+    /// re-encodes to the same bytes.
+    struct HexBytes;
+    impl Codec for HexBytes {
+        fn encode(&self, text: &str) -> Result<Vec<u8>, Diagnostic> {
+            let ok = text.len() % 2 == 0 && !text.is_empty()
+                && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !ok {
+                return Err(Diagnostic::Scalar {
+                    message: "not non-empty lowercase hex of even length".to_string(),
+                    span: None,
+                });
+            }
+            Ok((0..text.len()).step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                .collect())
+        }
+        fn decode(&self, bytes: &[u8]) -> Result<String, String> {
+            if bytes.is_empty() { return Err("empty byte sequence".to_string()); }
+            Ok(bytes.iter().map(|b| format!("{:02x}", b)).collect())
+        }
+    }
+
+    fn hex_binding(name: &str) -> Option<Rc<dyn Codec>> {
+        if name == "hex-bytes" { Some(Rc::new(HexBytes)) } else { None }
+    }
+
+    fn codec_demo_schema() -> Schema {
+        let src = "tel 1.0\n\nname codec-demo\n\nscalar Blob\n  validate string\n  encoding hex-bytes\n\ndocument\n  field data Blob\n";
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "schema must parse: {:?}", parsed.errors);
+        construct_schema(&parsed.document)
+    }
+
+    #[test]
+    fn construct_scalar_definition_reads_encoding() {
+        let schema = codec_demo_schema();
+        assert_eq!(schema.scalars.len(), 1);
+        assert_eq!(schema.scalars[0].name, "Blob");
+        assert_eq!(schema.scalars[0].encoding, Some("hex-bytes".to_string()));
+        // Resolution copies the encoding into the resolved Scalar.
+        match resolve_name("Blob", &schema) {
+            ResolvedType::Scalar(sc) => {
+                assert_eq!(sc.encoding, Some("hex-bytes".to_string()));
+            }
+            _ => panic!("Blob should resolve to a Scalar"),
+        }
+    }
+
+    #[test]
+    fn builtin_scalar_record_keyword_order_includes_encoding() {
+        // Guards the keyword-index layout of tel-schema's `Scalar` record:
+        // name=0, validate=1, encoding=2, description=3.
+        let tel = builtin_tel_schema();
+        let scalar_rec = tel.records.iter().find(|r| r.name == "Scalar").unwrap();
+        let keywords: Vec<&str> = scalar_rec.members.iter().map(|m| match m {
+            Member::Field(f) => f.keyword.as_str(),
+            _ => panic!("Scalar record has only Field members"),
+        }).collect();
+        assert_eq!(keywords, vec!["name", "validate", "encoding", "description"]);
+    }
+
+    #[test]
+    fn codec_encode_success_is_valid() {
+        let schema = codec_demo_schema();
+        let doc = parse("tel 1.0\n\ndata 48656c6c6f\n").document;
+        let ta = type_assign_with_codecs(&doc, &schema, None, Some(&hex_binding));
+        assert!(ta.errors.is_empty(), "valid hex must pass: {:?}", ta.errors);
+    }
+
+    #[test]
+    fn e312_codec_encode_reject() {
+        let schema = codec_demo_schema();
+        let doc = parse("tel 1.0\n\ndata not-hex!\n").document;
+        let ta = type_assign_with_codecs(&doc, &schema, None, Some(&hex_binding));
+        let e312s: Vec<_> = ta.errors.iter().filter(|e| e.code == ErrorCode::E312).collect();
+        assert_eq!(e312s.len(), 1, "expected one E312: {:?}", ta.errors);
+        assert!(e312s[0].message.contains("lowercase hex"),
+                "diagnostic should carry the codec's message: {:?}", e312s[0]);
+    }
+
+    #[test]
+    fn e313_unknown_codec_name() {
+        let schema = codec_demo_schema();
+        let doc = parse("tel 1.0\n\ndata 48656c6c6f\n").document;
+        let unknown_binding = |_: &str| -> Option<Rc<dyn Codec>> { None };
+        let ta = type_assign_with_codecs(&doc, &schema, None, Some(&unknown_binding));
+        let e313s: Vec<_> = ta.errors.iter().filter(|e| e.code == ErrorCode::E313).collect();
+        assert_eq!(e313s.len(), 1, "expected one E313: {:?}", ta.errors);
+    }
+
+    #[test]
+    fn codec_skipped_without_binding() {
+        // §21.7: with no CodecBinding configured at all, encoding checks
+        // are skipped (mirroring the §21.4 no-callback rule).
+        let schema = codec_demo_schema();
+        let doc = parse("tel 1.0\n\ndata not-hex!\n").document;
+        let ta = type_assign(&doc, &schema, None);
+        assert!(ta.errors.is_empty(), "no binding → encoding check skipped: {:?}", ta.errors);
     }
 }
 

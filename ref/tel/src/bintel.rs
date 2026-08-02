@@ -14,7 +14,8 @@
 //! for the underlying construction.
 
 use crate::{
-    Atom, Block, Compound, Document, LineEndings, Member, Schema, Struct, Type,
+    Atom, Block, CodecBindingFn, CodecResolver, Compound, Diagnostic, Document, LineEndings,
+    Member, Schema, Struct, Type,
     builtin_tel_schema, compose_schema, construct_schema,
     resolve, ResolvedType, scalar_value_text,
 };
@@ -317,17 +318,87 @@ fn clone_element<'a>(e: &Element<'a>) -> Element<'a> {
     }
 }
 
+/// Error from a codec-aware BinTEL encode (§7.1 / TEL §21.7): an
+/// unresolved encoding name or an encoder-rejected value. Per §7.1 the
+/// encoder MUST fail without emitting a document — BinTEL never encodes
+/// an invalid document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodeError {
+    pub message: String,
+}
+
+fn diagnostic_message(diag: &Diagnostic) -> &str {
+    match diag {
+        Diagnostic::Scalar { message, .. } => message,
+        Diagnostic::Struct { message, .. } => message,
+    }
+}
+
+/// Encode a scalar value's payload (length varint + value bytes) per §7.1:
+/// UTF-8 text when the type declares no encoding, the bound codec's bytes
+/// otherwise.
+fn encode_scalar_payload(
+    sc: &crate::Scalar,
+    text: &str,
+    keyword: &str,
+    codecs: &CodecResolver,
+    out: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    match &sc.encoding {
+        None => {
+            let bytes = text.as_bytes();
+            out.extend(encode_varint(bytes.len() as u64));
+            out.extend_from_slice(bytes);
+        }
+        Some(name) => {
+            let codec = codecs.resolve(name).ok_or_else(|| EncodeError {
+                message: format!(
+                    "scalar `{}` declares encoding `{}`, which the codec binding does not resolve",
+                    keyword, name,
+                ),
+            })?;
+            let bytes = codec.encode(text).map_err(|diag| EncodeError {
+                message: format!(
+                    "scalar `{}` value rejected by codec `{}`: {}",
+                    keyword, name, diagnostic_message(&diag),
+                ),
+            })?;
+            out.extend(encode_varint(bytes.len() as u64));
+            out.extend_from_slice(&bytes);
+        }
+    }
+    Ok(())
+}
+
 /// Encode the document root (§7.1). The result is the bytes hashed for the
 /// value hash (§3); it excludes the magic number and the schema signature.
+///
+/// This entry point has no codec binding and therefore supports only
+/// schemas that declare no encodings; encountering an encoded scalar
+/// panics. Use `encode_root_with_codecs` for schemas with encodings.
 pub fn encode_root(doc: &Document, schema: &Schema) -> Vec<u8> {
+    encode_root_with_codecs(doc, schema, None)
+        .expect("schema declares encodings; use encode_root_with_codecs with a codec binding")
+}
+
+/// `encode_root` with a codec binding (TEL §21.7). Required whenever the
+/// composed schema declares any encoding; fails (rather than emitting a
+/// partial document) on an unresolved encoding name or an encoder-rejected
+/// value.
+pub fn encode_root_with_codecs(
+    doc: &Document,
+    schema: &Schema,
+    codec_binding: Option<&CodecBindingFn>,
+) -> Result<Vec<u8>, EncodeError> {
+    let codecs = CodecResolver::new(codec_binding);
     let mut out = Vec::new();
     // The document root has no atoms (it's a virtual struct).
     let children = enumerate_children(&[], &doc.children, &schema.document.members, schema);
     out.extend(encode_varint(children.len() as u64));
     for child in &children {
-        encode_element(child, &schema.document.members, schema, &mut out);
+        encode_element(child, &schema.document.members, schema, &codecs, &mut out)?;
     }
-    out
+    Ok(out)
 }
 
 /// Encode one semantic-model element (§7.1) into `out`.
@@ -335,8 +406,9 @@ fn encode_element<'a>(
     elem: &Element<'a>,
     parent_members: &'a [Member],
     schema: &'a Schema,
+    codecs: &CodecResolver,
     out: &mut Vec<u8>,
-) {
+) -> Result<(), EncodeError> {
     match elem {
         Element::Compound(c) => {
             let kidx = keyword_index(parent_members, &c.keyword, schema)
@@ -349,14 +421,12 @@ fn encode_element<'a>(
                     let grand = enumerate_children(&c.atoms, &c.children, child_members, schema);
                     out.extend(encode_varint(grand.len() as u64));
                     for gc in &grand {
-                        encode_element(gc, child_members, schema, out);
+                        encode_element(gc, child_members, schema, codecs, out)?;
                     }
                 }
-                ResolvedType::Scalar(_) => {
+                ResolvedType::Scalar(sc) => {
                     let value = scalar_value_text(c);
-                    let bytes = value.as_bytes();
-                    out.extend(encode_varint(bytes.len() as u64));
-                    out.extend_from_slice(bytes);
+                    encode_scalar_payload(&sc, &value, &c.keyword, codecs, out)?;
                 }
                 ResolvedType::Flag => {
                     // No body.
@@ -370,9 +440,16 @@ fn encode_element<'a>(
             let kidx = keyword_index(parent_members, keyword, schema)
                 .expect("atom-scalar keyword must resolve");
             out.extend(encode_varint(kidx as u64));
-            let bytes = text.as_bytes();
-            out.extend(encode_varint(bytes.len() as u64));
-            out.extend_from_slice(bytes);
+            match keyword_type(parent_members, keyword, schema).map(|t| resolve(t, schema)) {
+                Some(ResolvedType::Scalar(sc)) => {
+                    encode_scalar_payload(&sc, text, keyword, codecs, out)?;
+                }
+                _ => {
+                    let bytes = text.as_bytes();
+                    out.extend(encode_varint(bytes.len() as u64));
+                    out.extend_from_slice(bytes);
+                }
+            }
         }
         Element::AtomFlag { keyword } => {
             let kidx = keyword_index(parent_members, keyword, schema)
@@ -383,20 +460,43 @@ fn encode_element<'a>(
             let kidx = keyword_index(parent_members, keyword, schema)
                 .expect("default keyword must resolve");
             out.extend(encode_varint(kidx as u64));
-            let bytes = value.as_bytes();
-            out.extend(encode_varint(bytes.len() as u64));
-            out.extend_from_slice(bytes);
+            match keyword_type(parent_members, keyword, schema).map(|t| resolve(t, schema)) {
+                Some(ResolvedType::Scalar(sc)) => {
+                    encode_scalar_payload(&sc, value, keyword, codecs, out)?;
+                }
+                _ => {
+                    let bytes = value.as_bytes();
+                    out.extend(encode_varint(bytes.len() as u64));
+                    out.extend_from_slice(bytes);
+                }
+            }
         }
     }
+    Ok(())
 }
 
 // ── Value hash (§3) ──────────────────────────────────────────────────────────
 
 /// Compute the value hash (§3): 256-bit BLAKE3 of the document root encoding
 /// alone, excluding magic number and schema signature.
+///
+/// Supports only schemas that declare no encodings; use
+/// `value_hash_with_codecs` otherwise.
 pub fn value_hash(doc: &Document, schema: &Schema) -> [u8; 32] {
     let bytes = encode_root(doc, schema);
     *blake3::hash(&bytes).as_bytes()
+}
+
+/// `value_hash` with a codec binding (TEL §21.7), for schemas that declare
+/// encodings. Under codec laws C1–C4 the hash remains a function of the
+/// semantic model and schema alone.
+pub fn value_hash_with_codecs(
+    doc: &Document,
+    schema: &Schema,
+    codec_binding: Option<&CodecBindingFn>,
+) -> Result<[u8; 32], EncodeError> {
+    let bytes = encode_root_with_codecs(doc, schema, codec_binding)?;
+    Ok(*blake3::hash(&bytes).as_bytes())
 }
 
 // ── Schema signature (§8) ────────────────────────────────────────────────────
@@ -425,13 +525,25 @@ pub fn encode_document_with_signature(
     schema: &Schema,
     component_hashes: &[[u8; 32]],
 ) -> Vec<u8> {
+    encode_document_with_signature_and_codecs(doc, schema, component_hashes, None)
+        .expect("schema declares encodings; use encode_document_with_signature_and_codecs")
+}
+
+/// `encode_document_with_signature` with a codec binding (TEL §21.7), for
+/// schemas that declare encodings.
+pub fn encode_document_with_signature_and_codecs(
+    doc: &Document,
+    schema: &Schema,
+    component_hashes: &[[u8; 32]],
+    codec_binding: Option<&CodecBindingFn>,
+) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
     let signature = schema_signature_from_hashes(component_hashes);
     out.extend(encode_varint(signature.len() as u64));
     out.extend_from_slice(&signature);
-    out.extend(encode_root(doc, schema));
-    out
+    out.extend(encode_root_with_codecs(doc, schema, codec_binding)?);
+    Ok(out)
 }
 
 // ── Schema-document hash helpers (§8.1) ──────────────────────────────────────
@@ -552,6 +664,20 @@ pub fn encode_document_self_contained(
     composed_schema: &Schema,
     component_hashes: &[[u8; 32]],
 ) -> Vec<u8> {
+    encode_document_self_contained_with_codecs(doc, schema_doc, composed_schema, component_hashes, None)
+        .expect("schema declares encodings; use encode_document_self_contained_with_codecs")
+}
+
+/// `encode_document_self_contained` with a codec binding (TEL §21.7). The
+/// embedded schema body is governed by `tel-schema`, which declares no
+/// encodings, so only the outer document root uses the binding.
+pub fn encode_document_self_contained_with_codecs(
+    doc: &Document,
+    schema_doc: &Document,
+    composed_schema: &Schema,
+    component_hashes: &[[u8; 32]],
+    codec_binding: Option<&CodecBindingFn>,
+) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC_SELF_CONTAINED);
     let signature = schema_signature_from_hashes(component_hashes);
@@ -560,8 +686,8 @@ pub fn encode_document_self_contained(
     let schema_bytes = encode_root(schema_doc, &builtin_tel_schema());
     out.extend(encode_varint(schema_bytes.len() as u64));
     out.extend_from_slice(&schema_bytes);
-    out.extend(encode_root(doc, composed_schema));
-    out
+    out.extend(encode_root_with_codecs(doc, composed_schema, codec_binding)?);
+    Ok(out)
 }
 
 /// Encode a schema as a complete BinTEL document (external-schema mode)
@@ -584,6 +710,20 @@ pub fn schema_to_bintel(schema_doc: &Document) -> Vec<u8> {
 pub fn decode_document_self_contained(
     bytes: &[u8],
 ) -> Result<DecodedSelfContained, DecodeError> {
+    decode_document_self_contained_with_codecs(bytes, None, false)
+}
+
+/// `decode_document_self_contained` with a codec binding (TEL §21.7).
+/// The embedded schema body is governed by `tel-schema`, which declares
+/// no encodings, so the bootstrap never needs the binding; only the outer
+/// data root does (B13/B14/B15 semantics as in
+/// `decode_document_with_codecs`).
+pub fn decode_document_self_contained_with_codecs(
+    bytes: &[u8],
+    codec_binding: Option<&CodecBindingFn>,
+    check_canonical: bool,
+) -> Result<DecodedSelfContained, DecodeError> {
+    let codecs = CodecResolver::new(codec_binding);
     let mut cur = 0;
 
     // B01: magic — self-contained mode only.
@@ -650,7 +790,8 @@ pub fn decode_document_self_contained(
     }
 
     // Decode the outer data document root under the composed schema.
-    let (root_blocks, root_consumed) = decode_root_into_blocks(&bytes[cur..], &composed)?;
+    let (root_blocks, root_consumed) =
+        decode_root_into_blocks_with_codecs(&bytes[cur..], &composed, &codecs, check_canonical)?;
     cur += root_consumed;
 
     if cur < bytes.len() {
@@ -683,7 +824,7 @@ pub struct Decoded {
 }
 
 /// BinTEL decoder error code, corresponding to §10 of the BinTEL
-/// Specification (B01–B10).
+/// Specification (B01–B15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BCode {
     /// B01: Magic number absent or does not match `B2 C4 B5 BB`.
@@ -723,6 +864,17 @@ pub enum BCode {
     /// does not decode as a valid TEL document under `tel-schema`
     /// (structural error during bootstrap).
     B12,
+    /// B13: The composed schema declares an `encoding` for a Scalar but
+    /// the decoder's codec binding (TEL §21.7) does not resolve that name.
+    B13,
+    /// B14: An encoded Scalar's value bytes are rejected by the bound
+    /// codec's decoder — the bytes are not the encoding of any accepted
+    /// text (including corrupt or non-canonical bytes, per law C3).
+    B14,
+    /// B15: The OPTIONAL re-encode verification of TEL §21.7 found
+    /// `encode(decode(b)) ≠ b` — a canonicality violation indicating a
+    /// non-conforming codec or corrupted input.
+    B15,
 }
 
 impl BCode {
@@ -740,6 +892,9 @@ impl BCode {
             BCode::B10 => "Reference type does not resolve to a Definition",
             BCode::B11 => "embedded schema body signature mismatch (self-contained mode)",
             BCode::B12 => "embedded schema body is not a valid tel-schema document (self-contained mode)",
+            BCode::B13 => "scalar's declared encoding is not resolved by the codec binding",
+            BCode::B14 => "encoded scalar's value bytes rejected by the codec decoder",
+            BCode::B15 => "codec canonicality check failed: re-encoded bytes differ",
         }
     }
 }
@@ -760,6 +915,21 @@ impl DecodeError {
 }
 
 pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeError> {
+    decode_document_with_codecs(bytes, schema, None, false)
+}
+
+/// `decode_document` with a codec binding (TEL §21.7). Required whenever
+/// the composed schema declares any encoding: an unresolved encoding name
+/// is B13 and a codec decode failure is B14. With `check_canonical` set,
+/// the OPTIONAL re-encode verification runs on every encoded scalar (B15
+/// on mismatch) — a hardening measure with a per-value cost.
+pub fn decode_document_with_codecs(
+    bytes: &[u8],
+    schema: &Schema,
+    codec_binding: Option<&CodecBindingFn>,
+    check_canonical: bool,
+) -> Result<Decoded, DecodeError> {
+    let codecs = CodecResolver::new(codec_binding);
     let mut cur = 0;
 
     // B01: magic. This entry point handles external-schema mode only
@@ -782,7 +952,8 @@ pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeE
     let (signature, sig_consumed) = read_signature(&bytes[cur..])?;
     cur += sig_consumed;
 
-    let (root_blocks, root_consumed) = decode_root_into_blocks(&bytes[cur..], schema)?;
+    let (root_blocks, root_consumed) =
+        decode_root_into_blocks_with_codecs(&bytes[cur..], schema, &codecs, check_canonical)?;
     cur += root_consumed;
 
     // B08: framing — every byte must be consumed.
@@ -843,13 +1014,23 @@ fn decode_root_into_blocks(
     bytes: &[u8],
     schema: &Schema,
 ) -> Result<(Vec<Block>, usize), DecodeError> {
+    decode_root_into_blocks_with_codecs(bytes, schema, &CodecResolver::new(None), false)
+}
+
+fn decode_root_into_blocks_with_codecs(
+    bytes: &[u8],
+    schema: &Schema,
+    codecs: &CodecResolver,
+    check_canonical: bool,
+) -> Result<(Vec<Block>, usize), DecodeError> {
     let mut cur = 0;
     let (child_count, n) = decode_varint(&bytes[cur..])
         .ok_or_else(|| DecodeError::new(BCode::B02, "malformed root child-count varint"))?;
     cur += n;
     let mut compounds = Vec::new();
     for _ in 0..child_count {
-        let (comp, consumed) = decode_child(&bytes[cur..], &schema.document.members, schema)?;
+        let (comp, consumed) = decode_child(
+            &bytes[cur..], &schema.document.members, schema, codecs, check_canonical)?;
         cur += consumed;
         compounds.push(comp);
     }
@@ -868,6 +1049,8 @@ fn decode_child(
     bytes: &[u8],
     parent_members: &[Member],
     schema: &Schema,
+    codecs: &CodecResolver,
+    check_canonical: bool,
 ) -> Result<(Compound, usize), DecodeError> {
     let mut cur = 0;
     let (kidx, n) = decode_varint(&bytes[cur..])
@@ -885,7 +1068,8 @@ fn decode_child(
             cur += n;
             let mut grand = Vec::new();
             for _ in 0..cc {
-                let (gc, used) = decode_child(&bytes[cur..], child_members, schema)?;
+                let (gc, used) = decode_child(
+                    &bytes[cur..], child_members, schema, codecs, check_canonical)?;
                 cur += used;
                 grand.push(gc);
             }
@@ -901,7 +1085,7 @@ fn decode_child(
                 }],
             }, cur))
         }
-        ResolvedType::Scalar(_) => {
+        ResolvedType::Scalar(sc) => {
             let (vlen, n) = decode_varint(&bytes[cur..])
                 .ok_or_else(|| DecodeError::new(BCode::B02,
                     format!("malformed value-length varint for `{}`", keyword)))?;
@@ -912,10 +1096,37 @@ fn decode_child(
                     format!("scalar `{}` length {} exceeds remaining {} bytes",
                         keyword, vlen, bytes.len() - cur)));
             }
-            let value = std::str::from_utf8(&bytes[cur..end])
-                .map_err(|e| DecodeError::new(BCode::B07,
-                    format!("scalar `{}`: {}", keyword, e)))?
-                .to_string();
+            let value_bytes = &bytes[cur..end];
+            let value = match &sc.encoding {
+                None => std::str::from_utf8(value_bytes)
+                    .map_err(|e| DecodeError::new(BCode::B07,
+                        format!("scalar `{}`: {}", keyword, e)))?
+                    .to_string(),
+                Some(name) => {
+                    let codec = codecs.resolve(name)
+                        .ok_or_else(|| DecodeError::new(BCode::B13,
+                            format!("scalar `{}` declares encoding `{}`, which the codec binding does not resolve",
+                                keyword, name)))?;
+                    let text = codec.decode(value_bytes)
+                        .map_err(|e| DecodeError::new(BCode::B14,
+                            format!("scalar `{}`: codec `{}` rejected value bytes: {}",
+                                keyword, name, e)))?;
+                    if check_canonical {
+                        // OPTIONAL hardening (TEL §21.7 law C3).
+                        let reencoded = codec.encode(&text).map_err(|d| {
+                            DecodeError::new(BCode::B15,
+                                format!("scalar `{}`: codec `{}` rejected its own decode output: {}",
+                                    keyword, name, diagnostic_message(&d)))
+                        })?;
+                        if reencoded != value_bytes {
+                            return Err(DecodeError::new(BCode::B15,
+                                format!("scalar `{}`: re-encoded bytes differ from input (codec `{}` canonicality violation)",
+                                    keyword, name)));
+                        }
+                    }
+                    text
+                }
+            };
             cur = end;
             Ok((Compound {
                 keyword: keyword.to_string(),
@@ -1012,7 +1223,7 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
@@ -1052,7 +1263,7 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()] }),
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()] }),
                     default: Some("anon".to_string()),
                 })],
                 validators: vec![],
@@ -1077,7 +1288,7 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
@@ -1155,12 +1366,12 @@ mod tests {
                             crate::Member::Field(crate::Field { description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "first".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
+                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                             }),
                             crate::Member::Field(crate::Field { description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "last".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { validators: vec!["string".to_string()]}), default: None,
+                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                             }),
                         ],
                         validators: vec![],
@@ -1250,7 +1461,7 @@ mod tests {
                 members: vec![crate::Member::Field(crate::Field { description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar {
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None,
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
@@ -1564,5 +1775,177 @@ mod tests {
         // The decoded Document reconstructs into the same schema (name etc.).
         let reconstructed = crate::construct_schema(&decoded.document);
         assert_eq!(reconstructed.name, "my-schema");
+    }
+
+    // ── Encoded scalars (§7.1 / TEL §21.7) ──────────────────────────────
+
+    use crate::Codec;
+    use std::rc::Rc;
+
+    /// Toy codec for tests: canonical decimal integer text ↔ BinTEL varint
+    /// bytes. The decoder is deliberately lenient about overlong varints,
+    /// which the B15 canonicality test exploits.
+    struct DecimalVarint;
+    impl Codec for DecimalVarint {
+        fn encode(&self, text: &str) -> Result<Vec<u8>, Diagnostic> {
+            let canonical = !text.is_empty()
+                && text.bytes().all(|b| b.is_ascii_digit())
+                && (text.len() == 1 || !text.starts_with('0'));
+            if !canonical {
+                return Err(Diagnostic::Scalar {
+                    message: "not a canonical decimal integer".to_string(),
+                    span: None,
+                });
+            }
+            let n: u64 = text.parse().map_err(|_| Diagnostic::Scalar {
+                message: "integer too large".to_string(), span: None,
+            })?;
+            Ok(encode_varint(n))
+        }
+        fn decode(&self, bytes: &[u8]) -> Result<String, String> {
+            let (n, used) = decode_varint(bytes).ok_or("malformed varint")?;
+            if used != bytes.len() { return Err("trailing bytes after varint".to_string()); }
+            Ok(n.to_string())
+        }
+    }
+
+    fn varint_binding(name: &str) -> Option<Rc<dyn Codec>> {
+        if name == "decimal-varint" { Some(Rc::new(DecimalVarint)) } else { None }
+    }
+
+    fn amount_schema() -> Schema {
+        let src = "tel 1.0\n\nname codec-demo\n\nscalar Amount\n  validate string\n  encoding decimal-varint\n\ndocument\n  field amount Amount\n";
+        let parsed = crate::parse(src);
+        assert!(parsed.errors.is_empty(), "schema must parse: {:?}", parsed.errors);
+        crate::construct_schema(&parsed.document)
+    }
+
+    #[test]
+    fn encoded_scalar_exact_bytes_and_roundtrip() {
+        let schema = amount_schema();
+        let doc = crate::parse("tel 1.0\n\namount 300\n").document;
+        let root = encode_root_with_codecs(&doc, &schema, Some(&varint_binding)).unwrap();
+        // child count 1, keyword index 0, byte length 2, varint(300) = AC 02.
+        assert_eq!(root, vec![0x01, 0x00, 0x02, 0xAC, 0x02]);
+
+        let full = encode_document_with_signature_and_codecs(
+            &doc, &schema, &[[0u8; 32]], Some(&varint_binding)).unwrap();
+        let decoded = decode_document_with_codecs(
+            &full, &schema, Some(&varint_binding), true).unwrap();
+        let amount = decoded.document.children.iter()
+            .flat_map(|b| b.compounds.iter())
+            .find(|c| c.keyword == "amount").unwrap();
+        assert_eq!(crate::scalar_value_text(amount), "300");
+    }
+
+    #[test]
+    fn atom_scalar_and_default_scalar_use_codec() {
+        // `amount` is filled by an inline atom on `item`'s line (AtomScalar)
+        // and `count` is a required defaulted scalar that is absent
+        // (DefaultScalar); both must pass through the codec.
+        let src = "tel 1.0\n\nname codec-demo\n\nrecord Item\n  field amount Amount\n  field count Count 7\n\nscalar Amount\n  validate string\n  encoding decimal-varint\n\nscalar Count\n  validate string\n  encoding decimal-varint\n\ndocument\n  field item Item\n";
+        let parsed = crate::parse(src);
+        assert!(parsed.errors.is_empty(), "schema must parse: {:?}", parsed.errors);
+        let schema = crate::construct_schema(&parsed.document);
+        let doc = crate::parse("tel 1.0\n\nitem 300\n").document;
+        let root = encode_root_with_codecs(&doc, &schema, Some(&varint_binding)).unwrap();
+        // root: child count 1, item kidx 0, item child count 2,
+        //   amount kidx 0 + len 2 + AC 02 (atom-derived),
+        //   count kidx 1 + len 1 + 07 (default-derived).
+        assert_eq!(root, vec![0x01, 0x00, 0x02, 0x00, 0x02, 0xAC, 0x02, 0x01, 0x01, 0x07]);
+    }
+
+    #[test]
+    fn value_hash_reflects_codec_bytes() {
+        let schema = amount_schema();
+        let doc = crate::parse("tel 1.0\n\namount 300\n").document;
+        let hash = value_hash_with_codecs(&doc, &schema, Some(&varint_binding)).unwrap();
+        let expected = *blake3::hash(&[0x01, 0x00, 0x02, 0xAC, 0x02]).as_bytes();
+        assert_eq!(hash, expected);
+    }
+
+    #[test]
+    fn encode_rejected_value_is_error() {
+        let schema = amount_schema();
+        let doc = crate::parse("tel 1.0\n\namount 007\n").document; // non-canonical decimal
+        let err = encode_root_with_codecs(&doc, &schema, Some(&varint_binding)).unwrap_err();
+        assert!(err.message.contains("rejected by codec"), "{:?}", err);
+    }
+
+    #[test]
+    fn encode_missing_codec_is_error() {
+        let schema = amount_schema();
+        let doc = crate::parse("tel 1.0\n\namount 300\n").document;
+        let err = encode_root_with_codecs(&doc, &schema, None).unwrap_err();
+        assert!(err.message.contains("does not resolve"), "{:?}", err);
+    }
+
+    #[test]
+    fn b13_unknown_codec_at_decode() {
+        let schema = amount_schema();
+        let doc = crate::parse("tel 1.0\n\namount 300\n").document;
+        let full = encode_document_with_signature_and_codecs(
+            &doc, &schema, &[[0u8; 32]], Some(&varint_binding)).unwrap();
+        let err = decode_document(&full, &schema).unwrap_err();
+        assert_eq!(err.code, BCode::B13);
+    }
+
+    #[test]
+    fn b14_codec_decode_failure() {
+        let schema = amount_schema();
+        // Hand-craft: magic + signature + root with a truncated varint as
+        // the value bytes (0x80 alone never terminates).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        let signature = schema_signature_from_hashes(&[[0u8; 32]]);
+        bytes.extend(encode_varint(signature.len() as u64));
+        bytes.extend_from_slice(&signature);
+        bytes.extend_from_slice(&[0x01, 0x00, 0x01, 0x80]); // 1 child, kidx 0, len 1, bad varint
+        let err = decode_document_with_codecs(
+            &bytes, &schema, Some(&varint_binding), false).unwrap_err();
+        assert_eq!(err.code, BCode::B14);
+    }
+
+    #[test]
+    fn b15_reencode_canonicality_mismatch() {
+        let schema = amount_schema();
+        // Overlong varint for 300: AC 82 00 — DecimalVarint's lenient
+        // decoder accepts it, but re-encoding yields AC 02, so the
+        // OPTIONAL canonicality check reports B15.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        let signature = schema_signature_from_hashes(&[[0u8; 32]]);
+        bytes.extend(encode_varint(signature.len() as u64));
+        bytes.extend_from_slice(&signature);
+        bytes.extend_from_slice(&[0x01, 0x00, 0x03, 0xAC, 0x82, 0x00]);
+        // Without the check the non-canonical bytes decode "successfully"…
+        let lenient = decode_document_with_codecs(
+            &bytes, &schema, Some(&varint_binding), false).unwrap();
+        let amount = lenient.document.children.iter()
+            .flat_map(|b| b.compounds.iter())
+            .find(|c| c.keyword == "amount").unwrap();
+        assert_eq!(crate::scalar_value_text(amount), "300");
+        // …with it, the canonicality violation is detected.
+        let err = decode_document_with_codecs(
+            &bytes, &schema, Some(&varint_binding), true).unwrap_err();
+        assert_eq!(err.code, BCode::B15);
+    }
+
+    #[test]
+    fn self_contained_roundtrip_with_encoding() {
+        let src = "tel 1.0\n\nname codec-demo\n\nscalar Amount\n  validate string\n  encoding decimal-varint\n\ndocument\n  field amount Amount\n";
+        let schema_doc = crate::parse(src).document;
+        let composed = crate::construct_schema(&schema_doc);
+        let hashes = schema_component_hashes(&schema_doc);
+        let doc = crate::parse("tel 1.0\n\namount 300\n").document;
+        let bytes = encode_document_self_contained_with_codecs(
+            &doc, &schema_doc, &composed, &hashes, Some(&varint_binding)).unwrap();
+        let decoded = decode_document_self_contained_with_codecs(
+            &bytes, Some(&varint_binding), true).unwrap();
+        assert_eq!(decoded.schema.scalars[0].encoding, Some("decimal-varint".to_string()));
+        let amount = decoded.document.children.iter()
+            .flat_map(|b| b.compounds.iter())
+            .find(|c| c.keyword == "amount").unwrap();
+        assert_eq!(crate::scalar_value_text(amount), "300");
     }
 }

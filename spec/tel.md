@@ -1317,7 +1317,7 @@ of the document being parsed against it. A schema that triggers any E2xx conditi
 
 #### Validation Error Recovery
 
-All validation errors (E301 through E311) are self-contained: they do not have cascading effects on
+All validation errors (E301 through E313) are self-contained: they do not have cascading effects on
 the remainder of the type assignment or validation process. An implementation MUST record the error
 and continue processing remaining nodes as if the erroneous node were absent or were assigned the
 most plausible available type. Specific recovery notes:
@@ -1433,6 +1433,7 @@ interface RecordDefinition {
 interface ScalarDefinition {
   name: TypeName;
   validators: string[];
+  encoding: string | null;
   description: string | null;
 }
 
@@ -1457,6 +1458,7 @@ interface Struct {
 
 interface Scalar {
   validators: string[];
+  encoding: string | null;
 }
 
 interface Flag {}
@@ -1565,8 +1567,13 @@ A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) an
 list of `validators`; it is a named `Scalar`. A `scalar` declaration MUST carry at least one
 `validate` line (this is enforced structurally by the `tel-schema` schema, whose `Scalar`
 record makes `validate` a required repeatable member; an unconstrained scalar names the
-built-in `String` instead). Layer-merge of same-name `ScalarDefinition`s concatenates the
-`validators` lists in declaration order, deduplicated.
+built-in `String` instead). A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
+kebab-case name of a codec (§21.7) defining the binary representation of the scalar's values in
+BinTEL — or `null` when absent. A declared encoding additionally constrains validity: a value
+the codec's encoder rejects is invalid (**E312**), in AND-conjunction with the declared
+validators. Layer-merge of same-name `ScalarDefinition`s concatenates the `validators` lists in
+declaration order, deduplicated, and merges `encoding` per §20.3 (a layer MAY add an encoding
+where the base has none; a conflicting non-null encoding is **E218**).
 
 A `SelectDefinition` has a `name` (subject to the same uniqueness rule), a non-empty list of
 `variants`, and a list of `validators`. It is a named sum type. Each variant has a kebab-case
@@ -1595,7 +1602,7 @@ A `Reference` is a `Type` whose semantic content is delegated to the Definition 
 name. During type assignment (§20.2) a value position whose schema type is `Reference(N)` is
 treated as if its type were the resolved Definition: a `RecordDefinition` resolves to the
 `Struct` formed from its `members` and `validators`; a `ScalarDefinition` resolves to the
-`Scalar` formed from its `validators`. A `SelectDefinition` is never the resolved type of a
+`Scalar` formed from its `validators` and `encoding`. A `SelectDefinition` is never the resolved type of a
 plain `Reference`: a sum at a member position is always introduced via `SelectRef` rather than
 `Field.type`, because a `Field` has a single keyword whereas a sum has none. A `Reference` whose
 `name` resolves to a `SelectDefinition` is invalid (**E217**); a `Reference` whose `name` does
@@ -1686,6 +1693,11 @@ A `Scalar` type represents a leaf value constrained by zero or more validators.
 during validation, and the value is accepted only when every validator returns `Valid`
 (AND-conjunction). An empty `validators` list means the Scalar accepts any text. Validator
 semantics are defined in §21.
+
+`Scalar.encoding` is either `null` or the name of a codec (§21.7). A non-null encoding both
+defines the scalar's BinTEL representation (§7.1 of the BinTEL Specification) and acts as one
+further validity constraint, applied after the declared validators (§21.7). The built-in scalars
+(`String`, `Identifier`, `Sigil`, `TypeName`) all have `encoding = null`.
 
 `Field.default` is either `null` (no default) or a string giving the value to be used when the
 member is absent. A non-null default MAY only be specified on a `Field` whose type resolves to a
@@ -1836,6 +1848,10 @@ A schema is invalid if any of the following holds:
 - a `Reference` resolves to a `SelectDefinition` (a sum at a position expecting a single typed
   value), or a `SelectRef.reference` resolves to a `RecordDefinition` or `ScalarDefinition`
   (a non-sum at a position expecting a sum) (**E217**)
+- during layer composition, a layer's `ScalarDefinition` declares a non-null `encoding` while
+  the `ScalarDefinition` being merged already has a *different* non-null `encoding`
+  (**E218**). Restating the base's encoding is a benign no-op; declaring an encoding where the
+  base has none adds it (§20.3). Removal has no syntax and is structurally impossible.
 
 #### Schema Errors (E2xx)
 
@@ -1858,6 +1874,7 @@ A schema is invalid if any of the following holds:
 | E215 | A layer declares `repeatable` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `repeatable`) | The offending field/select declaration         |
 | E216 | `Exclude` appears outside a layer's `SelectDefinition` body — i.e. inside `Schema.document`, a `RecordDefinition`, or a base-side `SelectDefinition` | The offending `exclude` compound |
 | E217 | A `Reference` resolves to a `SelectDefinition`, or a `SelectRef.reference` resolves to a `RecordDefinition` / `ScalarDefinition` (kind mismatch between member shape and resolved Definition) | The offending `TypeName` atom |
+| E218 | A layer's same-name `scalar` declares an `encoding` conflicting with the base ScalarDefinition's non-null `encoding` (an encoding, once declared, cannot be changed or removed by a layer) | The layer's `encoding` field |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -1868,10 +1885,12 @@ by the schema.
 **Reference resolution.** Wherever this algorithm asks "is T a Struct?", "is T a Scalar?", etc.,
 the question is asked of the type T after **reference resolution**: if T is a `Reference(N)`, T
 is replaced by the `Struct` formed from the `members` of the matching `RecordDefinition`, or by
-the `Scalar` formed from the `validators` of the matching `ScalarDefinition`. If `N` is one of
+the `Scalar` formed from the `validators` and `encoding` of the matching `ScalarDefinition`. If
+`N` is one of
 the predefined built-in type names (§20.5), the Reference resolves directly to the built-in:
 `Flag` resolves to the `Flag` type, and `String`, `Identifier`, `Sigil`, and `TypeName` each
-resolve to a `Scalar` whose single validator is the corresponding built-in validator (§21.5).
+resolve to a `Scalar` whose single validator is the corresponding built-in validator (§21.5)
+and whose `encoding` is null.
 A `Reference(N)` resolving to a `SelectDefinition` is **E217** (a sum cannot inhabit a
 single-typed position).
 
@@ -2049,7 +2068,9 @@ list is organised by the structural duality between records and selects.
 - **Add a Definition** (record, scalar, or select) to the composed namespace, when the name
   does not already exist in the merged namespace.
 - **Refine a ScalarDefinition in place.** A same-name `scalar` in a layer appends validators to
-  the base's `validators` list (in source order, deduplicated).
+  the base's `validators` list (in source order, deduplicated), and MAY declare an `encoding`
+  when the base has none, or restate the base's existing one (**E218** on conflict). Adding an
+  encoding is tightening (§24.4): it can only shrink the set of accepted values.
 - **Append validators** to a Struct, RecordDefinition, or SelectDefinition. A layer's
   `validate K` lines at any such position are appended (in source order, deduplicated) to the
   base's `validators` list; validators apply in declaration order and AND-conjuncted (§21.1),
@@ -2074,6 +2095,8 @@ detecting any of them MUST report the corresponding error:
   `"default"` or `"tight"` (**E215**).
 - Remove a validator from a Struct, Scalar, RecordDefinition, or SelectDefinition (validators
   are append-only across layers; a layer's `validate K` adds K, never removes an existing K).
+- Change a `ScalarDefinition`'s non-null `encoding` to a different name (**E218**). (Removal
+  has no syntax; addition where the base has none is permitted.)
 - Change a `Field`'s `default`, or a `Field`'s declared `Type` to a structurally different
   type that is not a Struct-to-Struct refinement.
 
@@ -2167,7 +2190,13 @@ loosening an already-tight or default cardinality is rejected.
 member lists and merges `validators` by the append-and-deduplicate rule.
 
 **`MergeScalar(base, layer): ScalarDefinition`** merges the `validators` lists by the
-append-and-deduplicate rule.
+append-and-deduplicate rule, and merges `encoding` as follows: if the layer's `encoding` is
+null, the base's is retained; if the base's is null, the layer's is adopted; if both are
+non-null and equal, the restatement is a benign no-op; if both are non-null and different, the
+schema is invalid (**E218**). A layer-added `encoding` changes the BinTEL representation of the
+affected scalar's values; this is sound because a BinTEL document is always encoded and decoded
+under its full composed schema (identified by its signature, BinTEL §8), never under a prefix
+of the composition.
 
 **`MergeSelect(base, layer): SelectDefinition`** merges a layer's SelectDefinition body into the
 base SelectDefinition:
@@ -2220,7 +2249,7 @@ list T (for `records`), scalar list S, and select list U:
 #### Layer Validity Constraints
 
 The schema validity constraints, including those checked at layer-composition time (**E204**,
-**E205**, **E206**, and **E210**–**E217**), are catalogued in §20.1; the algorithms above define
+**E205**, **E206**, and **E210**–**E218**), are catalogued in §20.1; the algorithms above define
 where in composition each is detected.
 
 ### 20.4 BinTEL
@@ -2228,7 +2257,10 @@ where in composition each is detected.
 The binary encoding of the semantic model, BinTEL, is defined in the companion
 [BinTEL Specification](bintel.md). BinTEL provides deterministic serialization of typed TEL
 documents and defines the schema signature and value hash constructions used for schema
-identification (§8.1) and compatibility checking (§8.2).
+identification (§8.1) and compatibility checking (§8.2). Values of a scalar whose
+`ScalarDefinition` declares an `encoding` are carried in BinTEL as the bytes produced by the
+named codec rather than as UTF-8 text (BinTEL §7.1); the codec interface, laws, and binding
+mechanism are defined in §21.7.
 
 When a BinTEL document is to be carried in a text-oriented context, it MAY be encoded as Unicode
 text using [BASE-256](base256.md), defined as a companion specification. The BASE-256 textual
@@ -2260,7 +2292,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `layer`         | `Schema.layers[i]`                             |
 | `sigil`         | `Schema.sigil`                                 |
 | `record`        | A `RecordDefinition`: `Schema.records[i]` at schema root, or `Layer.records[i]` inside a `layer` compound. The first inline atom is the record's `TypeName`. |
-| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is one or more `validate <name>` lines. |
+| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is one or more `validate <name>` lines, optionally followed by an `encoding` line. |
 | `select`        | At top level (or inside `layer`): a `SelectDefinition` — `Schema.selects[i]` or `Layer.selects[i]`. First inline atom is the `TypeName`; body is `variant`, `validate`, and (in layers only) `exclude` lines. **At a member position** (inside a `record` body, the `document` block, or a layer's `overlay` block): a `SelectRef` — the first inline atom is the `TypeName` of the referenced SelectDefinition; polarity is per use site. There is no inline-anonymous form; every select is named. |
 | `overlay`       | `Layer.overlay` — the struct whose members are merged into the composed document root by the algorithm in §20.3. |
 | `field`         | A `Field` member. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
@@ -2273,6 +2305,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `type`          | The type-name field of a `Field` or a `Variant`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
 | `reference`     | `SelectRef.reference` — the `TypeName` of the referenced `SelectDefinition`. Carried as the first inline atom of a member-position `select` compound (or, less commonly, as an explicit `reference <TypeName>` child compound). |
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
+| `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is E308 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` member it can never be filled by an inline atom. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E203 otherwise). |
 | `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
 | `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E216 otherwise). |
@@ -2320,6 +2353,11 @@ select Status optional
 
 introduces a non-required SelectRef referencing the `Status` SelectDefinition.
 
+Member order in `Scalar` (the tel-schema record for `scalar` declarations) is `name`,
+`validate` (required, repeatable), `encoding` (optional), `description` (optional). Only `name`
+and `validate` are inline-atom-fillable; `encoding` and `description` are always compound
+children.
+
 **References.** A `Field.type`, `Variant.type`, or `SelectRef.reference` resolves through the
 composed namespace described above. If the name is `Flag`, `String`, `Identifier`, `Sigil`, or
 `TypeName` it short-circuits to the built-in. Otherwise it must match a `record`, `scalar`, or `select`
@@ -2345,10 +2383,10 @@ The pinned value, computed against the canonical
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | `d4289b0fc6b7f666c9269a135d509ff3973bcea734fbe777b8f907045d3df8a9`   |
-| BASE-256   | `ÔШқďÆҷǶfωȦҚГѝPƟỳẗĻώƧ4ûçwᾸùćĄѝĽӸΩ`                                  |
+| BLAKE3-256 | `da84d460755492014ab924b056045eb07fa41626d684dd78d388f2ccdbcff300`   |
+| BASE-256   | `ῚẄÔŠuTƒḁJιḤưVĄŞưſƤЖȦӖẄӝxǓẈỲỌӛϏỳḀ`                                  |
 
-The BinTEL document root encoding of `tel-schema.tel` is 1641 bytes; the raw bytes are recorded
+The BinTEL document root encoding of `tel-schema.tel` is 1691 bytes; the raw bytes are recorded
 in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
 [`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
 Specification.
@@ -2401,8 +2439,9 @@ fields of the `Schema` model:
 2b. **`ScalarDefinition` construction.** From a `scalar` element: take the `name` child (or
    first inline atom, a `TypeName`) as `ScalarDefinition.name`; for each `validate` child within
    the element, append the child's inline-atom text to `ScalarDefinition.validators`, in source
-   order; set `ScalarDefinition.description` from the optional `description` child's text, or
-   `null` if absent.
+   order; set `ScalarDefinition.encoding` from the optional `encoding` child's text, or `null`
+   if absent; set `ScalarDefinition.description` from the optional `description` child's text,
+   or `null` if absent.
 2c. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
    (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
    append a `Variant` to `SelectDefinition.variants` per step 3; for each `validate` child,
@@ -2562,10 +2601,12 @@ order they are listed; an implementation MAY short-circuit on the first `Invalid
 invoke every validator regardless (the document is invalid in either case if any returns
 `Invalid`).
 
-Validators live in a **single shared namespace**: a name like `non-empty` refers to one
-helper, which is dispatched on the request kind (scalar or struct) at invocation time. A
-helper that supports only one kind returns `Invalid` with an appropriate message when invoked
-on the other.
+Validators — and codec names (§21.7) — live in a **single shared namespace**: a name like
+`non-empty` refers to one helper, which may serve as a scalar validator, a struct validator, a
+codec, or any combination; each role is exercised through its own interface. A validator is
+dispatched on the request kind (scalar or struct) at invocation time; a helper that does not
+support the requested role fails that role (`Invalid` for a validation request; unresolved for
+a codec binding).
 
 This specification mandates only the four built-in validators required by `tel-schema` itself
 (§21.5). Every other validator is application-defined; a parser is configured with a callback
@@ -2701,6 +2742,11 @@ diagnostic identifying the unknown name; the affected value or struct then fails
 a validator expresses a constraint, and a consumer that cannot check the constraint cannot
 claim the document satisfies it.
 
+The analogous resolution of `encoding` names to codecs is defined in §21.7 with a different
+shape — a binding that resolves a name once to a `Codec` object for repeated invocation —
+because codecs are invoked on every value of every encoded scalar and must not pay a per-value
+name-resolution cost.
+
 ### 21.5 Built-in Validators
 
 This specification does not mandate a portable validator library — applications choose which
@@ -2797,6 +2843,112 @@ the parent type distinguish the cases.
 | E309 | Compound children of the same member are not contiguous                                               | The keyword of the non-contiguous child (the second group's first child)                                 |
 | E310 | A scalar value or struct element failed validation by a named validator                               | As resolved by §21.3 from the returned `Diagnostic`                                                       |
 | E311 | `Flag`-typed compound has atoms or compound children                                                  | The first atom or child of the `Flag` compound                                                           |
+| E312 | A scalar value was rejected by the encoder of its declared `encoding` (§21.7; the value has no binary representation) | As resolved by §21.3 from the returned `Diagnostic`                                              |
+| E313 | A scalar's declared `encoding` was not resolved by the configured codec binding (§21.7; the constraint cannot be checked) | The scalar value's text span                                                                 |
+
+### 21.7 Scalar Encodings (Codecs)
+
+A `ScalarDefinition` MAY name an **encoding** (§20): a **codec** defining a binary
+representation for the scalar's values. A scalar's semantic value is always its text (§18.2); a
+codec changes neither the semantic model nor the canonical text serialization (§22.3). It has
+exactly two effects:
+
+- **Representation.** In BinTEL, values of the scalar are carried as the codec's bytes rather
+  than as UTF-8 text (BinTEL §7.1). Types conventionally written as text — UUIDs, timestamps,
+  IP addresses, large integers, hashes — are thereby stored and hashed compactly.
+- **Validity.** The codec's encoder acts as a validator: a value the encoder rejects is
+  invalid (**E312**). A valid value is therefore *valid by construction of its binary
+  representation*: the encoder is total on valid values, while the decoder is partial.
+
+Codec names are kebab-case identifiers in the shared helper namespace of §21.1. Every codec is
+application-defined; this specification defines only the interface, the laws, and the binding
+mechanism. `tel-schema` itself declares no encodings.
+
+#### Codec Interface
+
+```typescript
+// Resolution is performed once per encoding name (per composed schema);
+// the returned Codec is then invoked once per value, many times, with no
+// further lookup. Returning null means the name is not recognised.
+type CodecBinding = (encoding: string) => Codec | null;
+
+interface Codec {
+  // Total on the codec's accepted texts; rejection is invalidity (E312).
+  encode(text: string): Encoded | Invalid;            // Invalid per §21.2
+  // Partial: succeeds exactly on the image of encode (law C3).
+  decode(bytes: Uint8Array): Decoded | CodecFailure;
+}
+
+interface Encoded { bytes: Uint8Array; }
+interface Decoded { text: string; }
+interface CodecFailure { message: string; }
+```
+
+A host implementation supplies a `CodecBinding` the same way it supplies the validation
+callback of §21.4 (a function parameter, a trait implementation, an interface injection). An
+implementation SHOULD resolve each distinct encoding name at most once per composed schema and
+reuse the resolved `Codec` for every value; the interface is shaped so repeated invocation
+carries no per-value resolution cost.
+
+#### Codec Laws
+
+Every codec bound to an encoding name MUST satisfy:
+
+- **C1 (Determinism).** `encode` and `decode` are pure functions of their input.
+- **C2 (Round-trip).** For every accepted text `t`, `decode(encode(t))` succeeds and yields a
+  text code-point-identical to `t`.
+- **C3 (Image-exactness).** `decode(b)` succeeds if and only if `b = encode(t)` for some
+  accepted `t`; equivalently, whenever `decode(b)` yields `t`, `encode(t) = b` byte-for-byte.
+  Together with C2 this makes `encode` a bijection between accepted texts and accepted byte
+  sequences (injectivity follows from C2). C3 is what keeps the value hash a function of the
+  semantic model (BinTEL §3): without it one semantic value could have several byte
+  representations with distinct hashes.
+- **C4 (Agreement).** Two applications that bind the same encoding name for use with the same
+  schema MUST bind codecs with identical acceptance sets and identical text↔byte mappings. P2
+  and P4 (§22.4), and the exchange of value hashes between implementations, depend on C4. An
+  encoding name SHOULD be treated as naming exact extensional behaviour; changed behaviour
+  requires a new name.
+
+C1–C3 are contract obligations, not mandated runtime checks: an implementation MAY trust a
+bound codec, and MAY instead verify C3 at decode time by re-encoding (BinTEL §7.8; a mismatch
+is B15) — a hardening measure with a per-value cost. A codec violating the laws is
+non-conforming; documents produced with it have no defined interchange semantics.
+
+#### Validation with an Encoding
+
+When a value's resolved `Scalar` type carries a non-null `encoding` and a `CodecBinding` is
+configured:
+
+1. The declared `validators` apply first, in declaration order, per §21.1.
+2. The encoding check applies last, in the same AND-conjunction: the implementation invokes
+   the bound codec's `encode` on the value text. `Invalid` is reported as **E312**, its
+   diagnostic translated per §21.3; the malformed-diagnostic rule of §21.3 applies with the
+   encoding name as the method. Codec diagnostics are always scalar-kind; a struct-kind
+   diagnostic from a codec is a contract violation.
+3. If the binding returns null for the name, the implementation MUST report **E313** against
+   the value: an unknown encoding MUST NOT be silently treated as satisfied (the §21.4
+   unknown-validator principle).
+4. Short-circuiting follows §21.1.
+
+Bytes produced by a validation-time `encode` MAY be discarded or retained for a later BinTEL
+encoding; by C1 the behaviours are indistinguishable.
+
+If no `CodecBinding` is configured at all, encoding checks are skipped during validation
+(mirroring §21.4's no-callback rule; no E312/E313 arises). Such a configuration can parse and
+validate text but cannot produce or consume BinTEL for schemas that name encodings: a BinTEL
+encoder or decoder MUST be configured with a binding resolving every encoding named by the
+composed schema (BinTEL §7.1, §7.8). An unresolved encoding at BinTEL-encode time is a
+configuration failure of the encoder, not an error of the document: the encoder MUST refuse
+and MUST NOT emit a partial document. At decode time it is **B13**.
+
+#### Defaults and Empty Values
+
+A defaulted required scalar (§20) takes its default text as its semantic value; that value is
+validated — and, in BinTEL, encoded — exactly like an explicitly written value. A default
+rejected by the scalar's codec therefore renders invalid (E312) every document that elides the
+member; schema authors SHOULD ensure defaults are codec-accepted. Empty text has no special
+status: `encode("")` may succeed (with empty or non-empty bytes) or fail, per the codec
+(BinTEL §7.5).
 
 ## 22. Reserialization and Editing
 
@@ -3170,14 +3322,18 @@ is. In particular, a Scalar value carried as a source atom round-trips through c
 serialisation as the same `text` string (per the LF-join rule of §14), so a multi-line scalar
 value is preserved byte-for-byte across the cycle.
 
-**P2. BinTEL round-trip.** For every well-typed semantic model M and the same schema S,
+**P2. BinTEL round-trip.** For every well-typed semantic model M, the same schema S, and any
+codec binding B that resolves every encoding named by S to codecs satisfying the laws of §21.7,
 
 ```
-bintel-decode(bintel-encode(M, S), S)  ≡  M
+bintel-decode(bintel-encode(M, S, B), S, B)  ≡  M
 ```
 
 The BinTEL encoder (§7 of the BinTEL Specification) and decoder (§7.8) are mutual inverses on
-well-typed semantic models. As with P1, only the semantic content is preserved.
+well-typed semantic models. As with P1, only the semantic content is preserved. For encoded
+scalars (BinTEL §7.1) the inverse property is supplied by codec laws C2 and C3 (§21.7): every
+value's bytes decode to exactly the text that was encoded. (When S names no encodings, B is
+irrelevant and may be omitted.)
 
 **P3. Canonical-text determinism.** For every well-typed semantic model M and schema S, and any
 two conforming implementations `f` and `g` of canonical serialization,
@@ -3201,13 +3357,17 @@ f(M, S)  =  g(M, S)
 
 (byte-equal), which combined with the canonical child order of §7.2 (BinTEL spec) makes the
 **value hash** (§3 of the BinTEL Specification) a function of the semantic model alone — two
-implementations that agree on M and S MUST produce identical value hashes.
+implementations that agree on M and S MUST produce identical value hashes. When S names
+encodings, `f` and `g` are each composed with a codec binding; byte-equality therefore
+additionally requires law C4 of §21.7 — two implementations binding the same encoding name for
+the same schema MUST bind codecs with identical text-to-byte mappings, or their value hashes
+diverge. Under C1–C4 the value hash remains a function of the semantic model and schema alone.
 
 A conforming implementation that fails any of P1–P4 is non-conforming. A test suite for a TEL
 implementation SHOULD include cases that exercise each property over a representative set of
 documents (including pathological cases: multi-line scalar values requiring source/literal
-form, repeatable Fields with multiple atoms, layered schemas, exclude operations, and
-Reference cycles).
+form, repeatable Fields with multiple atoms, layered schemas, exclude operations, Reference
+cycles, and scalars with declared encodings, including empty and default values).
 
 ### 22.5 Concurrent Edit Composition (Informative)
 
@@ -3355,7 +3515,7 @@ The recursive type structure of §20, written compactly:
 
 ```
 T  ::=  Struct(M*, V*)        — record / product
-     |  Scalar(V*)            — leaf value
+     |  Scalar(V*, e?)        — leaf value, optionally binary-encoded
      |  Flag                  — presence-only
      |  Reference(N)          — named recursive type
 
@@ -3367,6 +3527,7 @@ X  ::=  Variant(K, T)
 K, V     ::=  identifier      (per §20.7)
 N        ::=  type-name       (per §20.7)
 d        ::=  text            (default value, optional)
+e        ::=  identifier      (encoding / codec name, optional; §21.7)
 r, p     ::=  true | false    (required, repeatable)
 ```
 
@@ -3404,8 +3565,9 @@ of type T". It is defined by induction on T:
                       Δ ⊢ flag-node : Flag
 
 [Mem-Scalar]          For every v in V*, validator v applied to text returns Valid.
+                      If e is present, encode_e(text) succeeds (§21.7).
                       ―――――――――――――――――――――――――――――――
-                      Δ ⊢ scalar-node(text) : Scalar(V*)
+                      Δ ⊢ scalar-node(text) : Scalar(V*, e?)
 
 [Mem-Struct]          d has children c_1, …, c_n matching M* per §20.2 atom + compound phases
                       (member-fill, required, repeatable, contiguity).
@@ -3439,8 +3601,9 @@ enough information to satisfy any consumer that expects type T₂.
 [Sub-Flag]            Flag <: Flag
 
 [Sub-Scalar]          V₂ ⊆ V₁                          (sub has at least super's validators)
+                      e₂ absent  ∨  e₁ = e₂            (sub keeps super's encoding; may add one)
                       ――――――――――――――――――――――――
-                      Scalar(V₁) <: Scalar(V₂)
+                      Scalar(V₁, e₁?) <: Scalar(V₂, e₂?)
 
 [Sub-Struct]          There is a strictly increasing map φ from M₂'s positions into M₁'s
                       positions such that M₁[φ(j)] <:_M M₂[j] for every position j of M₂.
@@ -3487,6 +3650,12 @@ enough information to satisfy any consumer that expects type T₂.
   accept variants the subtype never produces.
 - **Scalars are subtyped by tightening.** A Scalar with more validators is a subtype:
   values that satisfy the subtype's validators automatically satisfy the supertype's.
+- **Encodings are compared by name.** Membership under the subtype must imply membership
+  under the supertype; when the supertype demands that `encode_{e₂}` succeed, only an
+  identical encoding guarantees it — codecs are extensionally opaque (§21.7), so no
+  acceptance-subset relation between distinct names is knowable, and name equality is
+  required. When the supertype has no encoding, the subtype may add one (pure tightening,
+  like adding a validator).
 - **`required` is tightenable.** Going from `required: false` to `required: true` is the
   subtype direction: any value satisfying the stricter rule also satisfies the lax one.
 - **`repeatable` is tightenable in the opposite direction.** Going from `repeatable:
@@ -3519,7 +3688,7 @@ Let `(D_1, Δ_1)` be the result of applying `L` to `(D_0, Δ_0)` per §20.3. The
 
 That is, **applying a layer always produces a subtype of the base**.
 
-**Proof sketch.** The permitted operations of §20.3 fall into seven subtype-producing
+**Proof sketch.** The permitted operations of §20.3 fall into eight subtype-producing
 categories. (Each of §20.3's permitted operations belongs to at least one category; adding a
 new Definition extends Δ without changing any existing type, and layers only ever *append*
 members, so [Sub-Struct]'s order-preservation premise always holds.) The categories are:
@@ -3542,11 +3711,14 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
    one with `p₁ = false`), the tightening is subtype-producing.
 7. **Add struct or scalar validator** — `V_1 ⊇ V_0`. By [Sub-Struct] or [Sub-Scalar],
    the type is a subtype.
+8. **Add encoding to a ScalarDefinition** — `Scalar(V, ∅) → Scalar(V, e)`. By
+   [Sub-Scalar] (premise `e₂ absent`), subtype-producing.
 
 §20.3 forbids the supertype-producing operations: removing a Field, adding a variant to
 an existing Select, loosening `required` from true to false (E214), loosening
-`repeatable` from false to true (E215), dropping a validator. By construction, no
-permitted layer operation moves in the supertype direction.
+`repeatable` from false to true (E215), dropping a validator, changing a non-null
+encoding (E218). By construction, no permitted layer operation moves in the supertype
+direction.
 
 By transitivity ([Sub-Trans]), the iterative application of layers yields a chain of
 subtypes:
@@ -3568,8 +3740,8 @@ The composed schema is a subtype of the base. ∎
 π_{T₂}(d) = case (T₂, d) of:
 
   Flag, flag-node                  → flag-node
-  Scalar(V₂), scalar-node(text)    → scalar-node(text)
-                                     (validators in T₂ are checked separately)
+  Scalar(V₂, e₂?), scalar-node(text) → scalar-node(text)
+                                     (validators and encoding in T₂ are checked separately)
   Struct(M₂, V₂), struct-node(c*)  → struct-node(c'*) where c'* is
                                      { π_{type-of-m_i-in-T₂}(c_i)
                                        | c_i is a child whose keyword appears in M₂'s
@@ -3585,9 +3757,11 @@ pass through unchanged.
 **Proof sketch.** By induction on T₂:
 
 - **Flag.** π is the identity. The result is the same flag-node, of type Flag. ✓
-- **Scalar(V₂, _).** π is the identity on the text. By [Sub-Scalar], `V₂ ⊆ V₁`; since
+- **Scalar(V₂, e₂?).** π is the identity on the text. By [Sub-Scalar], `V₂ ⊆ V₁`; since
   `d` satisfied every validator in `V₁`, it satisfies every validator in `V₂` (subset).
-  So `π_{Scalar(V₂)}(d) : Scalar(V₂)`. ✓
+  Also by [Sub-Scalar], `e₂` is absent or equals `e₁`; since `d` satisfied
+  `encode_{e₁}` when `e₁` is present, any encoding premise of T₂ is satisfied.
+  So `π_{Scalar(V₂)}(d) : Scalar(V₂, e₂?)`. ✓
 - **Struct(M₂, V₂).** For each `m₂ ∈ M₂`, [Sub-Struct] gives a matching `m₁ ∈ M₁` with
   `m₁ <:_M m₂`. The corresponding child in `d` has a type that's a subtype of `type-of-m₂`
   by [Sub-Field] or [Sub-Select]. By IH on the child, `π_{type-of-m₂}(child) :
@@ -3630,6 +3804,9 @@ LSP gives the schema ecosystem a useful guarantee:
   the subset relation trivially). A schema author who wants a meaningful subtype
   refinement is expected to add validators that genuinely restrict; the type system
   does not check this.
+- **Variance of encodings.** Encoding compatibility is by name only: two codecs with
+  extensionally identical behaviour under different names are unrelated by `<:`, and the
+  relation cannot see whether one codec's acceptance set contains another's.
 - **Cross-document subtyping.** Two distinct schemas (different base names) are not
   subtypes of each other under this relation, even if their structural shapes happen to
   match. Subtyping is meaningful only within a single base-schema family (the same
@@ -3642,8 +3819,8 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E123** (parsing; E110 is reserved, §19.5), **E201–E217** (schema),
-and **E301–E311** (validation); every code is referenced at the point
+taxonomy comprises **E101–E123** (parsing; E110 is reserved, §19.5), **E201–E218** (schema),
+and **E301–E313** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
 tables of §19.3, §20.1, and §21.6. Worked examples —
 including TEL documents shown with their presentation model, semantic model, and BinTEL byte

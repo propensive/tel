@@ -40,6 +40,12 @@ composed schema in external-schema mode (§6.1) and in self-contained mode (§6.
 byte-identical document-root encodings, and therefore identical value hashes. Encoding mode is
 a transport choice; it does not affect document identity.
 
+For a scalar whose `ScalarDefinition` declares an `encoding` (§20 / §21.7 of the TEL
+Specification), the encoded value bytes — and therefore the value hash — are produced by the
+bound codec. Codec laws C1–C4 (TEL §21.7) keep the hash a well-defined function of the semantic
+model: two implementations binding the same encoding name for the same schema MUST produce
+identical bytes (C4), and each accepted text has exactly one byte representation (C3).
+
 The value hash of a schema document — the BLAKE3 digest over its full document-root encoding,
 including any `layer` children — is distinct from the **component hashes** used in a schema
 signature. A schema signature decomposes the schema into a base component (the schema document
@@ -60,14 +66,15 @@ The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas 
 of the TEL Specification — is:
 
 ```
-BLAKE3-256: d4289b0fc6b7f666c9269a135d509ff3973bcea734fbe777b8f907045d3df8a9
-BASE-256:   ÔШқďÆҷǶfωȦҚГѝPƟỳẗĻώƧ4ûçwᾸùćĄѝĽӸΩ
+BLAKE3-256: da84d460755492014ab924b056045eb07fa41626d684dd78d388f2ccdbcff300
+BASE-256:   ῚẄÔŠuTƒḁJιḤưVĄŞưſƤЖȦӖẄӝxǓẈỲỌӛϏỳḀ
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` (1641 BinTEL bytes; raw
+A conforming implementation that encodes the canonical `tel-schema.tel` (1691 BinTEL bytes; raw
 bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
+`tel-schema` declares no encodings, so this vector's derivation involves no codec.
 
 ## 4. Integer Encoding
 
@@ -197,6 +204,11 @@ A BinTEL document in self-contained mode consists of the following fields in ord
    schema by stripping the `layer` compounds to obtain the base schema, treating each `layer`
    compound as a tel-schema `Layer` Definition (§8.1), and applying the layers in source order
    per §20.3 of the TEL Specification.
+
+   The embedded schema body is governed by `tel-schema`, which declares no encodings; decoding
+   the embedded body therefore never requires a codec binding, and the bootstrap of §7.8 is
+   unaffected by codecs. Only the document root (field 4) may contain encoded scalars, governed
+   by the schema the body defines.
 4. **Document root**: encoded using the node encoding (§7.1), under the composed schema
    obtained from field 3. The bytes are identical to those of §6.1 field 3 for the same
    semantic content and the same composed schema; the embedded-schema preamble is the only
@@ -239,11 +251,30 @@ keyword order. The root is encoded as:
 3. Each child node, in canonical order (§7.2), using the struct, scalar, or flag encoding,
    recursively.
 
-**Scalar node** (schema type is `Scalar`):
+**Scalar node** (schema type is `Scalar`). Two forms, selected by the resolved `Scalar` type's
+`encoding` (§20 and §21.7 of the TEL Specification). The schema determines the form; no tag is
+encoded.
+
+*Text scalar* (`encoding` is null):
 
 1. The keyword index of this node (integer).
 2. The byte length of the UTF-8 encoding of the value string (integer).
 3. The UTF-8-encoded bytes of the value string.
+
+*Encoded scalar* (`encoding` is non-null):
+
+1. The keyword index of this node (integer).
+2. The byte length of `encode(text)` — the bytes returned by the bound codec's encoder applied
+   to the value string (integer).
+3. Those bytes, verbatim.
+
+The framing of the two forms is identical — a varint byte length followed by exactly that many
+value bytes — so a value's extent in the stream is always determined by the length prefix
+alone, without consulting any codec; only the interpretation of the value bytes differs. An
+encoder MUST be configured with a codec binding (TEL §21.7) resolving every encoding named by
+the composed schema; if any name is unresolved, or any value is rejected by its codec's encoder
+(the E312 condition — the document is invalid), the encoder MUST fail without emitting a
+document. BinTEL never encodes an invalid document.
 
 **Flag node** (schema type is `Flag`):
 
@@ -320,6 +351,12 @@ semantically present Scalar with an empty text. There is no encoding for "absent
 default": such a member is reported at type-assignment time as an E307 error against the
 document, and BinTEL never encodes an invalid document.
 
+For an *encoded* scalar the value bytes are `encode(text)`: empty *text* need not produce
+empty *bytes*, and a zero-length value is well-formed only if the bound codec's decoder
+accepts the empty byte sequence (law C3, TEL §21.7), in which case it denotes the unique text
+that encodes to it — not necessarily the empty text. The explicit-empty/defaulted-empty
+conflation above concerns the *text* and applies to encoded scalars unchanged.
+
 ### 7.6 Default Values
 
 BinTEL encodes the semantic model, in which a required `Scalar` member with a non-null default
@@ -336,12 +373,19 @@ document or filled by its default, and regardless of the atom form used by the s
 to declare the default. The same principle applies to every Scalar value encoded by §7.1:
 BinTEL preserves only the post-atom-decoded text, never atom-form presentation details.
 
+When the member's type is an encoded scalar, the default text passes through the codec exactly
+as an explicitly written value would: the encoded value bytes are `encode(default-text)`. A
+default rejected by the codec renders any document relying on it invalid (E312, TEL §21.7),
+and the encoder MUST fail rather than emit it. The atom-form-independence rule above is
+unaffected: the codec consumes the post-atom-decoded text.
+
 ### 7.7 Framing
 
 There are no pad bytes, alignment constraints, or inter-node delimiters between the encoded
 elements of a Struct's child list. The schema provides all type information needed to decode the
 stream unambiguously: at each child position the decoder consults the parent's keyword order to
-determine the child's type (Struct, Scalar, or Flag) from the next-read keyword index.
+determine the child's type (Struct, Scalar, or Flag) — and, for a Scalar, whether an encoding
+applies — from the next-read keyword index.
 
 ### 7.8 Decoding
 
@@ -352,6 +396,12 @@ before it begins reading the document root (the composed schema is obtained per 
 Specification), while in self-contained mode it obtains the composed schema from the embedded
 schema body inline, using the hardwired `tel-schema` axiom (§20.5 of the TEL Specification) as
 its bootstrap.
+
+When the composed schema names any encoding, the decoder MUST additionally be configured with
+a codec binding (TEL §21.7); it SHOULD resolve each distinct encoding name once, before or upon
+first use, and reuse the resolved codecs for every value. The pseudocode below treats
+`codec-binding` as ambient configuration. `tel-schema` declares no encodings, so the
+self-contained-mode bootstrap never requires a codec.
 
 The decoding algorithm is recursive. The pseudocode below treats `bytes` as a **stateful byte
 cursor**: each `next N bytes`, `decode-varint(bytes)`, and similar operation advances the cursor;
@@ -408,10 +458,15 @@ decode-element(bytes, parent-members):
     Struct(child-members):
       sub-children = decode-struct-body(bytes, child-members)
       return Struct-element { kidx, keyword, children: sub-children }
-    Scalar:
+    Scalar(validators, encoding):
       value-length = decode-varint(bytes)
       value-bytes = next value-length bytes        // B06 if cursor advances past EOI
-      value-text = UTF-8-decode(value-bytes)       // B07 if not valid UTF-8
+      if encoding == null:
+        value-text = UTF-8-decode(value-bytes)     // B07 if not valid UTF-8
+      else:
+        codec = codec-binding(encoding)            // B13 if unresolved
+        value-text = codec.decode(value-bytes)     // B14 on CodecFailure
+        // OPTIONAL hardening (TEL §21.7): if codec.encode(value-text) != value-bytes: B15
       return Scalar-element { kidx, keyword, text: value-text }
     Flag:
       return Flag-element { kidx, keyword }
@@ -420,6 +475,10 @@ decode-element(bytes, parent-members):
 A decoder MUST NOT distinguish between an element that was encoded from an atom and one that was
 encoded from a compound child: §7.2 makes the encoding canonical, so the source distinction is
 not recoverable from the BinTEL stream.
+
+Decoding does not re-run validators — BinTEL never encodes an invalid document, and the
+decoder trusts the producer for validator conformance exactly as it does for text scalars; the
+codec decode (B14) is the only value-level check applied to encoded scalars.
 
 A decoder MAY stop after producing the semantic model; converting it to a presentation model is
 outside BinTEL's scope (the source-level distinctions — atom form, remarks, comments, tabulation
@@ -582,17 +641,28 @@ Specification.
 | B04  | Schema signature does not decode against the available hash library (§8.2 decoding); zero or more than one valid hash sequence. |
 | B05  | A keyword index read from the stream is outside `[0, keyword-count(parent-members))` (§7.8). |
 | B06  | A Scalar value's byte length extends beyond the end of input.                                 |
-| B07  | A Scalar value's UTF-8 bytes are not a valid UTF-8 sequence.                                  |
+| B07  | A **text** Scalar value's UTF-8 bytes are not a valid UTF-8 sequence (does not apply to encoded scalars, whose value bytes are codec-defined). |
 | B08  | The document-root decoding procedure of §7.8 terminates with input bytes remaining (framing error per §6). |
 | B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
 | B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E209 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
 | B11  | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte. |
 | B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tel-schema` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
+| B13  | The composed schema declares an `encoding` for a Scalar but the decoder's codec binding (TEL §21.7) does not resolve that name. |
+| B14  | An encoded Scalar's value bytes are rejected by the bound codec's decoder — the bytes are not the encoding of any accepted text (including corrupt or non-canonical bytes, per law C3 of TEL §21.7). |
+| B15  | An implementation performing the OPTIONAL re-encode verification of TEL §21.7 found `encode(decode(b)) ≠ b` for an encoded Scalar's value bytes — a canonicality violation indicating a non-conforming codec or corrupted input. |
 
-All BinTEL error codes (B01–B12) are **fatal**: on any such error a conforming decoder MUST
+All BinTEL error codes (B01–B15) are **fatal**: on any such error a conforming decoder MUST
 abort decoding and MUST NOT emit any partial result. BinTEL is the authoritative serialisation
 of the semantic model — once any byte is found inconsistent with §6 / §7, no remaining bytes
 can be trusted to convey their nominal types and lengths. No recovery is specified for BinTEL.
+
+B13 merits a remark: because encoded-scalar framing is length-prefixed (§7.1), a decoder
+*structurally could* skip an unknown codec's value bytes and continue. For semantic decoding
+this is deliberately forbidden — a schema that names an encoding expresses both a
+representation and a constraint, and a consumer that cannot decode the representation cannot
+deliver the value (the TEL §21.4/§21.7 unknown-helper principle). Purely structural tools that
+never materialise values (e.g. a verbatim re-framer) MAY traverse value bytes opaquely, as
+they already do for text scalars.
 
 A decoder MAY perform additional consistency checks beyond those above (for example, checking
 that a Struct-typed child's claimed type is actually a Struct after Reference resolution); these
