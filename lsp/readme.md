@@ -3,10 +3,14 @@
 The `tel` executable, built in Scala with the Soundness ecosystem and packaged in the same style as
 [Flame](https://github.com/propensive/flame) (Mill + an Ethereal self-fetching native launcher).
 
-> **Build note:** the LSP depends on the locally-published Soundness **0.63.0**, which is built with
-> the propensive Scala fork (`3.9.0-RC1-propensive`); the build (`build.mill`) routes through that
-> fork toolchain via `$SOUNDNESS_SCALA_HOME`. `make publishLocal` in `~/work/soundness` produces the
-> 0.63.0 artifacts.
+> **Build note:** the LSP depends on the locally-published Soundness **0.64.0**, which is built with
+> the propensive Scala fork (`3.9.0-RC4-p8`). The build (`build.mill`) downloads that fork release
+> from [proscala](https://github.com/propensive/proscala) into a shared cache
+> (`~/.cache/soundness/proscala/<tag>/lib`) — the same one the Soundness build uses — so no local
+> compiler build is needed; set `$SOUNDNESS_SCALA_HOME` to a `make`-built `release` directory to
+> override. `SOUNDNESS_RELEASE_VERSION=0.64.0 ./mill soundness.all.publishLocal --transitive true`
+> in `~/work/soundness` produces the 0.64.0 artifacts (the version must be given explicitly; the
+> git-describe fallback picks up a stray tag).
 
 It is organised around subcommands:
 
@@ -26,16 +30,16 @@ preloaded, so it appears in `list` (and is resolvable) even on a fresh cache.
 
 Features so far:
 
-- **Diagnostics** — published on open and on change. The document is parsed with
-  [Stratiform](https://github.com/propensive/stratiform)'s TEL parser (`read[Tel]`) under an accrual
-  boundary, and every `TelError` is reported with its spec E-code (e.g. `E104`, `E107`), its message,
-  and a **source range**. Ranges come from Stratiform's position tracking (`import
-  parsing.trackPositions`, Soundness 0.63.0): parse errors carry the parser's position, and
-  schema/validation errors carry the position `Tel.Type.assign` fills into their `Tel.Focus` — so a
-  *schema* error points at the offending compound (its keyword span) rather than the document root. A
-  *schema* document (one whose pragma names the `tel-schema` meta-schema) is additionally validated
-  against the built-in meta-schema (`Tels.Axiom.tels`), surfacing malformed-schema errors such as
-  `E306` (unrecognised keyword).
+- **Diagnostics** — published on open and on change (the editor's incremental edits are applied by
+  `Lsp.listen`'s document store, so each change re-parses the spliced text). The document is parsed
+  with [Stratiform](https://github.com/propensive/stratiform)'s TEL parser (`read[Tel]`) under an
+  accrual boundary, and every `TelError` is reported with its spec E-code (e.g. `E104`, `E107`), its
+  message, and a **source range**. Ranges come from Stratiform's position tracking (`import
+  parsing.trackPositions`): parse errors carry the parser's position, and a schema/validation
+  error's `Tel.Focus` keyword path is resolved against the position-tracked document with
+  `tel.locate`. A *schema* document (one whose pragma names the `tel-schema` meta-schema) is
+  additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
+  malformed-schema errors such as `E306` (unrecognised keyword).
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
   highlights** — derived from an indentation scan of the source. (Stratiform positions are looked up
   by keyword *path*, which can't disambiguate same-keyword siblings, so the scan stays authoritative
@@ -63,9 +67,13 @@ Features so far:
       built-ins `String`, `Identifier`, `TypeName`, `Sigil`, `Flag`) at a `field`/`variant` type slot.
 
 The whole tool is a single object, `tel.TelServer`, in
-[`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala): it extends `exegesis.LspServer` (which
-supplies the JSON-RPC dispatch, the document store and the stdio transport) and overrides `main` to
-dispatch on the subcommand.
+[`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala). Its `main` dispatches on the
+subcommand; `tel lsp` calls `exegesis.Lsp.listen`, which supplies the JSON-RPC dispatch, the
+open-document store (applying the editor's incremental edits) and the stdio transport. Each feature
+is a **registration** in that call — `opened`, `hover`, `complete()`, `definition`, … — and the
+capabilities the server advertises are derived from exactly those registrations, so there is no
+capabilities record to keep in step. Within a handler the current `document`, the `workspace`, the
+`client` and the request's payload (`position`, `positions`, …) are ambient.
 
 ## Building and installing
 
@@ -138,6 +146,19 @@ The LSP matches that signature against each cached schema's base or fully-compos
   Stratiform's §20.1 schema-validity pass.
 - **Resolution by name / URL** — only signature (and all-alphanumeric name) lookups work; mapping a
   URL or kebab-case name to a cached schema would need a stored URL↔schema/name index.
-- **Formatting** (`tel.show`), **completion**, and **rename**.
+- **Formatting** (`tel.show`) and **rename**. Formatting is now within reach: Stratiform's §22.2
+  machine-operation set is exposed through `open[Tel]`, including §22.3 canonical presentation.
 - **Per-node structure ranges from positions** — outline/folding use a source scan because
   `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings).
+- **Schema errors report at the document root.** `Tel.Type.assign` declares `tracks Tel.Focus` but
+  never pushes a focus (every `focus(…)` call in `stratiform.Tel` is on the derivation path), so a
+  schema error arrives with no keyword path for `tel.locate` to resolve and its diagnostic falls
+  back to line 1. Parse errors are unaffected — they carry their own position. The server already
+  resolves the focus when one is present, so restoring the focus scoping in `assign`'s child walk
+  (upstream, in Stratiform) is all that is needed.
+- **Scalar `encoding` is unsupported upstream.** `stratiform.Tels` has no `encoding` anywhere — not
+  on `ScalarDefinition`, not in `Tels.Axiom`, not in the BinTEL codecs — although the language has
+  it (tel.md §21.7, BinTEL B13–B15) and the in-repo meta-schema
+  ([`tel.MetaSchema`](src/core/tel.MetaSchema.scala)) declares `field encoding Identifier optional`.
+  So a schema document using `encoding` reports a spurious `E306`, and LSP-computed tel-schema
+  signatures do not match the pinned normative vector.

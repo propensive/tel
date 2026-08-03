@@ -2,15 +2,16 @@ package tel
 
 import soundness.*
 
+// `soundness` re-exports Proscenium's collections, but an *exported* opaque type does not carry its
+// companion's extensions into implicit scope — `.stdlib`, the `::` cons and the `.to(List)` factory
+// would all be unavailable — so the collection types come straight from Proscenium, as the Soundness
+// modules themselves do. A named import outranks the `soundness` wildcard.
+import proscenium.{List, Nil, Chain}
+
 import interfaces.paths.pathOnLinux
 import systems.javaSystem
 import filesystemBackends.virtualMachine
-import filesystemOptions.createNonexistentParents.enabled
 import filesystemOptions.overwritePreexisting.enabled
-import filesystemOptions.dereferenceSymlinks.enabled
-import filesystemOptions.deleteRecursively.disabled
-import filesystemOptions.readAccess.enabled
-import filesystemOptions.writeAccess.enabled
 import textSanitizers.skipSanitizer
 import logging.silentLogging
 import charEncoders.utf8Encoder
@@ -28,19 +29,20 @@ object SchemaCache:
   // The cache directory, honouring `$XDG_CACHE_HOME`. Resolved where an invoker `Environment` is in
   // scope (the CLI, and once at LSP start-up).
   def directory(using Environment, System, Tactic[PathError]): Path on Linux =
-    t"${Xdg.cacheHome[Path on Linux].encode}/tel/schemas".decode[Path on Linux]
+    t"${Xdg.cacheHome[Path on Linux].encode}/tel/schemas".as[Path on Linux]
 
   // The BASE-256 palimpsest for a parsed schema composed with the named layers, in order (empty = the
   // base schema alone). Unknown layer names are ignored.
   def signature(tel: Tel, layers: List[Text])(using Tactic[BintelError], Tactic[TelError]): Text =
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val byName = Tels.Reconstructor.fromTel(tel).layers.to(List).map(_.name).zip(layerHashes).to(Map)
-    Base256.encode(SchemaSignature.encode(baseHash :: layers.flatMap(byName.get)))
+    val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
+    val byName = names.zip(layerHashes.stdlib).toMap
+    Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
 
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
   private def entryOf(tel: Tel)(using Tactic[BintelError], Tactic[TelError]): Entry =
     val tels = Tels.Reconstructor.fromTel(tel)
-    Entry(tels.name, signature(tel, Nil), tels.layers.to(List).map(_.name).join(t", "))
+    Entry(tels.name, signature(tel, Nil), tels.layers.readable.to(List).map(_.name).join(t", "))
 
   private def read(file: Path on Linux)
       (using Tactic[TelError], Tactic[IoError], Tactic[StreamError])
@@ -60,18 +62,18 @@ object SchemaCache:
   // registry always contains it. Best-effort (the cache may be unwritable).
   def ensurePreloaded(directory: Path on Linux): Unit =
     safely:
-      val file = t"${directory.encode}/tel-schema.tel".decode[Path on Linux]
+      val file = t"${directory.encode}/tel-schema.tel".as[Path on Linux]
       if !file.exists() then
-        if !directory.exists() then directory.create[Directory]()
+        if !directory.exists() then directory.create[Directory](CreateFlag.Parents)
         file.write(MetaSchema.source)
         markReadOnly(file)
 
   // Every cached schema, sorted by name; unreadable or unparseable files are skipped.
   def entries(directory: Path on Linux): List[Entry] =
     ensurePreloaded(directory)
-    safely(directory.children.to(List)).or(Nil).flatMap: file =>
-      safely(entryOf(read(file))).let(List(_)).or(Nil)
-    . sortBy(_.name)
+    safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).flatMap: file =>
+      safely(entryOf(read(file))).let(scala.List(_)).or(scala.Nil)
+    . sortBy(_.name).to(List)
 
   // Add a schema file to the cache: validate it against the meta-schema, then store it under its
   // declared name. Returns the added entry. Raises if the file is missing or is not a valid schema.
@@ -81,8 +83,8 @@ object SchemaCache:
   :   Entry =
     val text = file.read[Text]
     val entry = entryOf(text.read[Tel])   // reconstructs the Tels (raises if malformed) and its id
-    if !directory.exists() then directory.create[Directory]()
-    val target = t"${directory.encode}/${entry.name}.tel".decode[Path on Linux]
+    if !directory.exists() then directory.create[Directory](CreateFlag.Parents)
+    val target = t"${directory.encode}/${entry.name}.tel".as[Path on Linux]
     makeWritable(target)                   // a prior copy is stored read-only
     target.write(text)
     markReadOnly(target)                   // keep the registry copy read-only
@@ -92,7 +94,7 @@ object SchemaCache:
   def load(directory: Path on Linux, name: Text): Optional[Tel] =
     ensurePreloaded(directory)
     safely:
-      val file = t"${directory.encode}/${name}.tel".decode[Path on Linux]
+      val file = t"${directory.encode}/${name}.tel".as[Path on Linux]
       if file.exists() then read(file) else Unset
 
   // As `resolve`, but returns the cache *file* backing the identifier (for cross-file navigation from
@@ -100,15 +102,15 @@ object SchemaCache:
   def resolveFile(directory: Path on Linux, identifier: Text): Optional[Path on Linux] =
     ensurePreloaded(directory)
     val byName = safely:
-      val file = t"${directory.encode}/${identifier}.tel".decode[Path on Linux]
+      val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
       if file.exists() then file else Unset
 
     byName.or:
-      safely(directory.children.to(List)).or(Nil).find: file =>
+      safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).find: file =>
         safely:
           val tel = read(file)
           val base = signature(tel, Nil)
-          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.to(List).map(_.name).to(List))
+          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
           identifier == base || identifier == full
         . or(false)
       . getOrElse(Unset)
@@ -119,15 +121,15 @@ object SchemaCache:
   def resolve(directory: Path on Linux, identifier: Text): Optional[Tels] =
     ensurePreloaded(directory)
     val byName = safely:
-      val file = t"${directory.encode}/${identifier}.tel".decode[Path on Linux]
+      val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
       if file.exists() then Tels.Reconstructor.fromTel(read(file)) else Unset
 
     byName.or:
-      safely(directory.children.to(List)).or(Nil).map: file =>
+      safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).map: file =>
         safely:
           val tel = read(file)
           val base = signature(tel, Nil)
-          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.to(List).map(_.name).to(List))
+          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
           if identifier == base then Tels.Reconstructor.fromTel(tel)
           else if identifier == full then Tels.Layers.compose(Tels.Reconstructor.fromTel(tel))
           else Unset

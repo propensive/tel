@@ -4,9 +4,13 @@ import scala.collection.mutable as scm
 
 import soundness.*
 
-// The mode givens that the inherited `LspServer.main`/`serve` rely on. They are imported inside
-// `exegesis.LspServer` for its own `main`, but overriding `main`/`serve` here means providing them
-// in scope. `charEncoders.utf8Encoder` is used by the (overridden) stdio transport.
+// `soundness` re-exports Proscenium's collections, but an *exported* opaque type does not carry its
+// companion's extensions into implicit scope — `.stdlib`, the `::` cons and the `.to(List)` factory
+// would all be unavailable — so the collection types come straight from Proscenium, as the Soundness
+// modules themselves do. A named import outranks the `soundness` wildcard.
+import proscenium.{List, Nil, Chain, Map, Set, `::`}
+import proscenium.compat.*
+
 import backstops.stackTraceBackstop
 import charEncoders.utf8Encoder
 import errorDiagnostics.emptyDiagnostics
@@ -22,42 +26,16 @@ import textMetrics.uniformMetric
 import tableStyles.thinRoundedTableStyle
 import columnAttenuation.ignoreAttenuation
 
-// A Language Server for TEL documents, built on Exegesis. `LspServer` supplies the JSON-RPC dispatch
-// and the stdio transport, so this object provides the handler hooks: it tracks open documents,
-// publishes diagnostics (from Stratiform's TEL parser) when a document is opened or changed, and
-// answers hover requests over the pragma line.
-object TelServer extends LspServer():
-  def name: Text = t"tel"
-  override def version: Optional[Text] = t"0.1.0"
-
-  def capabilities: Lsp.ServerCapabilities =
-    Lsp.ServerCapabilities
-      ( textDocumentSync        = Lsp.TextDocumentSyncKind.Full,
-        hoverProvider           = true,
-        completionProvider      = Lsp.CompletionOptions(),
-        documentSymbolProvider  = true,
-        foldingRangeProvider    = true,
-        selectionRangeProvider  = true,
-        documentHighlightProvider = true,
-        definitionProvider      = true,
-        referencesProvider      = true )
-
-  // ── Open-document store ─────────────────────────────────────────────────────────────────────
-  //
-  // The currently-open documents, keyed by URI, maintained from the `didOpen`/`didChange`/`didClose`
-  // notifications. (Exegesis also keeps its own store; this is the server's own, as a basis for
-  // features that need the live document set.) Guarded by its own monitor because, as an Ethereal
-  // daemon, one JVM may host several editor sessions.
-
-  private val documents: scm.HashMap[Text, Lsp.TextDocumentItem] = scm.HashMap()
-
-  // The schema-registry directory, resolved once at LSP start-up (where the invoker's `Environment`
-  // is in scope) and read on demand during diagnostics.
-  private var schemaDirectory: Optional[Path on Linux] = Unset
-
-  private def openDocument(uri: Text): Optional[Lsp.TextDocumentItem] =
-    documents.synchronized(documents.get(uri).getOrElse(Unset))
-
+// A Language Server for TEL documents, built on Exegesis. `Lsp.listen` supplies the JSON-RPC
+// dispatch, the open-document store (with incremental edits already applied) and the stdio
+// transport, so this object provides the handler registrations: it publishes diagnostics from
+// Stratiform's TEL parser when a document is opened or changed, and answers hover, completion,
+// outline, folding, highlight and navigation requests.
+//
+// Every handler is registered inside the `Lsp.listen` block, and the current document, the
+// workspace and the request's payload are ambient within it — so a handler reads `document.text`
+// and `position` directly rather than resolving a URI against a store of its own.
+object TelServer:
   // ── Diagnostics ─────────────────────────────────────────────────────────────────────────────
   //
   // Parse the document with Stratiform's TEL parser and surface every error it reports as an LSP
@@ -72,7 +50,13 @@ object TelServer extends LspServer():
   extends Error(m"${items.length} TEL errors"):
     def add(focus: Optional[Tel.Focus], error: TelError): Accrued = Accrued(items :+ (focus, error))
 
-  private def diagnose(text: Text): List[Lsp.Diagnostic] =
+  // The schema registry directory is resolved once, where the invoker's `Environment` is in scope,
+  // and threaded to the handlers that need it: nothing capability-carrying or stateful lives in this
+  // object, which the capture-checked API requires and the Ethereal daemon (one JVM, many editor
+  // sessions) makes desirable anyway.
+  private type Registry = Optional[Path on Linux]
+
+  private def diagnose(text: Text, registry: Registry): List[Lsp.Diagnostic] =
     val lines = text.s.linesIterator.toIndexedSeq
     val parse = parseErrors(text)
 
@@ -80,15 +64,22 @@ object TelServer extends LspServer():
     // errors. A schema *document* (its pragma names `tel-schema`) is checked against the built-in
     // meta-schema; any other pragma schema — a bare name or BASE-256 signature — is resolved against
     // the local registry populated by `tel schema add`.
+    // Kept for the diagnostic ranges as well as the schema pass: `Tel.Type.assign` no longer fills
+    // a focus's position, so a schema error's range is resolved by locating its keyword path
+    // against this position-tracked document.
+    val document: Optional[Tel] = if parse.nonEmpty then Unset else safely(text.read[Tel])
+
     val schema =
       if parse.nonEmpty then Nil
-      else safely(text.read[Tel]).lay(Nil): tel =>
+      else document.lay(Nil): tel =>
         pragmaSchema(lines) match
           case identifier: Text if identifier.s.contains("tel-schema") => schemaErrors(tel)
-          case identifier: Text => resolveSchema(identifier).lay(Nil)(assignErrors(tel, _))
-          case _                => Nil
+          case identifier: Text =>
+            resolveSchema(identifier, registry).lay(Nil)(assignErrors(tel, _))
 
-    (parse ::: schema).map(diagnostic(_, lines))
+          case _ => Nil
+
+    (parse ::: schema).map(diagnostic(_, lines, document))
 
   private def parseErrors(text: Text): List[(Optional[Tel.Focus], TelError)] =
     validate[Tel.Focus](Accrued()):
@@ -114,8 +105,9 @@ object TelServer extends LspServer():
       . protect(Tels.Reconstructor.fromTel(tel))
       . items
 
-    (assignErrors(tel, Tels.Axiom.tels) ::: construction)
+    (assignErrors(tel, Tels.Axiom.tels) ::: construction).stdlib
     . distinctBy((_, error) => (error.reason.number, error.reason))
+    . to(List)
 
   // The pragma's schema identifier: `tel <version> [schema] [sigil]` — the first token after the
   // version that is not a single symbolic sigil character.
@@ -123,21 +115,22 @@ object TelServer extends LspServer():
     val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
     lines.lift(index) match
       case Some(line) =>
-        tokens(line).map((token, _, _) => token).drop(2)
+        tokens(line).stdlib.map((token, _, _) => token).drop(2)
         . filterNot(token => token.length == 1 && !Character.isLetterOrDigit(token.charAt(0)))
         . headOption.map(_.tt).getOrElse(Unset)
+
       case None =>
         Unset
 
-  // Resolve a pragma schema identifier against the registry (loaded once at start-up).
-  private def resolveSchema(identifier: Text): Optional[Tels] =
-    schemaDirectory match
+  // Resolve a pragma schema identifier against the registry.
+  private def resolveSchema(identifier: Text, registry: Registry): Optional[Tels] =
+    registry match
       case directory: (Path on Linux) => SchemaCache.resolve(directory, identifier)
       case _                          => Unset
 
   // Resolve a pragma schema identifier to its cache file (for cross-file go-to-definition).
-  private def resolveSchemaFile(identifier: Text): Optional[Path on Linux] =
-    schemaDirectory match
+  private def resolveSchemaFile(identifier: Text, registry: Registry): Optional[Path on Linux] =
+    registry match
       case directory: (Path on Linux) => SchemaCache.resolveFile(directory, identifier)
       case _                          => Unset
 
@@ -164,14 +157,14 @@ object TelServer extends LspServer():
 
   // The struct that a field's members live in, one keyword deeper.
   private def memberStruct(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Struct] =
-    struct.members.to(List).collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
+    struct.members.readable.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
     match
       case Some(fieldType) => structOf(fieldType, schema)
       case None            => Unset
 
   // The struct reached by descending `schema.document` along a keyword path.
   private def structAt(schema: Tels, path: List[Text]): Optional[Tels.Struct] =
-    path.foldLeft(schema.document: Optional[Tels.Struct]): (current, keyword) =>
+    path.stdlib.foldLeft(schema.document: Optional[Tels.Struct]): (current, keyword) =>
       current match
         case struct: Tels.Struct => memberStruct(struct, keyword, schema)
         case _                   => Unset
@@ -180,17 +173,15 @@ object TelServer extends LspServer():
     fieldType match
       case Tels.Reference(name)    => name
       case Tels.Flag               => t"Flag"
-      case Tels.Scalar(validators) => if validators.length == 0 then t"scalar" else validators.to(List).join(t"+")
+      case Tels.Scalar(validators) => if validators.length == 0 then t"scalar" else validators.readable.to(List).join(t"+")
       case Tels.Struct(_, _)       => t"record"
 
   private def cardinality(required: Tels.Polarity, repeatable: Tels.Polarity): Text =
-    val flags =
-      List
-        ( Option.when(required == Tels.Polarity.Loose)(t"optional"),
-          Option.when(repeatable == Tels.Polarity.Loose)(t"repeatable") )
-      . flatten
+    val flags: scala.List[Text] =
+      (if required == Tels.Polarity.Loose then scala.List(t"optional") else scala.Nil)
+      ::: (if repeatable == Tels.Polarity.Loose then scala.List(t"repeatable") else scala.Nil)
 
-    if flags.isEmpty then t"" else t" (${flags.join(t", ")})"
+    if flags.isEmpty then t"" else t" (${flags.to(List).join(t", ")})"
 
   private def fieldMarkdown(field: Tels.Field, schema: Tels): Text =
     val header =
@@ -208,13 +199,15 @@ object TelServer extends LspServer():
 
   // Hover markup for the member `keyword` of `struct` (a `field`, or a `select` variant).
   private def fieldHover(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Lsp.Hover] =
-    val markup = struct.members.to(List).flatMap:
+    val markup = struct.members.readable.to(List).flatMap:
       case field: Tels.Field if field.keyword == keyword =>
         List(fieldMarkdown(field, schema))
+
       case reference: Tels.SelectRef =>
-        schema.selects.find(_.name == reference.reference).to(List)
-        . flatMap(_.variants.to(List)).filter(_.keyword == keyword)
-        . map(variantMarkdown(_, reference.reference, schema))
+        schema.selects.find(_.name == reference.reference).toList
+        . flatMap(_.variants.readable.to(scala.List)).filter(_.keyword == keyword)
+        . map(variantMarkdown(_, reference.reference, schema)).to(List)
+
       case _ =>
         Nil
 
@@ -223,21 +216,27 @@ object TelServer extends LspServer():
       case None       => Unset
 
   // Hover over a compound keyword in a document validated against a resolved schema.
-  private def schemaFieldHover(lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position)
+  private def schemaFieldHover
+     ( lines:    IndexedSeq[String],
+       tree:     List[Node],
+       position: Lsp.Position,
+       registry: Registry )
   :   Optional[Lsp.Hover] =
+
     pragmaSchema(lines) match
-      case identifier: Text => resolveSchema(identifier) match
+      case identifier: Text => resolveSchema(identifier, registry) match
         case schema: Tels => nodeChain(tree, position.line).reverse match
           case node :: ancestors if node.line == position.line =>
             structAt(schema, ancestors.reverse.map(_.keyword)) match
               case struct: Tels.Struct => fieldHover(struct, node.keyword, schema)
               case _                   => Unset
+
           case _ => Unset
         case _ => Unset
       case _ => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
-    struct.members.to(List).flatMap:
+    struct.members.readable.to(List).flatMap:
       case field: Tels.Field =>
         List
           ( Lsp.CompletionItem
@@ -245,13 +244,17 @@ object TelServer extends LspServer():
                 kind          = Lsp.CompletionItemKind.Field,
                 detail        = typeLabel(field.fieldType, schema),
                 documentation = field.description.let(text => Lsp.MarkupContent(value = text)) ) )
+
       case reference: Tels.SelectRef =>
-        schema.selects.find(_.name == reference.reference).to(List).flatMap(_.variants.to(List)).map: variant =>
-          Lsp.CompletionItem
-            ( label         = variant.keyword,
-              kind          = Lsp.CompletionItemKind.EnumMember,
-              detail        = t"variant of ${reference.reference}",
-              documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) )
+        schema.selects.find(_.name == reference.reference).toList
+        . flatMap(_.variants.readable.to(scala.List)).map: variant =>
+            Lsp.CompletionItem
+              ( label         = variant.keyword,
+                kind          = Lsp.CompletionItemKind.EnumMember,
+                detail        = t"variant of ${reference.reference}",
+                documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) )
+        . to(List)
+
       case _ =>
         Nil
 
@@ -260,10 +263,10 @@ object TelServer extends LspServer():
 
   // The schema a document is checked against: the built-in meta-schema for a schema document,
   // otherwise the registered schema its pragma resolves to.
-  private def documentSchema(lines: IndexedSeq[String]): Optional[Tels] =
+  private def documentSchema(lines: IndexedSeq[String], registry: Registry): Optional[Tels] =
     if isSchemaDocument(lines) then Tels.Axiom.tels
     else pragmaSchema(lines) match
-      case identifier: Text => resolveSchema(identifier)
+      case identifier: Text => resolveSchema(identifier, registry)
       case _                => Unset
 
   private def isSchemaDocument(lines: IndexedSeq[String]): Boolean =
@@ -281,19 +284,27 @@ object TelServer extends LspServer():
     (indent, keyword, atomsBefore)
 
   private def fieldType(struct: Tels.Struct, keyword: Text): Optional[Tels.Type] =
-    struct.members.to(List).collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
+    struct.members.readable.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
     . getOrElse(Unset)
 
   // Type-name completions for a schema document: the document's own definitions plus the built-ins.
   private def typeNameCompletions(tree: List[Node]): List[Lsp.CompletionItem] =
-    (definitions(tree).keys.to(List) ::: builtinTypeNames).distinct.sorted.map: name =>
-      Lsp.CompletionItem(label = name, kind = Lsp.CompletionItemKind.Class)
+    (definitions(tree).keys.to(scala.List) ::: builtinTypeNames.stdlib).distinct.sorted
+    . map: name =>
+        Lsp.CompletionItem(label = name, kind = Lsp.CompletionItemKind.Class)
+    . to(List)
 
   // Value completions in a data document: a `select`-typed field's value is one of its variants.
   private def atomValueCompletions
-      (lines: IndexedSeq[String], tree: List[Node], line: Int, indent: Int, keyword: Text)
+     ( lines:    IndexedSeq[String],
+       tree:     List[Node],
+       line:     Int,
+       indent:   Int,
+       keyword:  Text,
+       registry: Registry )
   :   Lsp.CompletionList =
-    documentSchema(lines) match
+
+    documentSchema(lines, registry) match
       case schema: Tels =>
         val parents = nodeChain(tree, line).filter(_.indent < indent)
         val struct = structAt(schema, parents.map(_.keyword)).or(schema.document)
@@ -301,60 +312,77 @@ object TelServer extends LspServer():
         fieldType(struct, keyword) match
           case Tels.Reference(name) => schema.selects.find(_.name == name) match
             case Some(select) =>
-              Lsp.CompletionList(items = select.variants.to(List).map: variant =>
+              Lsp.CompletionList(items = select.variants.readable.to(List).map: variant =>
                 Lsp.CompletionItem
                   ( label         = variant.keyword,
                     kind          = Lsp.CompletionItemKind.EnumMember,
                     detail        = t"variant of $name",
                     documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) ))
+
             case None => Lsp.CompletionList()
           case _ => Lsp.CompletionList()
       case _ => Lsp.CompletionList()
 
-  override def complete(uri: Text, position: Lsp.Position): Lsp.CompletionList =
-    openDocument(uri).lay(Lsp.CompletionList()): document =>
-      val (lines, tree) = structure(document.text)
-      val line = lines.lift(position.line).getOrElse("")
-      val (indent, keyword, atomsBefore) = completionContext(line, position.character)
+  private def completions(text: Text, position: Lsp.Position, registry: Registry): Lsp.CompletionList =
+    val (lines, tree) = structure(text)
+    val line = lines.lift(position.line).getOrElse("")
+    val (indent, keyword, atomsBefore) = completionContext(line, position.character)
 
-      (keyword, atomsBefore) match
-        // Keyword position — the members valid for the enclosing struct (of the resolved schema, or
-        // the meta-schema for a schema document).
-        case (_, 0) => documentSchema(lines) match
-          case schema: Tels =>
-            val parents = nodeChain(tree, position.line).filter(_.indent < indent)
-            val struct = structAt(schema, parents.map(_.keyword)).or(schema.document)
-            Lsp.CompletionList(items = keywordCompletions(struct, schema))
-          case _ => Lsp.CompletionList()
+    (keyword, atomsBefore) match
+      // Keyword position — the members valid for the enclosing struct (of the resolved schema, or
+      // the meta-schema for a schema document).
+      case (_, 0) => documentSchema(lines, registry) match
+        case schema: Tels =>
+          val parents = nodeChain(tree, position.line).filter(_.indent < indent)
+          val struct = structAt(schema, parents.map(_.keyword)).or(schema.document)
+          Lsp.CompletionList(items = keywordCompletions(struct, schema))
 
-        // Type-name slot in a schema document — `field <name> <type>`, `variant <name> <type>`.
-        case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant").contains(kw) =>
-          Lsp.CompletionList(items = typeNameCompletions(tree))
+        case _ => Lsp.CompletionList()
 
-        // Value slot in a data document — a `select`-typed field completes to its variants.
-        case (kw: Text, 1) =>
-          atomValueCompletions(lines, tree, position.line, indent, kw)
+      // Type-name slot in a schema document — `field <name> <type>`, `variant <name> <type>`.
+      case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant")(kw) =>
+        Lsp.CompletionList(items = typeNameCompletions(tree))
 
-        case _ =>
-          Lsp.CompletionList()
+      // Value slot in a data document — a `select`-typed field completes to its variants.
+      case (kw: Text, 1) =>
+        atomValueCompletions(lines, tree, position.line, indent, kw, registry)
 
-  private def diagnostic(entry: (Optional[Tel.Focus], TelError), lines: IndexedSeq[String])
+      case _ =>
+        Lsp.CompletionList()
+
+  private def diagnostic
+     ( entry:    (Optional[Tel.Focus], TelError),
+       lines:    IndexedSeq[String],
+       document: Optional[Tel] )
   :   Lsp.Diagnostic =
+
     val (focus, error) = entry
     Lsp.Diagnostic
-      ( range    = errorRange(focus, error, lines),
+      ( range    = errorRange(focus, error, lines, document),
         severity = Lsp.DiagnosticSeverity.Error,
         code     = t"E${error.reason.number}",
         source   = t"tel",
         message  = m"${error.reason}".text )
 
-  // Prefer the error's own position (set for parse errors), else the focus position filled by
-  // `assign` (schema/validation errors); both expose a 0-based `.span` that maps to an LSP range via
-  // Exegesis's `Lsp.Range.from`. Fall back to the first line only when no span is available.
-  private def errorRange(focus: Optional[Tel.Focus], error: TelError, lines: IndexedSeq[String])
+  // Prefer the error's own position, which parse errors carry. A schema/validation error carries
+  // only a `Tel.Focus`: `assign` records the keyword path but no longer fills in the position
+  // itself, so the path is resolved here against the position-tracked document (`tel.locate`, under
+  // `import parsing.trackPositions`) — which is what points a schema error at the offending
+  // compound rather than at the document root. Both expose a 0-based `.span` that maps to an LSP
+  // range via Exegesis's `Lsp.Range.from`; the first line is the fallback when neither yields one.
+  private def errorRange
+     ( focus:    Optional[Tel.Focus],
+       error:    TelError,
+       lines:    IndexedSeq[String],
+       document: Optional[Tel] )
   :   Lsp.Range =
+
+    val located: Optional[TelError.Position] =
+      focus.lay(Unset: Optional[TelError.Position]): focus =>
+        document.lay(Unset: Optional[TelError.Position])(_.locate(focus.pointer))
+
     val position: Optional[TelError.Position] =
-      if error.position.absent then focus.lay(Unset)(_.position) else error.position
+      if error.position.absent then located else error.position
 
     val fallback =
       val end = lines.headOption.fold(1)(_.length.max(1))
@@ -369,32 +397,6 @@ object TelServer extends LspServer():
       range.copy(end = Lsp.Position(range.start.line, end))
     else range
 
-  // ── Document lifecycle ──────────────────────────────────────────────────────────────────────
-
-  override def onOpen(document: Lsp.TextDocumentItem)(using LspClient): Unit =
-    documents.synchronized(documents(document.uri) = document)
-    summon[LspClient].publishDiagnostics(document.uri, diagnose(document.text))
-
-  override def onChange
-      ( textDocument: Lsp.VersionedTextDocumentIdentifier,
-        changes:      List[Lsp.TextDocumentContentChangeEvent] )
-      (using LspClient)
-  :   Unit =
-    // Full sync (see `capabilities`): the last change carries the whole new document text.
-    changes.lastOption.foreach: change =>
-      val updated = documents.synchronized:
-        val item = documents.get(textDocument.uri) match
-          case Some(existing) => existing.copy(version = textDocument.version, text = change.text)
-          case None => Lsp.TextDocumentItem(textDocument.uri, t"", textDocument.version, change.text)
-
-        documents(textDocument.uri) = item
-        item
-
-      summon[LspClient].publishDiagnostics(textDocument.uri, diagnose(updated.text))
-
-  override def onClose(document: Lsp.TextDocumentIdentifier): Unit =
-    documents.synchronized(documents.remove(document.uri))
-
   // A well-formed pragma: `tel <major>.<minor>` optionally followed by a schema and/or sigil. The
   // pragma is the first line, unless an interpreter directive (`#!…` shebang) precedes it.
   private val pragmaPattern = "tel [0-9]+\\.[0-9]+( .*)?"
@@ -402,34 +404,35 @@ object TelServer extends LspServer():
   private def pragmaIndex(lines: List[String]): Int =
     if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
 
-  override def hover(uri: Text, position: Lsp.Position): Optional[Lsp.Hover] =
-    openDocument(uri).lay(Unset: Optional[Lsp.Hover]): document =>
-      val (lines, tree) = structure(document.text)
-      val pragma = pragmaIndex(lines.to(List))
+  private def hoverAt(text: Text, position: Lsp.Position, registry: Registry): Optional[Lsp.Hover] =
+    val (lines, tree) = structure(text)
+    val pragma = pragmaIndex(lines.to(scala.List).to(List))
 
-      if position.line == pragma && lines.lift(pragma).exists(_.matches(pragmaPattern)) then
-        Lsp.Hover(Lsp.MarkupContent(value = t"**TEL document** — pragma `${lines(pragma).tt}`"))
-      else
-        // Over a named type (definition or reference), show that definition and its members.
-        wordAt(position, lines) match
-          case Some((word, _, _)) => definitions(tree).get(word) match
-            case Some(node) => Lsp.Hover(Lsp.MarkupContent(value = describe(node)))
-            case None       => schemaFieldHover(lines, tree, position)
-          case None => Unset
+    if position.line == pragma && lines.lift(pragma).exists(_.matches(pragmaPattern)) then
+      Lsp.Hover(Lsp.MarkupContent(value = t"**TEL document** — pragma `${lines(pragma).tt}`"))
+    else
+      // Over a named type (definition or reference), show that definition and its members.
+      wordAt(position, lines) match
+        case Some((word, _, _)) => definitions(tree).get(word) match
+          case Some(node) => Lsp.Hover(Lsp.MarkupContent(value = describe(node)))
+          case None       => schemaFieldHover(lines, tree, position, registry)
+
+        case None => Unset
 
   private def describe(node: Node): Text =
-    val members = node.children.map(_.keyword).distinct
+    val members = node.children.stdlib.map(_.keyword).distinct.to(List)
     val head = t"**${node.keyword} ${node.atoms.headOption.getOrElse(t"")}**"
     if members.isEmpty then head else t"$head — ${members.join(t", ")}"
 
   // ── Structure (source scan) ───────────────────────────────────────────────────────────────────
   //
-  // Stratiform's parse tree carries no source spans, so the position-based features (outline,
-  // folding, selection ranges, highlights, go-to-definition) are derived from a lightweight
-  // indentation scan of the source text here. Each non-blank, non-comment line is a compound —
-  // `<indent><keyword> <atoms…>` — and nesting follows indentation. (Embedded source/literal-atom
-  // payloads are not specially recognised, so an outline of a document that uses them may include
-  // payload lines; ordinary documents and all schema documents are handled exactly.)
+  // Stratiform's parse tree carries no source spans that can disambiguate same-keyword siblings (its
+  // position index is internal, and `tel.locate` resolves a keyword *path*), so the position-based
+  // features (outline, folding, selection ranges, highlights, go-to-definition) are derived from a
+  // lightweight indentation scan of the source text here. Each non-blank, non-comment line is a
+  // compound — `<indent><keyword> <atoms…>` — and nesting follows indentation. (Embedded
+  // source/literal-atom payloads are not specially recognised, so an outline of a document that uses
+  // them may include payload lines; ordinary documents and all schema documents are handled exactly.)
 
   private case class Node
       ( line:       Int,
@@ -460,6 +463,7 @@ object TelServer extends LspServer():
         val token = line.substring(start, end).nn
         if token.length == 1 && !Character.isLetterOrDigit(token.charAt(0)) then token.charAt(0)
         else '#'
+
       case None =>
         '#'
 
@@ -472,7 +476,7 @@ object TelServer extends LspServer():
     // A compound line, keeping its source line index, indentation, keyword and inline atoms.
     final case class Raw(index: Int, indent: Int, keyword: Text, keywordEnd: Int, detail: Text)
 
-    val raws: List[Raw] = lines.zipWithIndex.toList.flatMap: (line, index) =>
+    val raws: List[Raw] = lines.zipWithIndex.to(scala.List).flatMap: (line, index) =>
       val indent = leadingSpaces(line)
       // Skip blank/whitespace-only lines, the pragma line, and comment/separator lines (leading sigil).
       if indent >= line.length || index == pragmaIndex || line.charAt(indent) == sigil then None
@@ -482,7 +486,11 @@ object TelServer extends LspServer():
         var detailStart = end
         while detailStart < line.length && line.charAt(detailStart) == ' ' do detailStart += 1
         Some(Raw(index, indent, line.substring(indent, end).nn.tt, end, line.substring(detailStart).nn.tt))
+    . to(List)
 
+    // Proscenium's `List` is opaque, so the compiler cannot see that `Nil` and `::` exhaust it;
+    // matching the stdlib view instead would collide with the imported cons extractor.
+    @scala.annotation.nowarn("msg=match may not be exhaustive")
     def build(items: List[Raw]): List[Node] = items match
       case Nil => Nil
       case head :: tail =>
@@ -496,15 +504,9 @@ object TelServer extends LspServer():
     (lines, build(raws))
 
   private def flatten(nodes: List[Node]): List[Node] =
-    nodes.flatMap(node => node :: flatten(node.children))
+    nodes.stdlib.flatMap(node => node +: flatten(node.children).stdlib).to(List)
 
-  // ── Structure features (Phase 1) ──────────────────────────────────────────────────────────────
-
-  override def documentSymbols(uri: Text): List[Lsp.DocumentSymbol] =
-    openDocument(uri).let: document =>
-      val (lines, tree) = structure(document.text)
-      tree.map(symbol(_, lines))
-    . or(Nil)
+  // ── Structure features ────────────────────────────────────────────────────────────────────────
 
   private def symbol(node: Node, lines: IndexedSeq[String]): Lsp.DocumentSymbol =
     Lsp.DocumentSymbol
@@ -519,24 +521,13 @@ object TelServer extends LspServer():
                              Lsp.Position(node.line, node.keywordEnd) ),
         children       = if node.children.isEmpty then Unset else node.children.map(symbol(_, lines)) )
 
-  override def foldingRanges(uri: Text): List[Lsp.FoldingRange] =
-    openDocument(uri).let: document =>
-      def fold(node: Node): List[Lsp.FoldingRange] =
-        val self =
-          if node.endLine > node.line
-          then List(Lsp.FoldingRange(startLine = node.line, endLine = node.endLine, kind = t"region"))
-          else Nil
+  private def folds(node: Node): List[Lsp.FoldingRange] =
+    val self =
+      if node.endLine > node.line
+      then List(Lsp.FoldingRange(startLine = node.line, endLine = node.endLine, kind = t"region"))
+      else Nil
 
-        self ::: node.children.flatMap(fold)
-
-      structure(document.text)._2.flatMap(fold)
-    . or(Nil)
-
-  override def selectionRanges(uri: Text, positions: List[Lsp.Position]): List[Lsp.SelectionRange] =
-    openDocument(uri).let: document =>
-      val (lines, tree) = structure(document.text)
-      positions.map(selectionRange(_, tree, lines))
-    . or(Nil)
+    self ::: node.children.flatMap(folds)
 
   private def selectionRange(position: Lsp.Position, tree: List[Node], lines: IndexedSeq[String])
   :   Lsp.SelectionRange =
@@ -548,25 +539,24 @@ object TelServer extends LspServer():
     val ranges = path(tree).map: node =>
       Lsp.Range(Lsp.Position(node.line, node.indent), Lsp.Position(node.endLine, lineLength(lines, node.endLine)))
 
-    val nested = ranges.foldLeft(Unset: Optional[Lsp.SelectionRange]): (parent, range) =>
+    val nested = ranges.stdlib.foldLeft(Unset: Optional[Lsp.SelectionRange]): (parent, range) =>
       Lsp.SelectionRange(range, parent)
 
     nested.lay(Lsp.SelectionRange(Lsp.Range(position, position)))(identity)
 
-  override def documentHighlights(uri: Text, position: Lsp.Position): List[Lsp.DocumentHighlight] =
-    openDocument(uri).let: document =>
-      val nodes = flatten(structure(document.text)._2)
-      nodes.find(_.line == position.line) match
-        case Some(target) =>
-          nodes.filter(_.keyword == target.keyword).map: node =>
-            Lsp.DocumentHighlight
-              ( Lsp.Range(Lsp.Position(node.line, node.indent), Lsp.Position(node.line, node.keywordEnd)),
-                Lsp.DocumentHighlightKind.Text )
-        case None =>
-          Nil
-    . or(Nil)
+  private def highlights(text: Text, position: Lsp.Position): List[Lsp.DocumentHighlight] =
+    val nodes = flatten(structure(text)._2)
+    nodes.find(_.line == position.line) match
+      case Some(target) =>
+        nodes.filter(_.keyword == target.keyword).map: node =>
+          Lsp.DocumentHighlight
+            ( Lsp.Range(Lsp.Position(node.line, node.indent), Lsp.Position(node.line, node.keywordEnd)),
+              Lsp.DocumentHighlightKind.Text )
 
-  // ── Navigation (Phase 3) ──────────────────────────────────────────────────────────────────────
+      case None =>
+        Nil
+
+  // ── Navigation ────────────────────────────────────────────────────────────────────────────────
   //
   // Type-name navigation for schema documents: a `record`/`scalar`/`select` compound *defines* a
   // named type; a `field`/`variant`/`select`/`record` compound *references* one by its inline atom.
@@ -586,7 +576,7 @@ object TelServer extends LspServer():
         while i < line.length && line.charAt(i) != ' ' do i += 1
         out += ((line.substring(start, i).nn, start, i))
 
-    out.to(List)
+    out.to(scala.List).to(List)
 
   // The token under a cursor position, with its column span.
   private def wordAt(position: Lsp.Position, lines: IndexedSeq[String]): Option[(Text, Int, Int)] =
@@ -598,14 +588,16 @@ object TelServer extends LspServer():
   // Named-type definitions in the document, keyed by name (the first atom of a `record`/`scalar`/
   // `select` compound).
   private def definitions(nodes: List[Node]): Map[Text, Node] =
-    flatten(nodes).flatMap: node =>
-      if definitionKeywords.contains(node.keyword) then node.atoms.headOption.map(_ -> node) else None
-    . to(Map)
+    Map.of:
+      flatten(nodes).stdlib.flatMap: node =>
+        if definitionKeywords(node.keyword) then node.atoms.headOption.map(_ -> node) else None
+      . toMap
 
   // Every whitespace-delimited occurrence of `word` as a whole token, with line and column span.
   private def occurrences(word: Text, lines: IndexedSeq[String]): List[(Int, Int, Int)] =
-    lines.zipWithIndex.to(List).flatMap: (line, index) =>
-      tokens(line).collect { case (token, start, end) if token.tt == word => (index, start, end) }
+    lines.zipWithIndex.to(scala.List).flatMap: (line, index) =>
+      tokens(line).stdlib.collect { case (token, start, end) if token.tt == word => (index, start, end) }
+    . to(List)
 
   private def location(uri: Text, line: Int, start: Int, end: Int): Lsp.Location =
     Lsp.Location(uri, Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)))
@@ -624,45 +616,53 @@ object TelServer extends LspServer():
   // considers only the top level, so a nested *reference* (e.g. `select Status` inside `document`)
   // never shadows the real, child-bearing definition.
   private def topLevelDefinitions(nodes: List[Node]): Map[Text, Node] =
-    nodes.flatMap: node =>
-      if definitionKeywords.contains(node.keyword) then node.atoms.headOption.map(_ -> node) else None
-    . to(Map)
+    Map.of:
+      nodes.stdlib.flatMap: node =>
+        if definitionKeywords(node.keyword) then node.atoms.headOption.map(_ -> node) else None
+      . toMap
 
   private def fieldNode(nodes: List[Node], name: Text): Optional[Node] =
     nodes.find(node => node.keyword == t"field" && node.atoms.headOption.contains(name)).getOrElse(Unset)
 
   // Descend a schema document from its `document` block along the ancestor keywords of a compound
   // (each a field whose type names a record), yielding the child nodes of the enclosing struct.
+  @scala.annotation.nowarn("msg=match may not be exhaustive")
   private def descend(schemaTree: List[Node], context: List[Node], ancestors: List[Text])
   :   Optional[List[Node]] =
     ancestors match
       case Nil => context
       case keyword :: rest => fieldNode(context, keyword) match
-        case field: Node => field.atoms.lift(1) match
+        case field: Node => field.atoms.stdlib.lift(1) match
           case Some(typeName) => topLevelDefinitions(schemaTree).get(typeName) match
             case Some(definition) => descend(schemaTree, definition.children, rest)
             case None             => Unset
+
           case None => Unset
         case _ => Unset
 
   // The schema-document node that declares `keyword`: a `field`/`variant` in `context` named
   // `keyword`, or a `variant` of a `select` referenced from `context`.
   private def locateMember(schemaTree: List[Node], context: List[Node], keyword: Text): Optional[Node] =
-    context.find(node => memberKeywords.contains(node.keyword) && node.atoms.headOption.contains(keyword))
+    context.find(node => memberKeywords(node.keyword) && node.atoms.headOption.contains(keyword))
     . orElse:
-        context.filter(_.keyword == t"select").flatMap: reference =>
-          reference.atoms.headOption.to(List)
-          . flatMap(name => topLevelDefinitions(schemaTree).get(name).to(List))
-          . flatMap(_.children)
+        context.stdlib.filter(_.keyword == t"select").flatMap: reference =>
+          reference.atoms.headOption.toList
+          . flatMap(name => topLevelDefinitions(schemaTree).get(name).toList)
+          . flatMap(_.children.stdlib)
           . filter(node => node.keyword == t"variant" && node.atoms.headOption.contains(keyword))
         . headOption
     . getOrElse(Unset)
 
-  private def schemaDefinition(lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position)
+  private def schemaDefinition
+     ( lines:    IndexedSeq[String],
+       tree:     List[Node],
+       position: Lsp.Position,
+       registry: Registry )
   :   List[Lsp.Location] =
+
     val pragmaLine = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
     pragmaSchema(lines) match
-      case identifier: Text => resolveSchemaFile(identifier) match
+      case identifier: Text => resolveSchemaFile(identifier, registry) match
         case file: (Path on Linux) => SchemaCache.readText(file).lay(Nil): text =>
           val (schemaLines, schemaTree) = structure(text)
           val uri = t"file://${file.encode}"
@@ -670,86 +670,67 @@ object TelServer extends LspServer():
           if position.line == pragmaLine then List(location(uri, 0, 0, 0))
           else nodeChain(tree, position.line).reverse match
             case node :: ancestors if node.line == position.line =>
-              val documentBlock = schemaTree.find(_.keyword == t"document").map(_.children).getOrElse(Nil)
-              descend(schemaTree, documentBlock, ancestors.reverse.map(_.keyword)).lay(Nil): context =>
-                locateMember(schemaTree, context, node.keyword).lay(Nil): target =>
-                  tokens(schemaLines(target.line)).drop(1).headOption match
-                    case Some((_, start, end)) => List(location(uri, target.line, start, end))
-                    case None                  => List(location(uri, target.line, target.indent, target.keywordEnd))
+              val documentBlock =
+                schemaTree.find(_.keyword == t"document").map(_.children).getOrElse(Nil)
+
+              descend(schemaTree, documentBlock, ancestors.reverse.map(_.keyword)).lay(Nil):
+                context =>
+                  locateMember(schemaTree, context, node.keyword).lay(Nil): target =>
+                    tokens(schemaLines(target.line)).stdlib.drop(1).headOption match
+                      case Some((_, start, end)) => List(location(uri, target.line, start, end))
+                      case None                  =>
+                        List(location(uri, target.line, target.indent, target.keywordEnd))
+
             case _ => Nil
         case _ => Nil
       case _ => Nil
 
-  override def definition(uri: Text, position: Lsp.Position): List[Lsp.Location] =
-    openDocument(uri).let: document =>
-      val (lines, tree) = structure(document.text)
-
-      wordAt(position, lines) match
-        // A local named-type reference (schema documents) jumps within the file.
-        case Some((word, _, _)) => definitions(tree).get(word) match
-          case Some(node) => tokens(lines(node.line)).drop(1).headOption match
-            case Some((_, start, end)) => List(location(uri, node.line, start, end))
-            case None                  => Nil
-          // Otherwise, try to jump across into the registered schema file.
-          case None => schemaDefinition(lines, tree, position)
-        case None => schemaDefinition(lines, tree, position)
-    . or(Nil)
-
-  override def references(uri: Text, position: Lsp.Position, includeDeclaration: Boolean)
+  private def definitionAt
+     ( uri:      Text,
+       text:     Text,
+       position: Lsp.Position,
+       registry: Registry )
   :   List[Lsp.Location] =
-    openDocument(uri).let: document =>
-      val (lines, _) = structure(document.text)
 
-      wordAt(position, lines) match
-        case Some((word, _, _)) =>
-          occurrences(word, lines).map((line, start, end) => location(uri, line, start, end))
-        case None =>
-          Nil
-    . or(Nil)
+    val (lines, tree) = structure(text)
+
+    wordAt(position, lines) match
+      // A local named-type reference (schema documents) jumps within the file.
+      case Some((word, _, _)) => definitions(tree).get(word) match
+        case Some(node) => tokens(lines(node.line)).stdlib.drop(1).headOption match
+          case Some((_, start, end)) => List(location(uri, node.line, start, end))
+          case None                  => Nil
+
+        // Otherwise, try to jump across into the registered schema file.
+        case None => schemaDefinition(lines, tree, position, registry)
+
+      case None => schemaDefinition(lines, tree, position, registry)
 
   // ── Live message log ────────────────────────────────────────────────────────────────────────
   //
   // The tool runs as an Ethereal daemon: one JVM hosts every `tel` invocation, and `TelServer` is a
   // singleton loaded once in it. So `logSubscribers` is shared daemon-wide, and a `tel lsp --log`
   // session can observe — live — the messages that the editor's `tel lsp` session sends and receives.
-  // Each `--log` subscriber gets its own `Spool`; the serving loop broadcasts every message, tagged
-  // `recv` (client → server) or `send` (server → client), to all subscribers.
+  // Each `--log` subscriber gets its own `Spool`; the `Lsp.Observer` registered with `Lsp.listen`
+  // broadcasts every message, tagged `recv` (client → server) or `send` (server → client), to all
+  // subscribers.
 
-  private val logSubscribers: scm.HashSet[Spool[Text]] = scm.HashSet()
+  private val logSubscribers: scm.HashSet[Relay[Text]] = scm.HashSet()
 
   private def broadcastLog(marker: Text, message: Text): Unit =
     logSubscribers.synchronized(logSubscribers.foreach(_.put(t"$marker $message")))
 
-  // A logging variant of `LspServer.serve`: identical to the inherited stdio transport, but each
-  // message is broadcast to any `--log` subscribers — outgoing ones as they are written, incoming
-  // ones before they are dispatched.
-  override def serve()(using Stdio, Monitor, Probate): Unit =
-    val dispatch: Json => Optional[Json] = LspServer.dispatcher(this)
-
-    val writer: Task[Unit] = async:
-      outgoing.iterator.each: json =>
-        val body: Text = json.encode
-        broadcastLog(t"send", body)
-        val payload: Data = body.data
-        summon[Stdio].write(t"Content-Length: ${payload.length}\r\n\r\n".data)
-        summon[Stdio].write(payload)
-        summon[Stdio].out.flush()
-
-    summon[Stdio].in.stream[Data].iterator.frames[ContentLength].each: frame =>
-      val message: Text = frame.utf8
-      broadcastLog(t"recv", message)
-      try dispatch(message.decode[Json]).let(put)
-      catch case error: Exception => put(JsonRpc.error(-32603, t"Internal error").json)
-
-    writer.cancel()
+  private object TrafficLog extends Lsp.Observer:
+    def received(message: Text): Unit = broadcastLog(t"recv", message)
+    def sent(message: Text): Unit = broadcastLog(t"send", message)
 
   // Streams messages to stdout until interrupted (Ctrl-C); used by `tel lsp --log`.
   private def streamLog()(using Stdio): Unit =
-    val spool = Spool[Text]()
+    val spool = Relay[Text]()
     logSubscribers.synchronized(logSubscribers.add(spool))
     try
       Out.println(t"Streaming messages sent/received by the tel language server. Press Ctrl-C to stop.")
-      spool.stream.iterator.each: message =>
+      spool.lazyList.iterator.each: message =>
         Out.println(message)
     catch case _: InterruptedException => ()
     finally logSubscribers.synchronized(logSubscribers.remove(spool))
@@ -758,7 +739,7 @@ object TelServer extends LspServer():
   //
   // `tel lsp` runs the language server over stdio (what an editor launches); `tel lsp --log` streams
   // the messages a running server sends and receives. Further subcommands can be added as new `case`
-  // branches. This overrides the inherited `LspServer.main`, which ran the server unconditionally.
+  // branches.
 
   private val LspCommand       = Subcommand("lsp", "run the TEL language server over stdio (for editors)")
   private val SchemaCommand    = Subcommand("schema", "manage the schema registry")
@@ -766,17 +747,60 @@ object TelServer extends LspServer():
   private val ListCommand      = Subcommand("list", "list registered schemas")
   private val SignatureCommand = Subcommand("signature", "show a schema's palimpsest signature")
 
-  override def main(args: IArray[Text]): Unit = cli:
+  def main(args: Array[Text]): Unit = cli:
     arguments match
-      case LspCommand() :: rest if rest.exists(argument => argument() == t"--log") =>
+      case LspCommand() :: rest if rest.stdlib.exists(argument => argument() == t"--log") =>
         execute:
           streamLog()
           Exit.Ok
 
       case LspCommand() :: _ =>
         execute:
-          schemaDirectory = safely(SchemaCache.directory)
-          supervise(serve())
+          // Resolved here, where the invoker's `Environment` is in scope, and closed over by the
+          // handlers: `listen` keeps everything stateful within its own frame.
+          val registry: Registry = safely(SchemaCache.directory)
+
+          supervise:
+            // Scoped here, not at the object level: `Lsp.arguments` (the `executeCommand` payload)
+            // would otherwise shadow Exoskeleton's CLI `arguments`, which `main` matches on.
+            import Lsp.*
+
+            Lsp.listen(t"tel", t"0.1.0", TrafficLog):
+              opened:
+                client.publishDiagnostics(document.uri, diagnose(document.text, registry))
+
+              // The document store applies incremental edits upstream, so `document.text` is already
+              // the post-edit text; the change events themselves are not needed.
+              changed:
+                client.publishDiagnostics(document.uri, diagnose(document.text, registry))
+
+              hover(hoverAt(document.text, position, registry))
+              complete()(completions(document.text, position, registry))
+              definition(definitionAt(document.uri, document.text, position, registry))
+
+              references:
+                val lines = structure(document.text)._1
+
+                wordAt(position, lines) match
+                  case Some((word, _, _)) =>
+                    occurrences(word, lines).map: (line, start, end) =>
+                      location(document.uri, line, start, end)
+
+                  case None =>
+                    Nil
+
+              documentSymbols:
+                val (lines, tree) = structure(document.text)
+                tree.map(symbol(_, lines))
+
+              foldingRanges(structure(document.text)._2.flatMap(folds))
+
+              selectionRanges:
+                val (lines, tree) = structure(document.text)
+                positions.map(selectionRange(_, tree, lines))
+
+              documentHighlights(highlights(document.text, position))
+
           Exit.Ok
 
       case SchemaCommand() :: ListCommand() :: _ =>
@@ -816,7 +840,7 @@ object TelServer extends LspServer():
 
   private def schemaAdd(file: Text)(using Stdio, Environment, System): Exit =
     try
-      val entry = SchemaCache.add(SchemaCache.directory, file.decode[Path on Linux])
+      val entry = SchemaCache.add(SchemaCache.directory, file.as[Path on Linux])
       Out.println(t"Added schema `${entry.name}` (id ${entry.id}).")
       Exit.Ok
     catch case error: Error =>
@@ -829,9 +853,11 @@ object TelServer extends LspServer():
         case tel: Tel =>
           Out.println(SchemaCache.signature(tel, layers))
           Exit.Ok
+
         case _ =>
           Out.println(t"tel: no schema named `$name` in the registry")
           Exit.Fail(1)
+
     catch case error: Error =>
       Out.println(t"tel: could not compute signature: ${error.message.text}")
       Exit.Fail(1)
