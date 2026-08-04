@@ -22,6 +22,9 @@ import strategies.throwUnsafely
 import threading.virtualThreading
 import systems.javaSystem
 import interfaces.paths.pathOnLinux
+// `Pathname` resolves a command-line path argument against the *invoking shell's* directory, not the
+// daemon JVM's, so the working directory has to come from the `Cli` the Ethereal client supplies.
+import workingDirectories.daemonClientWorkingDirectory
 import textMetrics.uniformMetric
 import tableStyles.thinRoundedTableStyle
 import columnAttenuation.ignoreAttenuation
@@ -806,7 +809,9 @@ object TelServer:
       case SchemaCommand() :: ListCommand() :: _ =>
         execute(schemaList())
 
-      case SchemaCommand() :: AddCommand() :: Argument(file) :: _ =>
+      // `Pathname` (rather than a bare `Argument`) both resolves the argument — relative or absolute —
+      // against the client's working directory, and registers filename tab-completions for it.
+      case SchemaCommand() :: AddCommand() :: Pathname(file) :: _ =>
         execute(schemaAdd(file))
 
       case SchemaCommand() :: SignatureCommand() :: Argument(name) :: layers =>
@@ -838,9 +843,12 @@ object TelServer:
       Out.println(t"tel: could not list schemas: ${error.message.text}")
       Exit.Fail(1)
 
-  private def schemaAdd(file: Text)(using Stdio, Environment, System): Exit =
+  // `Pathname` yields a `Path on Local` (the platform the client is running on); the registry — and
+  // everything else that touches it — is typed `Path on Linux`, so the resolved path is re-encoded
+  // into that world at this one boundary.
+  private def schemaAdd(file: Path on Local)(using Stdio, Environment, System): Exit =
     try
-      val entry = SchemaCache.add(SchemaCache.directory, file.as[Path on Linux])
+      val entry = SchemaCache.add(SchemaCache.directory, file.encode.as[Path on Linux])
       Out.println(t"Added schema `${entry.name}` (id ${entry.id}).")
       Exit.Ok
     catch case error: Error =>
