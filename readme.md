@@ -2,10 +2,10 @@
 
 # TEL, the Typed Element Language
 
-TEL is a tree-structured data format designed to be edited by humans, agents, and processors
-alike. Structure is carried by indentation and a single sigil character (`#` by default);
-everything else is content. The result is a notation that reads like the data it represents,
-with no escaping rules to learn and no punctuation to balance.
+TEL is a tree-structured data format designed to be edited by humans, agents, and processors alike.
+Structure is carried by indentation and a single sigil character (`#` by default); everything else
+is content. The result is a notation that reads like the data it represents, with no escaping rules
+to learn and no punctuation to balance.
 
 ```tel
 tel 1.0
@@ -18,33 +18,32 @@ project alpha
 
 ## Features
 
-- **Minimal markup.** Indentation and a configurable sigil are all that distinguish structure
-  from content; everything else is data.
-- **Hosts other languages without escaping.** A scalar value may be carried as an indented
-  block (a *source atom*) or as a delimited payload (a *literal atom*) — JSON, XML, Markdown,
-  shell scripts, and the like embed verbatim.
-- **Schemas and types.** A schema names records, sums, scalars, and validators. Definition
-  names are PascalCase (`Contact`, `PhoneNumber`); field and variant keywords are kebab-case.
-  Documents are checked against their schema during parsing.
-- **User-extensible validation.** A schema attaches named validators to scalars and structs;
-  the parser calls back to the application to run them.
-- **Layered schemas with safe evolution.** A base schema may be refined by ordered layers;
-  every permitted layer operation produces a *subtype* of the base, so older readers can
-  still consume newer documents.
+- **Minimal markup.** Indentation and a configurable sigil are all that distinguish structure from
+  content; everything else is data.
+- **Hosts other languages without escaping.** A scalar value may be carried as an indented block (a
+  _source atom_) or as a delimited payload (a _literal atom_) — JSON, XML, Markdown, shell scripts,
+  and the like embed verbatim.
+- **Schemas and types.** A schema names records, sums, scalars, and validators. Definition names are
+  PascalCase (`Contact`, `PhoneNumber`); field and variant keywords are kebab-case. Documents are
+  checked against their schema during parsing.
+- **User-extensible validation.** A schema attaches named validators to scalars and structs; the
+  parser calls back to the application to run them.
+- **Layered schemas with safe evolution.** A base schema may be refined by ordered layers; every
+  permitted layer operation produces a _subtype_ of the base, so older readers can still consume
+  newer documents.
 - **Concise binary wire format.** Every TEL document has an unambiguous **BinTEL** encoding
   (typically ~2× smaller than the text) for hashing, transmission, or storage.
-- **BASE-256 textual carrier.** When the wire format must travel in a text channel, BASE-256
-  encodes one byte as one Unicode letter — half the length of hex, copy-paste-safe, no
-  escaping required.
-- **Faithful round-trips.** Programmatic edits preserve comments, blank lines, atom form,
-  and tabulation alignment wherever they aren't directly changed.
+- **BASE-256 textual carrier.** When the wire format must travel in a text channel, BASE-256 encodes
+  one byte as one Unicode letter — half the length of hex, copy-paste-safe, no escaping required.
+- **Faithful round-trips.** Programmatic edits preserve comments, blank lines, atom form, and
+  tabulation alignment wherever they aren't directly changed.
 
 ## Quick tour
 
 ### Pragma
 
-Every TEL document begins with a pragma identifying the version, optional schema, and
-optional sigil:
+Every TEL document begins with a pragma identifying the version, optional schema, and optional
+sigil:
 
 ```tel
 tel 1.0
@@ -57,8 +56,8 @@ signature. The sigil overrides the default `#`.
 
 ### Compounds and atoms
 
-A non-blank line is a **compound**: a keyword followed by zero or more inline atoms, and
-optionally child blocks at one greater indent.
+A non-blank line is a **compound**: a keyword followed by zero or more inline atoms, and optionally
+child blocks at one greater indent.
 
 ```tel
 contact alice
@@ -69,11 +68,11 @@ contact alice
 
 ### Hosting other languages
 
-A *source atom* is an indented block whose payload is captured verbatim, with the block's
-own indentation stripped. A *literal atom* uses an arbitrary delimiter line and preserves
-every byte of its payload — including trailing spaces, leading whitespace, and the sigil
-character. Because nothing is stripped, the payload begins at column zero; the closing
-delimiter line mirrors the opening one exactly, indentation included.
+A _source atom_ is an indented block whose payload is captured verbatim, with the block's own
+indentation stripped. A _literal atom_ uses an arbitrary delimiter line and preserves every byte of
+its payload — including trailing spaces, leading whitespace, and the sigil character. Because
+nothing is stripped, the payload begins at column zero; the closing delimiter line mirrors the
+opening one exactly, indentation included.
 
 ```tel
 fixture sample-payload
@@ -94,7 +93,7 @@ echo "Greetings from $(hostname)"
 
 A single source can hold a sequence of independent documents, one after another, like
 newline-delimited JSON. A line consisting of exactly two sigil characters — `##` by default — is a
-*document separator*: it ends the current document and begins the next on the following line. Each
+_document separator_: it ends the current document and begins the next on the following line. Each
 document is independent, with its own pragma, sigil, and margin.
 
 ```tel
@@ -109,7 +108,7 @@ greeting world
 
 There are two ways to read such a source. The default reads a single document and **stops** at the
 first separator; everything after it is left untouched. That makes a TEL document a convenient
-*header* for some other, possibly non-TEL, content:
+_header_ for some other, possibly non-TEL, content:
 
 ```tel
 tel 1.0
@@ -127,13 +126,12 @@ produce an empty final document.
 
 ### Schemas
 
-A schema is itself a TEL document describing the shape of conforming documents. Three kinds
-of named Definition coexist in one namespace: `record` (a product type), `scalar` (a leaf
-value with validators), and `select` (a sum type — a named alternation of variants). At a
-member position, `field` declares a single-keyword slot and `select` references a named
-sum. Cardinality defaults to "exactly one"; `optional` loosens to "zero or one",
-`repeatable` loosens to "zero or more". Layers may *tighten* these defaults in later
-versions but never loosen them.
+A schema is itself a TEL document describing the shape of conforming documents. Three kinds of named
+Definition coexist in one namespace: `record` (a product type), `scalar` (a leaf value with
+validators), and `select` (a sum type — a named alternation of variants). At a member position,
+`field` declares a single-keyword slot and `select` references a named sum. Cardinality defaults to
+"exactly one"; `optional` loosens to "zero or one", `repeatable` loosens to "zero or more". Layers
+may _tighten_ these defaults in later versions but never loosen them.
 
 ```tel
 tel 1.0
@@ -170,12 +168,11 @@ active
 
 ### Validators
 
-Each scalar may declare one or more named **validators** (applied in AND-conjunction). A
-record or sum may carry its own validators for cross-field or cross-variant constraints.
-Validator names live in a single shared namespace and are resolved at parse time by a
-host-language callback. Four built-in validators are guaranteed by every conforming parser:
-`identifier` (kebab-case), `type-name` (PascalCase), `sigil` (a single sigil character),
-and `string` (unconstrained).
+Each scalar may declare one or more named **validators** (applied in AND-conjunction). A record or
+sum may carry its own validators for cross-field or cross-variant constraints. Validator names live
+in a single shared namespace and are resolved at parse time by a host-language callback. Four
+built-in validators are guaranteed by every conforming parser: `identifier` (kebab-case),
+`type-name` (PascalCase), `sigil` (a single sigil character), and `string` (unconstrained).
 
 ```tel
 scalar Hostname
@@ -191,31 +188,29 @@ record Event
 ## Binary form (BinTEL)
 
 Every well-typed TEL document has a deterministic **BinTEL** encoding (see
-[`spec/bintel.md`](spec/bintel.md)). BinTEL is type-tag-free — the schema supplies all
-typing, so the byte stream encodes only keyword indices and scalar values. A BinTEL stream
-begins with the four bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in
-BASE-256 textual form.
+[`spec/bintel.md`](spec/bintel.md)). BinTEL is type-tag-free — the schema supplies all typing, so
+the byte stream encodes only keyword indices and scalar values. A BinTEL stream begins with the four
+bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in BASE-256 textual form.
 
 The BLAKE3-256 hash of a BinTEL document root is the document's **value hash**: a stable,
-schema-aware identifier suitable for content addressing. Composed schemas (base + layers)
-are identified by a **palimpsest** of component hashes, encoded as a single BASE-256 token
-on the pragma line.
+schema-aware identifier suitable for content addressing. Composed schemas (base + layers) are
+identified by a **palimpsest** of component hashes, encoded as a single BASE-256 token on the pragma
+line.
 
 ## BASE-256
 
-[`spec/base256.md`](spec/base256.md) describes a binary-to-text encoding that maps every
-byte to one Unicode letter (or ASCII digit) drawn from a fixed 256-character alphabet. A
-BASE-256-encoded string is one word under Unicode word-segmentation (double-click selects
-the whole token), contains no whitespace or punctuation, and decodes losslessly via a
-single modulo operation.
+[`spec/base256.md`](spec/base256.md) describes a binary-to-text encoding that maps every byte to one
+Unicode letter (or ASCII digit) drawn from a fixed 256-character alphabet. A BASE-256-encoded string
+is one word under Unicode word-segmentation (double-click selects the whole token), contains no
+whitespace or punctuation, and decodes losslessly via a single modulo operation.
 
 ## Where to go next
 
-- [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system,
-  error taxonomy, machine operations, round-trip properties).
+- [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system, error
+  taxonomy, machine operations, round-trip properties).
 - [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format.
-- [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed
-  schema signatures.
+- [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed schema
+  signatures.
 - [`spec/base256.md`](spec/base256.md) — the BASE-256 textual encoding.
-- [`demo/`](demo/) — worked schemas and documents covering inline/source/literal
-  atoms, layered schemas, struct validators, and the canonical `tel-schema` self-bootstrap.
+- [`demo/`](demo/) — worked schemas and documents covering inline/source/literal atoms, layered
+  schemas, struct validators, and the canonical `tel-schema` self-bootstrap.

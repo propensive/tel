@@ -63,8 +63,8 @@ object SchemaCache:
   def ensurePreloaded(directory: Path on Linux): Unit =
     safely:
       val file = t"${directory.encode}/tel-schema.tel".as[Path on Linux]
-      if !file.exists() then
-        if !directory.exists() then directory.create[Directory](CreateFlag.Parents)
+      if !file.existent() then
+        if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
         file.write(MetaSchema.source)
         markReadOnly(file)
 
@@ -83,7 +83,7 @@ object SchemaCache:
   :   Entry =
     val text = file.read[Text]
     val entry = entryOf(text.read[Tel])   // reconstructs the Tels (raises if malformed) and its id
-    if !directory.exists() then directory.create[Directory](CreateFlag.Parents)
+    if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
     val target = t"${directory.encode}/${entry.name}.tel".as[Path on Linux]
     makeWritable(target)                   // a prior copy is stored read-only
     target.write(text)
@@ -95,7 +95,7 @@ object SchemaCache:
     ensurePreloaded(directory)
     safely:
       val file = t"${directory.encode}/${name}.tel".as[Path on Linux]
-      if file.exists() then read(file) else Unset
+      if file.existent() then read(file) else Unset
 
   // As `resolve`, but returns the cache *file* backing the identifier (for cross-file navigation from
   // a document into its schema). Matches by name first, then by base/fully-composed signature.
@@ -103,7 +103,7 @@ object SchemaCache:
     ensurePreloaded(directory)
     val byName = safely:
       val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
-      if file.exists() then file else Unset
+      if file.existent() then file else Unset
 
     byName.or:
       safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).find: file =>
@@ -122,7 +122,7 @@ object SchemaCache:
     ensurePreloaded(directory)
     val byName = safely:
       val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
-      if file.exists() then Tels.Reconstructor.fromTel(read(file)) else Unset
+      if file.existent() then Tels.Reconstructor.fromTel(read(file)) else Unset
 
     byName.or:
       safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).map: file =>
