@@ -46,9 +46,9 @@ object TelServer:
   // are collected rather than aborting on the first; `read[Tel]` yields the recovered document (which
   // we discard here — diagnostics only need the errors) while each `TelError` folds into `TelErrors`.
 
-  // Accrual accumulator: each surfaced error with its focus. For schema validation, `Focus.position`
-  // is filled by `Tel.Type.assign` (via `Focus.withPosition`) against the position-tracked document
-  // (`import parsing.trackPositions`), so the diagnostic can point at the offending compound.
+  // Accrual accumulator: each surfaced error with its focus. For schema validation, `Focus.span` is
+  // filled by `Tel.Type.assign` (via `Focus.withSpan`) against the position-tracked document
+  // (`import parsing.trackPositions`), so the diagnostic can span the offending compound's keyword.
   private case class Accrued(items: List[(Optional[Tel.Focus], TelError)] = Nil)(using Diagnostics)
   extends Error(m"${items.length} TEL errors"):
     def add(focus: Optional[Tel.Focus], error: TelError): Accrued = Accrued(items :+ (focus, error))
@@ -67,9 +67,9 @@ object TelServer:
     // errors. A schema *document* (its pragma names `tel-schema`) is checked against the built-in
     // meta-schema; any other pragma schema — a bare name or BASE-256 signature — is resolved against
     // the local registry populated by `tel schema add`.
-    // Kept for the diagnostic ranges as well as the schema pass: `Tel.Type.assign` no longer fills
-    // a focus's position, so a schema error's range is resolved by locating its keyword path
-    // against this position-tracked document.
+    // Kept for the diagnostic ranges as well as the schema pass: it is the position-tracked
+    // document against which a focus's keyword path is located when the focus arrives without a
+    // span of its own.
     val document: Optional[Tel] = if parse.nonEmpty then Unset else safely(text.read[Tel])
 
     val schema =
@@ -367,12 +367,21 @@ object TelServer:
         source   = t"tel",
         message  = m"${error.reason}".text )
 
-  // Prefer the error's own position, which parse errors carry. A schema/validation error carries
-  // only a `Tel.Focus`: `assign` records the keyword path but no longer fills in the position
-  // itself, so the path is resolved here against the position-tracked document (`tel.locate`, under
-  // `import parsing.trackPositions`) — which is what points a schema error at the offending
-  // compound rather than at the document root. Both expose a 0-based `.span` that maps to an LSP
-  // range via Exegesis's `Lsp.Range.from`; the first line is the fallback when neither yields one.
+  // Every located TEL error carries a `Span` — 0-based, `Line`-mode, and carrying the *extent* of
+  // the offending text, not merely its first character — which is exactly the shape of an LSP
+  // range, so Exegesis's `Lsp.Range.from` converts it directly. Three sources, in order of
+  // precision:
+  //
+  //   1. `error.span`, which a parse error carries: the parser spans the token it rejected (a
+  //      pragma phrase, a trailing-space run, a literal's opening delimiter, an indent run…), so
+  //      the diagnostic underlines that token and nothing else.
+  //   2. `focus.span`, which `Tel.Type.assign` fills in (via `Tel.supplementPositions`) for every
+  //      accrued schema-validation focus, from the document's `PositionIndex` — hence the
+  //      load-bearing `import parsing.trackPositions`. It spans the offending compound's keyword.
+  //   3. Failing both — an error accrued outside `assign`, e.g. from `Tels.Reconstructor.fromTel` —
+  //      the focus's keyword path is located against the position-tracked document here.
+  //
+  // An error with no span at all (nothing in the source to point at) falls back to the first line.
   private def errorRange
      ( focus:    Optional[Tel.Focus],
        error:    TelError,
@@ -380,25 +389,36 @@ object TelServer:
        document: Optional[Tel] )
   :   Lsp.Range =
 
-    val located: Optional[TelError.Position] =
-      focus.lay(Unset: Optional[TelError.Position]): focus =>
-        document.lay(Unset: Optional[TelError.Position])(_.locate(focus.pointer))
-
-    val position: Optional[TelError.Position] =
-      if error.position.absent then located else error.position
+    val span: Span =
+      if error.span.exists then error.span
+      else focus.lay(Span.empty): focus =>
+        if focus.span.exists then focus.span
+        else document.lay(Span.empty)(_.locate(focus.pointer).lay(Span.empty)(_.span))
 
     val fallback =
       val end = lines.headOption.fold(1)(_.length.max(1))
       Lsp.Range(Lsp.Position(0, 0), Lsp.Position(0, end))
 
-    val range = Lsp.Range.from(position.lay(Span.empty)(_.span)).or(fallback)
+    Lsp.Range.from(span).lay(fallback)(fit(_, lines))
 
-    // Parse errors report a point (zero-width span); widen those to the end of the line so the
-    // diagnostic is visible. Located errors with a length (e.g. a schema keyword) keep their span.
-    if range.start == range.end then
-      val end = lineLength(lines, range.start.line).max(range.start.character + 1)
-      range.copy(end = Lsp.Position(range.start.line, end))
-    else range
+  // Reconcile a span-derived range with the document as the client sees it. A span's columns are
+  // the parser's, so a column just past the last character of a line (an error at end-of-input, or
+  // a saturated span) has to be pulled back within the line, and a range left with no width — a
+  // located compound whose length was not recorded — is widened to one character, so that the
+  // client has something to underline. A range that spans lines is left alone.
+  private def fit(range: Lsp.Range, lines: IndexedSeq[String]): Lsp.Range =
+    if range.start.line != range.end.line then range else
+      val length = lineLength(lines, range.start.line)
+      val start = range.start.character.min(length).max(0)
+      val end = range.end.character.max(start).min(length)
+
+      val (from, to) =
+        if end > start then (start, end)
+        else if start < length then (start, start + 1) // widen forwards, within the line
+        else if length > 0 then (length - 1, length)   // at end of line: underline its last character
+        else (0, 0)                                    // an empty line: nothing to underline
+
+      Lsp.Range(Lsp.Position(range.start.line, from), Lsp.Position(range.start.line, to))
 
   // A well-formed pragma: `tel <major>.<minor>` optionally followed by a schema and/or sigil. The
   // pragma is the first line, unless an interpreter directive (`#!…` shebang) precedes it.

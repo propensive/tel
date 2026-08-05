@@ -35,9 +35,13 @@ Features so far:
   with [Stratiform](https://github.com/propensive/stratiform)'s TEL parser (`read[Tel]`) under an
   accrual boundary, and every `TelError` is reported with its spec E-code (e.g. `E104`, `E107`), its
   message, and a **source range**. Ranges come from Stratiform's position tracking (`import
-  parsing.trackPositions`): parse errors carry the parser's position, and a schema/validation
-  error's `Tel.Focus` keyword path is resolved against the position-tracked document with
-  `tel.locate`. A *schema* document (one whose pragma names the `tel-schema` meta-schema) is
+  parsing.trackPositions`), and are *exact*: every located `TelError` carries a `Span` giving both
+  the start and the extent of the offending text, so a diagnostic underlines the token itself — the
+  bad pragma phrase, the trailing-space run, the misaligned indent, the offending compound's
+  keyword — rather than a single character or a whole line. A parse error carries its own `span`; a
+  schema/validation error's span is filled onto its `Tel.Focus` by `Tel.Type.assign` (via
+  `Tel.supplementPositions`), and, failing that, the focus's keyword path is resolved against the
+  position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tel-schema` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
   malformed-schema errors such as `E306` (unrecognised keyword).
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
@@ -150,12 +154,6 @@ The LSP matches that signature against each cached schema's base or fully-compos
   machine-operation set is exposed through `open[Tel]`, including §22.3 canonical presentation.
 - **Per-node structure ranges from positions** — outline/folding use a source scan because
   `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings).
-- **Schema errors report at the document root.** `Tel.Type.assign` declares `tracks Tel.Focus` but
-  never pushes a focus (every `focus(…)` call in `stratiform.Tel` is on the derivation path), so a
-  schema error arrives with no keyword path for `tel.locate` to resolve and its diagnostic falls
-  back to line 1. Parse errors are unaffected — they carry their own position. The server already
-  resolves the focus when one is present, so restoring the focus scoping in `assign`'s child walk
-  (upstream, in Stratiform) is all that is needed.
 - **Scalar `encoding` is unsupported upstream.** `stratiform.Tels` has no `encoding` anywhere — not
   on `ScalarDefinition`, not in `Tels.Axiom`, not in the BinTEL codecs — although the language has
   it (tel.md §21.7, BinTEL B13–B15) and the in-repo meta-schema
