@@ -52,6 +52,9 @@ object SchemaCache:
   // The raw text of a cache file (the filesystem givens live here, not in the server).
   def readText(file: Path on Linux): Optional[Text] = safely(file.read[Text])
 
+  // The listing entry for a single cache file (used by the LSP to describe a resolved schema).
+  def describe(file: Path on Linux): Optional[Entry] = safely(entryOf(read(file)))
+
   // Cached schema files are stored read-only, so an editor opened at one (via the LSP's cross-file
   // go-to-definition) presents it as read-only. These use `java.io.File` because the registry copy is
   // a managed artifact whose permission bit is being toggled, not filesystem I/O the typed API mediates.

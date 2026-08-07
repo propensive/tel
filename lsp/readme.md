@@ -19,7 +19,7 @@ It is organised around subcommands:
 - **`tel lsp --log`** — stream, live, the messages a running server sends/receives (a debugging aid).
 - **`tel schema list`** — list registered schemas as a table (name, BASE-256 id, layers).
 - **`tel schema add <file>`** — validate a schema against the tel-schema meta-schema and add it to the
-  registry (an *absolute* path for now).
+  registry (relative paths resolve against the invoking shell's directory).
 - **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
   with the named layers (in order; none = the base schema).
 
@@ -43,14 +43,20 @@ Features so far:
   `Tel.supplementPositions`), and, failing that, the focus's keyword path is resolved against the
   position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tel-schema` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
-  malformed-schema errors such as `E306` (unrecognised keyword).
+  malformed-schema errors such as `E306` (unrecognised keyword), plus a local `E210` check for
+  duplicate (or built-in-colliding) definition names. Diagnostics are cleared when a document
+  closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
+  identifier (the document is valid, just unvalidated); the known-spurious `E306` on scalar
+  `encoding` is downgraded to a `Warning` with an explanation.
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
   highlights** — derived from an indentation scan of the source. (Stratiform positions are looked up
   by keyword *path*, which can't disambiguate same-keyword siblings, so the scan stays authoritative
-  for ordered structure.)
+  for ordered structure.) The scan recognises source-atom and literal-atom payloads (§14/§15)
+  lexically, so payload lines never appear as compounds, and a compound's fold covers its payload.
 - **Go-to-definition**, **find references**, and **hover** for named types — a `record`/`scalar`/
   `select` compound defines a type; a `field`/`variant` references one by its inline atom. Hover over
-  the pragma still shows the document's version.
+  the pragma reports the schema-resolution status: the resolved schema's name, signature and
+  registry path (or the meta-schema, or why resolution failed).
 - **Cross-file link-to-definition into the schema** — from a document that resolves to a registered
   schema, go-to-definition on a compound keyword jumps *across* into the schema file, at the
   `field`/`variant` that declares it (descending through record references for nested compounds), and
@@ -59,16 +65,28 @@ Features so far:
 - **Schema-aware hover and completion** — when a document resolves to a registered schema, the server
   navigates the schema alongside the document's compound tree (descending into `record` references and
   flattening `select` variants):
-  - **hover** over a compound keyword shows the member's type, cardinality (`optional`/`repeatable`),
-    default, and **description**;
-  - **completion** is driven by the schema at the cursor's position:
+  - **hover** is column-accurate: over a compound *keyword* it shows the member's type, cardinality
+    (`optional`/`repeatable`), default, and **description**; over a *value atom* it shows what the
+    schema says about that slot — the expected scalar type and validators (with the field's
+    default), the matched `select` variant (or the admissible variants), or a record's
+    atom-assignable flag members; over a built-in validator name on a `validate` line, its §21.5
+    blurb. Every hover carries the hovered token's range.
+  - **completion** is driven by the schema at the cursor's position (a space after a keyword
+    triggers it):
     - at a **keyword** slot — the members valid for the enclosing struct (`field`s and flattened
-      `select` variants), each with its type as the detail and its **description** as the documentation;
-    - at a **value** slot of a `select`-typed field — that select's variant keywords;
+      `select` variants), each with its type as the detail and its **description** as the
+      documentation (atom-taking fields insert a trailing space);
+    - at a **value** slot — the inline atoms the member's type admits: a select reference's
+      variants, or a record's atom-assignable members (flag fields and flag-typed variants);
+    - at the **pragma's identifier slot** — the registered schemas, labelled by name, inserting the
+      BASE-256 signature;
     - and, because a schema document is itself checked against the built-in **meta-schema**, editing a
-      schema completes meta-keywords (`record`, `field`, `validate`, …) at a keyword slot and the
+      schema completes meta-keywords (`record`, `field`, `validate`, …) at a keyword slot, the
       available **type names** (the document's own `record`/`scalar`/`select` definitions plus the
-      built-ins `String`, `Identifier`, `TypeName`, `Sigil`, `Flag`) at a `field`/`variant` type slot.
+      built-ins `String`, `Identifier`, `TypeName`, `Sigil`, `Flag`) at a `field`/`variant` type
+      slot, the **flags** (`optional`, `required`, `repeatable`, `irrepeatable`, derived from the
+      meta-schema) after a member declaration, and the four built-in **validator names** on a
+      `validate` line.
 
 The whole tool is a single object, `tel.TelServer`, in
 [`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala). Its `main` dispatches on the
@@ -138,25 +156,40 @@ tel 1.0 ḡǼJûĿΫęôқδfΊzžμȑωûĺǑЬǨỵξϋ4SṽζẄǽOḁ
 …
 ```
 
-The LSP matches that signature against each cached schema's base or fully-composed signature. Schema
-*documents* (pragma names `tel-schema`) are still validated against the built-in meta-schema.
+The LSP matches that signature against each cached schema's base or fully-composed signature
+(memoized per identifier, invalidated when the registry directory changes). Schema *documents*
+(pragma names `tel-schema`) are still validated against the built-in meta-schema. When the pragma
+names a schema that matches nothing in the registry, the LSP says so: an `Information` diagnostic
+(`schema-unresolved`) underlines the identifier, and hovering the pragma explains the resolution
+status (resolved schema name, signature and registry path; meta-schema; or the failure). The
+pragma's identifier slot also tab-completes to the registered schemas, inserting the signature.
+
+## Testing
+
+`mill tel.test.run` runs a Probably suite ([`tel.Tests`](src/test/tel.Tests.scala)) over the
+server's pure handler functions — diagnostics, schema resolution, the structure scan (including
+§14/§15 payload handling), hover and completion — against a throwaway schema registry. No JSON-RPC
+transport is involved; for a live smoke test, drive `tel lsp` over stdio and watch with
+`tel lsp --log`.
 
 ## Known gaps / next steps
 
-- **`tel schema add` needs an absolute path** (relative-path resolution wants the invoker's
-  `WorkingDirectory` threaded through the daemon's CLI context — deferred).
-- **Deeper schema validity** — `assign`/`fromTel` catch malformed schema *syntax* but not semantic
-  E2xx (unresolved references, duplicate definitions, empty selects); surfacing those needs
-  Stratiform's §20.1 schema-validity pass.
+- **Deeper schema validity** — `assign`/`fromTel` catch malformed schema *syntax*, and the LSP
+  checks duplicate/built-in-colliding definition names itself (E210), but the remaining semantic
+  E2xx (layer-merge errors, empty selects) need Stratiform's §20.1 schema-validity pass.
 - **Resolution by name / URL** — only signature (and all-alphanumeric name) lookups work; mapping a
   URL or kebab-case name to a cached schema would need a stored URL↔schema/name index.
 - **Formatting** (`tel.show`) and **rename**. Formatting is now within reach: Stratiform's §22.2
   machine-operation set is exposed through `open[Tel]`, including §22.3 canonical presentation.
 - **Per-node structure ranges from positions** — outline/folding use a source scan because
-  `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings).
+  `tel.locate` resolves a keyword *path* (ambiguous for same-keyword siblings). The scan recognises
+  source-atom/literal-atom payloads lexically, so payload lines are not mistaken for compounds.
+- **Snippet completions** — Exegesis's `CompletionItem` has `insertText` but no `insertTextFormat`,
+  so completions cannot yet carry `$1`-placeholder snippets.
 - **Scalar `encoding` is unsupported upstream.** `stratiform.Tels` has no `encoding` anywhere — not
   on `ScalarDefinition`, not in `Tels.Axiom`, not in the BinTEL codecs — although the language has
   it (tel.md §21.7, BinTEL B13–B15) and the in-repo meta-schema
   ([`tel.MetaSchema`](src/core/tel.MetaSchema.scala)) declares `field encoding Identifier optional`.
-  So a schema document using `encoding` reports a spurious `E306`, and LSP-computed tel-schema
-  signatures do not match the pinned normative vector.
+  A schema document using `encoding` therefore reports a spurious `E306`, which the LSP downgrades
+  to a `Warning` with an explanatory note; LSP-computed tel-schema signatures still do not match
+  the pinned normative vector.

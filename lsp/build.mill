@@ -242,3 +242,9 @@ object tel extends Project:
     // A clean zip (no shell preamble) so Ethereal's self-packaging can read and rewrite the assembly
     // when the `build.executable` native launcher is produced.
     def prependShellScript = ""
+
+  // Probably test suite for the server's pure handler functions (`mill tel.test.run`). The suite is
+  // a runnable object (Probably's `Suite` has a `main`), not an sbt-style test framework.
+  object test extends Component(core):
+    def mvnDeps = settings.deps
+    def finalMainClass = "tel.Tests"

@@ -57,11 +57,114 @@ object TelServer:
   // and threaded to the handlers that need it: nothing capability-carrying or stateful lives in this
   // object, which the capture-checked API requires and the Ethereal daemon (one JVM, many editor
   // sessions) makes desirable anyway.
-  private type Registry = Optional[Path on Linux]
+  private[tel] type Registry = Optional[Path on Linux]
 
-  private def diagnose(text: Text, registry: Registry): List[Lsp.Diagnostic] =
+  // ── Pragma and schema resolution ────────────────────────────────────────────────────────────
+  //
+  // The pragma line — `tel <major>.<minor> [schema] [sigil]`, on line 0 or on line 1 after a `#!`
+  // interpreter directive — is parsed once into a `Pragma`, shared by diagnostics, hover,
+  // completion and the structure scan.
+
+  private[tel] case class PragmaId(name: Text, start: Int, end: Int)
+
+  private[tel] case class Pragma(line: Int, wellFormed: Boolean, identifier: Optional[PragmaId], sigil: Char)
+
+  // A well-formed pragma: `tel <major>.<minor>` optionally followed by a schema and/or sigil.
+  private val pragmaPattern = "tel [0-9]+\\.[0-9]+( .*)?"
+
+  private[tel] def pragmaOf(lines: IndexedSeq[String]): Pragma =
+    val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
+
+    lines.lift(index) match
+      case Some(line) =>
+        def isSigil(token: String): Boolean =
+          token.length == 1 && !Character.isLetterOrDigit(token.charAt(0))
+
+        // The schema identifier is the first token after `tel <version>` that is not a single
+        // symbolic sigil character; the sigil is the first token that is.
+        val rest = tokens(line).stdlib.drop(2)
+        val sigil = rest.collectFirst { case (token, _, _) if isSigil(token) => token.charAt(0) }
+
+        val identifier = rest.collectFirst:
+          case (token, start, end) if !isSigil(token) => PragmaId(token.tt, start, end)
+
+        Pragma
+          ( index, line.matches(pragmaPattern), identifier.getOrElse(Unset),
+            sigil.getOrElse('#') )
+
+      case None =>
+        Pragma(index, false, Unset, '#')
+
+  // The outcome of resolving a document's pragma schema identifier. `Unresolved` is distinguished
+  // from `NoSchema` so that an identifier which matches nothing in the registry can be reported to
+  // the user, rather than validation being skipped invisibly.
+  private[tel] enum Resolution:
+    case NoSchema
+    case Meta(meta: Tels, file: Optional[Path on Linux])
+    case Resolved(entry: SchemaCache.Entry, file: Path on Linux, schema: Tels)
+    case Unresolved(identifier: Text)
+
+    // The schema to validate and navigate with, if resolution succeeded.
+    def tels: Optional[Tels] = this match
+      case Meta(meta, _)          => meta
+      case Resolved(_, _, schema) => schema
+      case _                      => Unset
+
+    // The registry file backing the schema (for cross-file go-to-definition).
+    def schemaFile: Optional[Path on Linux] = this match
+      case Meta(_, file)        => file
+      case Resolved(_, file, _) => file
+      case _                    => Unset
+
+  // Resolves pragma schema identifiers against the registry, memoized per identifier: matching a
+  // BASE-256 signature re-reads and re-hashes every cached schema, which is too slow to repeat on
+  // every keystroke. The memo is dropped whenever the registry directory's modification time
+  // changes (i.e. `tel schema add` ran).
+  private[tel] class SchemaResolver(registry: Registry):
+    private val cache = scm.HashMap[Text, Resolution]()
+    private var stamp: Long = 0L
+
+    private def registryStamp: Long = registry match
+      case directory: (Path on Linux) => java.io.File(directory.encode.s).lastModified
+      case _                          => 0L
+
+    def apply(pragma: Pragma): Resolution =
+      pragma.identifier.lay(Resolution.NoSchema)(id => apply(id.name))
+
+    def apply(identifier: Text): Resolution = synchronized:
+      val now = registryStamp
+      if now != stamp then
+        cache.clear()
+        stamp = now
+
+      cache.getOrElseUpdate(identifier, resolve(identifier))
+
+    def entries: List[SchemaCache.Entry] = registry match
+      case directory: (Path on Linux) => SchemaCache.entries(directory)
+      case _                          => Nil
+
+    private def resolve(identifier: Text): Resolution = registry match
+      case directory: (Path on Linux) =>
+        if identifier.s.contains("tel-schema")
+        then Resolution.Meta(Tels.Axiom.tels, SchemaCache.resolveFile(directory, t"tel-schema"))
+        else SchemaCache.resolveFile(directory, identifier) match
+          case file: (Path on Linux) => SchemaCache.resolve(directory, identifier) match
+            case schema: Tels =>
+              val entry = SchemaCache.describe(file).or(SchemaCache.Entry(identifier, identifier, t""))
+              Resolution.Resolved(entry, file, schema)
+
+            case _ => Resolution.Unresolved(identifier)
+          case _ => Resolution.Unresolved(identifier)
+
+      case _ =>
+        if identifier.s.contains("tel-schema") then Resolution.Meta(Tels.Axiom.tels, Unset)
+        else Resolution.NoSchema
+
+  private[tel] def diagnose(text: Text, resolver: SchemaResolver): List[Lsp.Diagnostic] =
     val lines = text.s.linesIterator.toIndexedSeq
     val parse = parseErrors(text)
+    val pragma = pragmaOf(lines)
+    val resolution = resolver(pragma)
 
     // When the document parses, validate it against its schema and surface the schema/validation
     // errors. A schema *document* (its pragma names `tel-schema`) is checked against the built-in
@@ -75,14 +178,71 @@ object TelServer:
     val schema =
       if parse.nonEmpty then Nil
       else document.lay(Nil): tel =>
-        pragmaSchema(lines) match
-          case identifier: Text if identifier.s.contains("tel-schema") => schemaErrors(tel)
-          case identifier: Text =>
-            resolveSchema(identifier, registry).lay(Nil)(assignErrors(tel, _))
+        resolution match
+          case Resolution.Meta(_, _)             => schemaErrors(tel)
+          case Resolution.Resolved(_, _, schema) => assignErrors(tel, schema)
+          case _                                 => Nil
 
-          case _ => Nil
+    // Stratiform's `Reconstructor` leaves §20.1 schema-validity checking out of scope, so the one
+    // cheap, high-value case — duplicate or built-in-colliding definition names (E210) — is
+    // checked here against the source scan, on the offending name atom.
+    val duplicates = resolution match
+      case Resolution.Meta(_, _) if parse.isEmpty => duplicateDefinitions(lines)
+      case _                                      => Nil
 
-    (parse ::: schema).map(diagnostic(_, lines, document))
+    // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
+    // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
+    val unresolved = resolution match
+      case Resolution.Unresolved(identifier) =>
+        val range = pragma.identifier
+          . lay(Lsp.Range(Lsp.Position(pragma.line, 0), Lsp.Position(pragma.line, 1))): id =>
+              Lsp.Range(Lsp.Position(pragma.line, id.start), Lsp.Position(pragma.line, id.end))
+
+        List(Lsp.Diagnostic
+          ( range    = range,
+            severity = Lsp.DiagnosticSeverity.Information,
+            code     = t"schema-unresolved",
+            source   = t"tel",
+            message  = t"Schema `$identifier` is not registered, so this document is parsed but "
+                       + t"not validated. Register the schema with `tel schema add <file>`." ))
+
+      case _ => Nil
+
+    ((parse ::: schema).map(diagnostic(_, lines, document)) ::: duplicates ::: unresolved).stdlib
+    . distinctBy(entry => (entry.range, entry.code, entry.message))
+    . to(List)
+
+  // E210 (§20.1): two base Definitions sharing a name, or a Definition using a predefined built-in
+  // name. Located on the second (or built-in-colliding) definition's name atom.
+  private def duplicateDefinitions(lines: IndexedSeq[String]): List[Lsp.Diagnostic] =
+    def diagnosticAt(line: Int, message: Text): Optional[Lsp.Diagnostic] =
+      lines.lift(line).flatMap(candidate => tokens(candidate).stdlib.drop(1).headOption)
+      . map: (_, start, end) =>
+          Lsp.Diagnostic
+            ( range    = Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)),
+              severity = Lsp.DiagnosticSeverity.Error,
+              code     = t"E210",
+              source   = t"tel",
+              message  = message )
+      . getOrElse(Unset)
+
+    val builtins = builtinTypeNames.stdlib.to(scala.collection.immutable.Set)
+    var seen = scala.collection.immutable.Set[Text]()
+    val out = scm.ListBuffer[Lsp.Diagnostic]()
+
+    lines.zipWithIndex.foreach: (line, index) =>
+      val lineTokens = tokens(line).stdlib
+      if leadingSpaces(line) == 0 && lineTokens.length >= 2
+         && definitionKeywords(lineTokens(0)(0).tt)
+      then
+        val name = lineTokens(1)(0).tt
+        if builtins.contains(name) then
+          diagnosticAt(index, t"`$name` is a predefined built-in type name").let(out += _)
+        else if seen.contains(name) then
+          diagnosticAt(index, t"a definition named `$name` is already declared").let(out += _)
+        else seen += name
+
+    out.to(scala.List).to(List)
 
   private def parseErrors(text: Text): List[(Optional[Tel.Focus], TelError)] =
     validate[Tel.Focus](Accrued()):
@@ -112,31 +272,6 @@ object TelServer:
     . distinctBy((_, error) => (error.reason.number, error.reason))
     . to(List)
 
-  // The pragma's schema identifier: `tel <version> [schema] [sigil]` — the first token after the
-  // version that is not a single symbolic sigil character.
-  private def pragmaSchema(lines: IndexedSeq[String]): Optional[Text] =
-    val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
-    lines.lift(index) match
-      case Some(line) =>
-        tokens(line).stdlib.map((token, _, _) => token).drop(2)
-        . filterNot(token => token.length == 1 && !Character.isLetterOrDigit(token.charAt(0)))
-        . headOption.map(_.tt).getOrElse(Unset)
-
-      case None =>
-        Unset
-
-  // Resolve a pragma schema identifier against the registry.
-  private def resolveSchema(identifier: Text, registry: Registry): Optional[Tels] =
-    registry match
-      case directory: (Path on Linux) => SchemaCache.resolve(directory, identifier)
-      case _                          => Unset
-
-  // Resolve a pragma schema identifier to its cache file (for cross-file go-to-definition).
-  private def resolveSchemaFile(identifier: Text, registry: Registry): Optional[Path on Linux] =
-    registry match
-      case directory: (Path on Linux) => SchemaCache.resolveFile(directory, identifier)
-      case _                          => Unset
-
   // ── Schema-aware information (hover + completion) ──────────────────────────────────────────────
   //
   // When a document resolves to a registered schema, the compound keywords correspond to schema
@@ -158,12 +293,21 @@ object TelServer:
         case None         => Unset
       case _ => Unset
 
-  // The struct that a field's members live in, one keyword deeper.
-  private def memberStruct(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Struct] =
+  // The type that the member `keyword` of `struct` denotes: a field's declared type, or — because
+  // a `select` reference is flattened so its variants appear as sibling keywords — the variant
+  // type of a matching variant of a referenced select.
+  private def memberType(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Type] =
     struct.members.readable.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
-    match
-      case Some(fieldType) => structOf(fieldType, schema)
-      case None            => Unset
+    . orElse:
+        struct.members.readable.to(scala.List).collect { case ref: Tels.SelectRef => ref }
+        . flatMap(ref => schema.selects.find(_.name == ref.reference).to(scala.List))
+        . flatMap(_.variants.readable.to(scala.List))
+        . collectFirst { case variant if variant.keyword == keyword => variant.variantType }
+    . getOrElse(Unset)
+
+  // The struct that a member's own members live in, one keyword deeper.
+  private def memberStruct(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Struct] =
+    memberType(struct, keyword, schema).let(structOf(_, schema))
 
   // The struct reached by descending `schema.document` along a keyword path.
   private def structAt(schema: Tels, path: List[Text]): Optional[Tels.Struct] =
@@ -201,7 +345,7 @@ object TelServer:
     variant.description.let(value => t"$header\n\n$value").or(header)
 
   // Hover markup for the member `keyword` of `struct` (a `field`, or a `select` variant).
-  private def fieldHover(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Lsp.Hover] =
+  private def fieldMarkup(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Text] =
     val markup = struct.members.readable.to(List).flatMap:
       case field: Tels.Field if field.keyword == keyword =>
         List(fieldMarkdown(field, schema))
@@ -214,29 +358,100 @@ object TelServer:
       case _ =>
         Nil
 
-    markup.headOption match
-      case Some(text) => Lsp.Hover(Lsp.MarkupContent(value = text))
-      case None       => Unset
+    markup.headOption.getOrElse(Unset)
 
-  // Hover over a compound keyword in a document validated against a resolved schema.
-  private def schemaFieldHover
-     ( lines:    IndexedSeq[String],
-       tree:     List[Node],
-       position: Lsp.Position,
-       registry: Registry )
-  :   Optional[Lsp.Hover] =
+  // The built-in scalar type names (§20.5) with the §21.5 validator each one denotes.
+  private val builtinScalars: List[(Text, Text)] =
+    List
+      ( t"String"     -> t"string",
+        t"Identifier" -> t"identifier",
+        t"TypeName"   -> t"type-name",
+        t"Sigil"      -> t"sigil" )
 
-    pragmaSchema(lines) match
-      case identifier: Text => resolveSchema(identifier, registry) match
-        case schema: Tels => nodeChain(tree, position.line).reverse match
-          case node :: ancestors if node.line == position.line =>
-            structAt(schema, ancestors.reverse.map(_.keyword)) match
-              case struct: Tels.Struct => fieldHover(struct, node.keyword, schema)
-              case _                   => Unset
+  // The built-in validators of §21.5, with hover/completion blurbs.
+  private val builtinValidators: List[(Text, Text)] =
+    List
+      ( t"string"     -> t"accepts any value (no constraint)",
+        t"identifier" -> t"a kebab-case identifier (§20.7)",
+        t"type-name"  -> t"a PascalCase type name (§20.7)",
+        t"sigil"      -> t"a single sigil character" )
 
-          case _ => Unset
-        case _ => Unset
+  private def scalarValueMarkup
+     ( keyword:     Text,
+       name:        Optional[Text],
+       validators:  List[Text],
+       default:     Optional[Text],
+       description: Optional[Text] )
+  :   Text =
+
+    val checks =
+      if validators.isEmpty then t""
+      else t", validated as ${validators.map(validator => t"`$validator`").join(t", ")}"
+
+    val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks"
+    val fallback = default.let(value => t"\n\nDefault: `$value`").or(t"")
+    val about = description.let(value => t"\n\n$value").or(t"")
+    t"$header$fallback$about"
+
+  // Hover markup for a value atom: what the schema says about the slot the atom fills — its
+  // expected type and validators, the field's default, or the admissible select variants.
+  private def valueMarkup
+     ( keyword: Text, memberType: Tels.Type, default: Optional[Text], atom: Text, schema: Tels )
+  :   Optional[Text] =
+
+    memberType match
+      case Tels.Reference(name) =>
+        schema.selects.find(_.name == name) match
+          case Some(select) =>
+            select.variants.readable.to(scala.List).find(_.keyword == atom) match
+              case Some(variant) => variantMarkdown(variant, name, schema)
+              case None =>
+                val names = select.variants.readable.to(List).map: (variant: Tels.Variant) =>
+                  t"`${variant.keyword}`"
+
+                t"**$keyword** value — one of ${names.join(t", ")}"
+
+          case None => schema.scalars.find(_.name == name) match
+            case Some(scalar) =>
+              scalarValueMarkup
+                ( keyword, name, scalar.validators.readable.to(List), default,
+                  scalar.description )
+
+            case None => builtinScalars.stdlib.find(_(0) == name) match
+              case Some((_, validator)) =>
+                scalarValueMarkup(keyword, name, List(validator), default, Unset)
+
+              // A record-typed member: an inline atom fills one of the record's atom-assignable
+              // members (§21) — a flag field or a flag-typed select variant — so describe that.
+              case None => structOf(Tels.Reference(name), schema)
+                . let(fieldMarkup(_, atom, schema))
+
+      case Tels.Scalar(validators) =>
+        scalarValueMarkup(keyword, Unset, validators.readable.to(List), default, Unset)
+
+      case struct: Tels.Struct =>
+        fieldMarkup(struct, atom, schema)
+
+      case _ =>
+        Unset
+
+  // The innermost compound at `position` (if the cursor is on its own line) with the schema struct
+  // its members belong to.
+  private case class Slot(struct: Tels.Struct, node: Node)
+
+  private def enclosing(tree: List[Node], position: Lsp.Position, schema: Tels): Optional[Slot] =
+    nodeChain(tree, position.line).reverse match
+      case node :: ancestors if node.line == position.line =>
+        structAt(schema, ancestors.reverse.map(_.keyword)).let(Slot(_, node))
+
       case _ => Unset
+
+  // A scalar- or reference-typed field takes an inline atom, so completing its keyword appends the
+  // separating space; a flag or struct keyword stands alone.
+  private def keywordInsertText(keyword: Text, fieldType: Tels.Type): Optional[Text] =
+    fieldType match
+      case Tels.Reference(_) | Tels.Scalar(_) => t"$keyword "
+      case _                                  => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
     struct.members.readable.to(List).flatMap:
@@ -246,7 +461,8 @@ object TelServer:
               ( label         = field.keyword,
                 kind          = Lsp.CompletionItemKind.Field,
                 detail        = typeLabel(field.fieldType, schema),
-                documentation = field.description.let(text => Lsp.MarkupContent(value = text)) ) )
+                documentation = field.description.let(text => Lsp.MarkupContent(value = text)),
+                insertText    = keywordInsertText(field.keyword, field.fieldType) ) )
 
       case reference: Tels.SelectRef =>
         schema.selects.find(_.name == reference.reference).toList
@@ -266,16 +482,11 @@ object TelServer:
 
   // The schema a document is checked against: the built-in meta-schema for a schema document,
   // otherwise the registered schema its pragma resolves to.
-  private def documentSchema(lines: IndexedSeq[String], registry: Registry): Optional[Tels] =
-    if isSchemaDocument(lines) then Tels.Axiom.tels
-    else pragmaSchema(lines) match
-      case identifier: Text => resolveSchema(identifier, registry)
-      case _                => Unset
+  private def documentSchema(lines: IndexedSeq[String], resolver: SchemaResolver): Optional[Tels] =
+    resolver(pragmaOf(lines)).tels
 
   private def isSchemaDocument(lines: IndexedSeq[String]): Boolean =
-    pragmaSchema(lines) match
-      case identifier: Text => identifier.s.contains("tel-schema")
-      case _                => false
+    pragmaOf(lines).identifier.lay(false)(_.name.s.contains("tel-schema"))
 
   // The line's indentation, its keyword (the first token, if any), and how many whole atoms precede
   // the cursor: 0 = keyword position, 1 = first value/atom, 2 = second atom, and so on.
@@ -286,10 +497,6 @@ object TelServer:
     val atomsBefore = lineTokens.count((_, _, end) => character > end)
     (indent, keyword, atomsBefore)
 
-  private def fieldType(struct: Tels.Struct, keyword: Text): Optional[Tels.Type] =
-    struct.members.readable.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
-    . getOrElse(Unset)
-
   // Type-name completions for a schema document: the document's own definitions plus the built-ins.
   private def typeNameCompletions(tree: List[Node]): List[Lsp.CompletionItem] =
     (definitions(tree).keys.to(scala.List) ::: builtinTypeNames.stdlib).distinct.sorted
@@ -297,47 +504,146 @@ object TelServer:
         Lsp.CompletionItem(label = name, kind = Lsp.CompletionItemKind.Class)
     . to(List)
 
-  // Value completions in a data document: a `select`-typed field's value is one of its variants.
+  // The schema struct enclosing `line`: the compound tree's ancestors above `indent`, descended
+  // from the schema's document root.
+  private def enclosingStruct(tree: List[Node], line: Int, indent: Int, schema: Tels): Tels.Struct =
+    val parents = nodeChain(tree, line).filter(_.indent < indent)
+    structAt(schema, parents.map(_.keyword)).or(schema.document)
+
+  private def variantCompletion(variant: Tels.Variant, reference: Text): Lsp.CompletionItem =
+    Lsp.CompletionItem
+      ( label         = variant.keyword,
+        kind          = Lsp.CompletionItemKind.EnumMember,
+        detail        = t"variant of $reference",
+        documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) )
+
+  // Completions for an inline atom of type `atomType`: a select reference completes to its
+  // variants; a record completes to its atom-assignable members (§21) — flag fields and flag-typed
+  // variants of its select references.
+  private def atomCompletions(atomType: Tels.Type, schema: Tels): List[Lsp.CompletionItem] =
+    atomType match
+      case Tels.Reference(name) if schema.selects.exists(_.name == name) =>
+        schema.selects.find(_.name == name).map(_.variants.readable.to(List)).getOrElse(Nil)
+        . map(variantCompletion(_, name))
+
+      case other => structOf(other, schema) match
+        case struct: Tels.Struct =>
+          struct.members.readable.to(List).flatMap:
+            case field: Tels.Field => field.fieldType match
+              case Tels.Flag =>
+                List(Lsp.CompletionItem
+                  ( label         = field.keyword,
+                    kind          = Lsp.CompletionItemKind.Field,
+                    detail        = t"Flag",
+                    documentation =
+                      field.description.let(text => Lsp.MarkupContent(value = text)) ))
+
+              case _ => Nil
+
+            case reference: Tels.SelectRef =>
+              schema.selects.find(_.name == reference.reference).toList
+              . flatMap(_.variants.readable.to(scala.List))
+              . filter: variant =>
+                  variant.variantType match
+                    case Tels.Flag => true
+                    case _         => false
+              . map(variantCompletion(_, reference.reference)).to(List)
+
+            case _ => Nil
+
+        case _ => Nil
+
+  // Value completions: what may fill the inline-atom slot after `keyword`.
   private def atomValueCompletions
      ( lines:    IndexedSeq[String],
        tree:     List[Node],
        line:     Int,
        indent:   Int,
        keyword:  Text,
-       registry: Registry )
+       resolver: SchemaResolver )
   :   Lsp.CompletionList =
 
-    documentSchema(lines, registry) match
+    documentSchema(lines, resolver) match
       case schema: Tels =>
-        val parents = nodeChain(tree, line).filter(_.indent < indent)
-        val struct = structAt(schema, parents.map(_.keyword)).or(schema.document)
+        memberType(enclosingStruct(tree, line, indent, schema), keyword, schema) match
+          case memberType: Tels.Type =>
+            Lsp.CompletionList(items = atomCompletions(memberType, schema))
 
-        fieldType(struct, keyword) match
-          case Tels.Reference(name) => schema.selects.find(_.name == name) match
-            case Some(select) =>
-              Lsp.CompletionList(items = select.variants.readable.to(List).map: variant =>
-                Lsp.CompletionItem
-                  ( label         = variant.keyword,
-                    kind          = Lsp.CompletionItemKind.EnumMember,
-                    detail        = t"variant of $name",
-                    documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) ))
-
-            case None => Lsp.CompletionList()
           case _ => Lsp.CompletionList()
       case _ => Lsp.CompletionList()
 
-  private def completions(text: Text, position: Lsp.Position, registry: Registry): Lsp.CompletionList =
+  // Flag completions after a member declaration in a schema document: the Flag-typed members of
+  // the meta-schema record that describes the declaration (`optional`, `required`, `repeatable`,
+  // `irrepeatable`), derived from the meta-schema rather than hardcoded, minus any already given.
+  private def flagCompletions
+     ( lines:    IndexedSeq[String],
+       tree:     List[Node],
+       line:     Int,
+       indent:   Int,
+       keyword:  Text,
+       content:  String,
+       resolver: SchemaResolver )
+  :   List[Lsp.CompletionItem] =
+
+    documentSchema(lines, resolver) match
+      case schema: Tels =>
+        val struct = enclosingStruct(tree, line, indent, schema)
+        val present = tokens(content).stdlib.map((token, _, _) => token.tt)
+
+        memberStruct(struct, keyword, schema).lay(Nil): member =>
+          member.members.readable.to(List).flatMap:
+            case field: Tels.Field if !present.contains(field.keyword) => field.fieldType match
+              case Tels.Flag =>
+                List(Lsp.CompletionItem
+                  ( label         = field.keyword,
+                    kind          = Lsp.CompletionItemKind.Keyword,
+                    detail        = t"Flag",
+                    documentation = field.description.let(text => Lsp.MarkupContent(value = text)) ))
+
+              case _ => Nil
+            case _ => Nil
+
+      case _ => Nil
+
+  // Pragma schema-identifier completions: each registered schema, inserted as its BASE-256
+  // signature — the only bare identifier form the pragma grammar admits (§8) that the registry
+  // can resolve.
+  private def pragmaCompletions(resolver: SchemaResolver): List[Lsp.CompletionItem] =
+    resolver.entries.map: (entry: SchemaCache.Entry) =>
+      Lsp.CompletionItem
+        ( label      = entry.name,
+          kind       = Lsp.CompletionItemKind.Module,
+          detail     = if entry.layers.s.isEmpty then t"BASE-256 signature"
+                       else t"BASE-256 signature; layers: ${entry.layers}",
+          insertText = entry.id )
+
+  // Validator-name completions on a `validate` line: the four built-in validators of §21.5 (the
+  // only ones the validator registry is guaranteed to know).
+  private def validatorCompletions: List[Lsp.CompletionItem] =
+    builtinValidators.map: (name, blurb) =>
+      Lsp.CompletionItem
+        ( label         = name,
+          kind          = Lsp.CompletionItemKind.Function,
+          documentation = Lsp.MarkupContent(value = blurb) )
+
+  private[tel] def completions(text: Text, position: Lsp.Position, resolver: SchemaResolver)
+  :   Lsp.CompletionList =
+
     val (lines, tree) = structure(text)
+    val pragma = pragmaOf(lines)
     val line = lines.lift(position.line).getOrElse("")
     val (indent, keyword, atomsBefore) = completionContext(line, position.character)
 
-    (keyword, atomsBefore) match
+    // The pragma line's schema-identifier slot completes to the registered schemas.
+    if position.line == pragma.line then
+      if atomsBefore == 2 then Lsp.CompletionList(items = pragmaCompletions(resolver))
+      else Lsp.CompletionList()
+    else (keyword, atomsBefore) match
       // Keyword position — the members valid for the enclosing struct (of the resolved schema, or
       // the meta-schema for a schema document).
-      case (_, 0) => documentSchema(lines, registry) match
+      case (_, 0) => documentSchema(lines, resolver) match
         case schema: Tels =>
-          val parents = nodeChain(tree, position.line).filter(_.indent < indent)
-          val struct = structAt(schema, parents.map(_.keyword)).or(schema.document)
+          val struct = enclosingStruct(tree, position.line, indent, schema)
           Lsp.CompletionList(items = keywordCompletions(struct, schema))
 
         case _ => Lsp.CompletionList()
@@ -346,9 +652,19 @@ object TelServer:
       case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant")(kw) =>
         Lsp.CompletionList(items = typeNameCompletions(tree))
 
-      // Value slot in a data document — a `select`-typed field completes to its variants.
+      // Validator slot in a schema document — `validate <name>`.
+      case (kw: Text, 1) if isSchemaDocument(lines) && kw == t"validate" =>
+        Lsp.CompletionList(items = validatorCompletions)
+
+      // Flag slot in a schema document — after `field <name> <type>` or `select <TypeName>`.
+      case (kw: Text, n) if isSchemaDocument(lines)
+                            && ((kw == t"field" && n >= 3) || (kw == t"select" && n >= 2)) =>
+        Lsp.CompletionList
+          ( items = flagCompletions(lines, tree, position.line, indent, kw, line, resolver) )
+
+      // Value slot — a `select`-typed field completes to its variants.
       case (kw: Text, 1) =>
-        atomValueCompletions(lines, tree, position.line, indent, kw, registry)
+        atomValueCompletions(lines, tree, position.line, indent, kw, resolver)
 
       case _ =>
         Lsp.CompletionList()
@@ -360,12 +676,30 @@ object TelServer:
   :   Lsp.Diagnostic =
 
     val (focus, error) = entry
+    val range = errorRange(focus, error, lines, document)
+
+    // Every TEL E-code is a hard error, with one exception: `stratiform.Tels` does not yet support
+    // scalar `encoding` (§20), so a schema that uses it triggers a spurious E306 on the `encoding`
+    // compound — reported as a warning with an explanation, rather than an error, until the
+    // validator catches up. (Not dropped: the schema-signature mismatch it implies is real.)
+    val spuriousEncoding =
+      error.reason.number == 306
+      && lines.lift(range.start.line).exists: line =>
+           tokens(line).stdlib.headOption.exists(_(0) == "encoding")
+
+    val severity =
+      if spuriousEncoding then Lsp.DiagnosticSeverity.Warning else Lsp.DiagnosticSeverity.Error
+
+    val suffix =
+      if spuriousEncoding then t" (scalar `encoding` is not yet supported by the validator)"
+      else t""
+
     Lsp.Diagnostic
-      ( range    = errorRange(focus, error, lines, document),
-        severity = Lsp.DiagnosticSeverity.Error,
+      ( range    = range,
+        severity = severity,
         code     = t"E${error.reason.number}",
         source   = t"tel",
-        message  = m"${error.reason}".text )
+        message  = t"${m"${error.reason}".text}$suffix" )
 
   // Every located TEL error carries a `Span` — 0-based, `Line`-mode, and carrying the *extent* of
   // the offending text, not merely its first character — which is exactly the shape of an LSP
@@ -420,27 +754,112 @@ object TelServer:
 
       Lsp.Range(Lsp.Position(range.start.line, from), Lsp.Position(range.start.line, to))
 
-  // A well-formed pragma: `tel <major>.<minor>` optionally followed by a schema and/or sigil. The
-  // pragma is the first line, unless an interpreter directive (`#!…` shebang) precedes it.
-  private val pragmaPattern = "tel [0-9]+\\.[0-9]+( .*)?"
+  private[tel] def hoverAt(text: Text, position: Lsp.Position, resolver: SchemaResolver)
+  :   Optional[Lsp.Hover] =
 
-  private def pragmaIndex(lines: List[String]): Int =
-    if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
-
-  private def hoverAt(text: Text, position: Lsp.Position, registry: Registry): Optional[Lsp.Hover] =
     val (lines, tree) = structure(text)
-    val pragma = pragmaIndex(lines.to(scala.List).to(List))
+    val pragma = pragmaOf(lines)
 
-    if position.line == pragma && lines.lift(pragma).exists(_.matches(pragmaPattern)) then
-      Lsp.Hover(Lsp.MarkupContent(value = t"**TEL document** — pragma `${lines(pragma).tt}`"))
-    else
-      // Over a named type (definition or reference), show that definition and its members.
-      wordAt(position, lines) match
-        case Some((word, _, _)) => definitions(tree).get(word) match
-          case Some(node) => Lsp.Hover(Lsp.MarkupContent(value = describe(node)))
-          case None       => schemaFieldHover(lines, tree, position, registry)
+    if position.line == pragma.line && pragma.wellFormed then pragmaHover(pragma, lines, resolver)
+    else wordAt(position, lines) match
+      case Some((word, start, end)) =>
+        val range = Lsp.Range(Lsp.Position(position.line, start), Lsp.Position(position.line, end))
+        val index = lines.lift(position.line).fold(0):
+          line => tokens(line).stdlib.indexWhere((_, tokenStart, _) => tokenStart == start).max(0)
 
-        case None => Unset
+        hoverMarkup(lines, tree, position, index, word, resolver)
+        . let(value => Lsp.Hover(Lsp.MarkupContent(value = value), range))
+
+      case None => Unset
+
+  // Hover on the pragma line reports the schema-resolution status.
+  private def pragmaHover(pragma: Pragma, lines: IndexedSeq[String], resolver: SchemaResolver)
+  :   Lsp.Hover =
+
+    val range = pragma.identifier.let: id =>
+      Lsp.Range(Lsp.Position(pragma.line, id.start), Lsp.Position(pragma.line, id.end))
+
+    val markup = resolver(pragma) match
+      case Resolution.Resolved(entry, file, _) =>
+        val layers = if entry.layers.s.isEmpty then t"" else t"; layers: ${entry.layers}"
+        t"**TEL document** — schema `${entry.name}` (`${entry.id}`$layers), registered at "
+        + t"`${file.encode}`"
+
+      case Resolution.Meta(_, _) =>
+        t"**TEL schema document** — validated against the built-in `tel-schema` meta-schema"
+
+      case Resolution.Unresolved(identifier) =>
+        t"**TEL document** — schema `$identifier` is not registered, so the document is parsed "
+        + t"but not validated. Register it with `tel schema add <file>`."
+
+      case Resolution.NoSchema =>
+        t"**TEL document** — pragma `${lines.lift(pragma.line).getOrElse("").tt}`"
+
+    Lsp.Hover(Lsp.MarkupContent(value = markup), range)
+
+  // Hover markup for the token under the cursor. The keyword slot (token 0) shows the schema
+  // member's declaration; a value slot shows what the schema says about the atom; named-type
+  // references and built-in validator names show their own descriptions.
+  private def hoverMarkup
+     ( lines:    IndexedSeq[String],
+       tree:     List[Node],
+       position: Lsp.Position,
+       index:    Int,
+       word:     Text,
+       resolver: SchemaResolver )
+  :   Optional[Text] =
+
+    if index == 0 then
+      keywordMarkup(lines, tree, position, resolver)
+      . or(definitions(tree).get(word).map(describe).getOrElse(Unset))
+    else definitions(tree).get(word) match
+      case Some(node) => describe(node)
+      case None =>
+        builtinValidatorMarkup(lines, position, word)
+        . or(valueSlotMarkup(lines, tree, position, word, resolver))
+
+  private def keywordMarkup
+     ( lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position,
+       resolver: SchemaResolver )
+  :   Optional[Text] =
+
+    documentSchema(lines, resolver) match
+      case schema: Tels => enclosing(tree, position, schema) match
+        case Slot(struct, node) => fieldMarkup(struct, node.keyword, schema)
+        case _                  => Unset
+      case _ => Unset
+
+  private def valueSlotMarkup
+     ( lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position, atom: Text,
+       resolver: SchemaResolver )
+  :   Optional[Text] =
+
+    documentSchema(lines, resolver) match
+      case schema: Tels => enclosing(tree, position, schema) match
+        case Slot(struct, node) =>
+          val default = struct.members.readable.collectFirst:
+            case field: Tels.Field if field.keyword == node.keyword => field.default
+          . getOrElse(Unset)
+
+          memberType(struct, node.keyword, schema)
+          . let(valueMarkup(node.keyword, _, default, atom, schema))
+
+        case _ => Unset
+      case _ => Unset
+
+  // A validator name on a `validate` line gets the §21.5 blurb for the built-in validators.
+  private def builtinValidatorMarkup
+     ( lines: IndexedSeq[String], position: Lsp.Position, word: Text )
+  :   Optional[Text] =
+
+    val onValidate = lines.lift(position.line).exists: line =>
+      tokens(line).stdlib.headOption.exists(_(0) == "validate")
+
+    if onValidate then
+      builtinValidators.stdlib.find(_(0) == word)
+      . map((name, blurb) => t"**$name** — built-in validator: $blurb")
+      . getOrElse(Unset)
+    else Unset
 
   private def describe(node: Node): Text =
     val members = node.children.stdlib.map(_.keyword).distinct.to(List)
@@ -453,11 +872,11 @@ object TelServer:
   // position index is internal, and `tel.locate` resolves a keyword *path*), so the position-based
   // features (outline, folding, selection ranges, highlights, go-to-definition) are derived from a
   // lightweight indentation scan of the source text here. Each non-blank, non-comment line is a
-  // compound — `<indent><keyword> <atoms…>` — and nesting follows indentation. (Embedded
-  // source/literal-atom payloads are not specially recognised, so an outline of a document that uses
-  // them may include payload lines; ordinary documents and all schema documents are handled exactly.)
+  // compound — `<indent><keyword> <atoms…>` — and nesting follows indentation. Source-atom (§14)
+  // and literal-atom (§15) payloads are recognised lexically and excluded, so payload lines are
+  // never mistaken for compounds; a compound's payload extends its `endLine`, so folding covers it.
 
-  private case class Node
+  private[tel] case class Node
       ( line:       Int,
         indent:     Int,
         keyword:    Text,
@@ -475,41 +894,76 @@ object TelServer:
     while i < line.length && line.charAt(i) == ' ' do i += 1
     i
 
-  private def documentSigil(lines: IndexedSeq[String]): Char =
-    val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
-    lines.lift(index) match
-      case Some(line) =>
-        var end = line.length
-        while end > 0 && line.charAt(end - 1) == ' ' do end -= 1
-        var start = end
-        while start > 0 && line.charAt(start - 1) != ' ' do start -= 1
-        val token = line.substring(start, end).nn
-        if token.length == 1 && !Character.isLetterOrDigit(token.charAt(0)) then token.charAt(0)
-        else '#'
-
-      case None =>
-        '#'
+  // A compound line, keeping its source line index, indentation, keyword and inline atoms.
+  // `payloadEnd` is the last line of the compound's source- or literal-atom payload (§14, §15), or
+  // the compound's own line if it has none.
+  private case class Raw
+      ( index: Int, indent: Int, keyword: Text, keywordEnd: Int, detail: Text, payloadEnd: Int )
 
   // The full document as `lines` plus a nested tree of compound `Node`s.
-  private def structure(text: Text): (IndexedSeq[String], List[Node]) =
+  private[tel] def structure(text: Text): (IndexedSeq[String], List[Node]) =
     val lines = text.s.linesIterator.toIndexedSeq
-    val sigil = documentSigil(lines)
-    val pragmaIndex = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
+    val pragma = pragmaOf(lines)
+    val sigil = pragma.sigil
 
-    // A compound line, keeping its source line index, indentation, keyword and inline atoms.
-    final case class Raw(index: Int, indent: Int, keyword: Text, keywordEnd: Int, detail: Text)
+    val raws: scm.ListBuffer[Raw] = scm.ListBuffer()
+    var index = 0
 
-    val raws: List[Raw] = lines.zipWithIndex.to(scala.List).flatMap: (line, index) =>
+    // The compound on the immediately preceding line, if any: only such a compound can introduce a
+    // source-atom payload (+2 indent levels = +4 spaces, §14) or a literal-atom payload (+3 levels
+    // = +6 spaces, §15) on the current line. The payload trigger is checked before the comment
+    // rule, because the sigil has no special meaning on the first payload line.
+    var adjacent: Optional[Raw] = Unset
+
+    while index < lines.length do
+      val line = lines(index)
       val indent = leadingSpaces(line)
-      // Skip blank/whitespace-only lines, the pragma line, and comment/separator lines (leading sigil).
-      if indent >= line.length || index == pragmaIndex || line.charAt(indent) == sigil then None
-      else
-        var end = indent
-        while end < line.length && line.charAt(end) != ' ' do end += 1
-        var detailStart = end
-        while detailStart < line.length && line.charAt(detailStart) == ' ' do detailStart += 1
-        Some(Raw(index, indent, line.substring(indent, end).nn.tt, end, line.substring(detailStart).nn.tt))
-    . to(List)
+
+      if indent >= line.length || index == pragma.line then
+        // A blank line (or the pragma) is no compound, and ends payload adjacency.
+        adjacent = Unset
+        index += 1
+      else adjacent match
+        case previous: Raw if indent == previous.indent + 4 =>
+          // Source atom (§14): captured lines run to the first non-blank line with fewer leading
+          // spaces than the first payload line; interior blank lines are permitted.
+          var last = index
+          while index < lines.length && {
+            val candidate = lines(index)
+            val leading = leadingSpaces(candidate)
+            leading >= candidate.length || leading >= indent
+          } do
+            if leadingSpaces(lines(index)) < lines(index).length then last = index
+            index += 1
+
+          raws(raws.length - 1) = previous.copy(payloadEnd = last)
+          adjacent = Unset
+
+        case previous: Raw if indent == previous.indent + 6 =>
+          // Literal atom (§15): the current line is the delimiter line; the payload runs verbatim
+          // to the first line whose content matches it exactly (inclusive), or to end of input.
+          var end = index + 1
+          while end < lines.length && lines(end) != line do end += 1
+          val last = if end < lines.length then end else lines.length - 1
+          raws(raws.length - 1) = previous.copy(payloadEnd = last)
+          adjacent = Unset
+          index = last + 1
+
+        case _ =>
+          if line.charAt(indent) == sigil then
+            // A comment/separator line; it also ends payload adjacency.
+            adjacent = Unset
+          else
+            var end = indent
+            while end < line.length && line.charAt(end) != ' ' do end += 1
+            var detailStart = end
+            while detailStart < line.length && line.charAt(detailStart) == ' ' do detailStart += 1
+            val raw = Raw(index, indent, line.substring(indent, end).nn.tt, end,
+                line.substring(detailStart).nn.tt, index)
+            raws += raw
+            adjacent = raw
+
+          index += 1
 
     // Proscenium's `List` is opaque, so the compiler cannot see that `Nil` and `::` exhaust it;
     // matching the stdlib view instead would collide with the imported cons extractor.
@@ -518,15 +972,15 @@ object TelServer:
       case Nil => Nil
       case head :: tail =>
         val (descendants, rest) = tail.span(_.indent > head.indent)
-        val endLine = descendants.lastOption.fold(head.index)(_.index)
+        val endLine = descendants.lastOption.fold(head.payloadEnd)(_.payloadEnd)
         val atoms = head.detail.cut(t" ").filter(_ != t"")
         Node(head.index, head.indent, head.keyword, head.keywordEnd, head.detail, atoms, endLine,
             build(descendants))
         :: build(rest)
 
-    (lines, build(raws))
+    (lines, build(raws.to(scala.List).to(List)))
 
-  private def flatten(nodes: List[Node]): List[Node] =
+  private[tel] def flatten(nodes: List[Node]): List[Node] =
     nodes.stdlib.flatMap(node => node +: flatten(node.children).stdlib).to(List)
 
   // ── Structure features ────────────────────────────────────────────────────────────────────────
@@ -544,7 +998,7 @@ object TelServer:
                              Lsp.Position(node.line, node.keywordEnd) ),
         children       = if node.children.isEmpty then Unset else node.children.map(symbol(_, lines)) )
 
-  private def folds(node: Node): List[Lsp.FoldingRange] =
+  private[tel] def folds(node: Node): List[Lsp.FoldingRange] =
     val self =
       if node.endLine > node.line
       then List(Lsp.FoldingRange(startLine = node.line, endLine = node.endLine, kind = t"region"))
@@ -680,17 +1134,16 @@ object TelServer:
      ( lines:    IndexedSeq[String],
        tree:     List[Node],
        position: Lsp.Position,
-       registry: Registry )
+       resolver: SchemaResolver )
   :   List[Lsp.Location] =
 
-    val pragmaLine = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
-    pragmaSchema(lines) match
-      case identifier: Text => resolveSchemaFile(identifier, registry) match
-        case file: (Path on Linux) => SchemaCache.readText(file).lay(Nil): text =>
+    val pragma = pragmaOf(lines)
+    resolver(pragma).schemaFile match
+      case file: (Path on Linux) => SchemaCache.readText(file).lay(Nil): text =>
           val (schemaLines, schemaTree) = structure(text)
           val uri = t"file://${file.encode}"
 
-          if position.line == pragmaLine then List(location(uri, 0, 0, 0))
+          if position.line == pragma.line then List(location(uri, 0, 0, 0))
           else nodeChain(tree, position.line).reverse match
             case node :: ancestors if node.line == position.line =>
               val documentBlock =
@@ -705,14 +1158,13 @@ object TelServer:
                         List(location(uri, target.line, target.indent, target.keywordEnd))
 
             case _ => Nil
-        case _ => Nil
       case _ => Nil
 
-  private def definitionAt
+  private[tel] def definitionAt
      ( uri:      Text,
        text:     Text,
        position: Lsp.Position,
-       registry: Registry )
+       resolver: SchemaResolver )
   :   List[Lsp.Location] =
 
     val (lines, tree) = structure(text)
@@ -725,9 +1177,9 @@ object TelServer:
           case None                  => Nil
 
         // Otherwise, try to jump across into the registered schema file.
-        case None => schemaDefinition(lines, tree, position, registry)
+        case None => schemaDefinition(lines, tree, position, resolver)
 
-      case None => schemaDefinition(lines, tree, position, registry)
+      case None => schemaDefinition(lines, tree, position, resolver)
 
   // ── Live message log ────────────────────────────────────────────────────────────────────────
   //
@@ -782,6 +1234,7 @@ object TelServer:
           // Resolved here, where the invoker's `Environment` is in scope, and closed over by the
           // handlers: `listen` keeps everything stateful within its own frame.
           val registry: Registry = safely(SchemaCache.directory)
+          val resolver = SchemaResolver(registry)
 
           supervise:
             // Scoped here, not at the object level: `Lsp.arguments` (the `executeCommand` payload)
@@ -790,16 +1243,23 @@ object TelServer:
 
             Lsp.listen(t"tel", t"0.1.0", TrafficLog):
               opened:
-                client.publishDiagnostics(document.uri, diagnose(document.text, registry))
+                client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
 
               // The document store applies incremental edits upstream, so `document.text` is already
               // the post-edit text; the change events themselves are not needed.
               changed:
-                client.publishDiagnostics(document.uri, diagnose(document.text, registry))
+                client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
 
-              hover(hoverAt(document.text, position, registry))
-              complete()(completions(document.text, position, registry))
-              definition(definitionAt(document.uri, document.text, position, registry))
+              // Clear the document's diagnostics when it closes, so they do not linger in the
+              // client's problems panel for a file that is no longer open.
+              closed:
+                client.publishDiagnostics(document.uri, Nil)
+
+              hover(hoverAt(document.text, position, resolver))
+              // A space triggers completion in the slot after a keyword: a `select`-typed field's
+              // variants, a member declaration's flags, or the pragma's schema identifier.
+              complete(t" ")(completions(document.text, position, resolver))
+              definition(definitionAt(document.uri, document.text, position, resolver))
 
               references:
                 val lines = structure(document.text)._1
