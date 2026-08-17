@@ -18,7 +18,7 @@
 
 use crate::{
     Schema, Layer, Document,
-    parse, construct_schema, builtin_tel_schema, builtin_tel_schema_value_hash,
+    parse, construct_schema, builtin_tels, builtin_tels_value_hash,
     type_assign, compose_schema,
 };
 use crate::bintel;
@@ -26,12 +26,12 @@ use crate::base256;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// Lazily-computed full schema signature for the built-in tel-schema
-/// (33 bytes: 32-byte BLAKE3-256 hash of tel-schema.tel + cadence trailer).
-fn builtin_tel_schema_signature() -> Vec<u8> {
+/// Lazily-computed full schema signature for the built-in tels
+/// (33 bytes: 32-byte BLAKE3-256 hash of tels.tel + cadence trailer).
+fn builtin_tels_signature() -> Vec<u8> {
     static CACHE: OnceLock<Vec<u8>> = OnceLock::new();
     CACHE.get_or_init(|| {
-        bintel::schema_signature_from_hashes(&[builtin_tel_schema_value_hash()])
+        bintel::schema_signature_from_hashes(&[builtin_tels_value_hash()])
     }).clone()
 }
 
@@ -165,7 +165,7 @@ impl<F: SchemaFetcher> Resolver<F> {
                 detail: format!("{} parse errors", parsed.errors.len()),
             });
         }
-        let ta = type_assign(&parsed.document, &builtin_tel_schema(), None);
+        let ta = type_assign(&parsed.document, &builtin_tels(), None);
         if !ta.errors.is_empty() {
             return Err(ResolutionError::MalformedSchemaBody {
                 detail: format!("{} type-assignment errors", ta.errors.len()),
@@ -175,9 +175,9 @@ impl<F: SchemaFetcher> Resolver<F> {
     }
 
     /// Add a schema to the library from its BinTEL encoding (a complete
-    /// BinTEL document whose schema is tel-schema and whose content is a
+    /// BinTEL document whose schema is tels and whose content is a
     /// TEL schema document). Decodes the bytes under the hardwired
-    /// tel-schema axiom, decomposes the result into base + layer
+    /// tels axiom, decomposes the result into base + layer
     /// components, and populates the library. Returns the resulting full
     /// composed signature, matching `add_to_library` for the equivalent
     /// TEL source.
@@ -187,25 +187,25 @@ impl<F: SchemaFetcher> Resolver<F> {
     /// through this function and produce the same signature as
     /// `add_to_library(&schema_source)` for the same logical schema.
     pub fn add_bintel_to_library(&mut self, bintel_bytes: &[u8]) -> Result<Vec<u8>, ResolutionError> {
-        let decoded = bintel::decode_document(bintel_bytes, &builtin_tel_schema())
+        let decoded = bintel::decode_document(bintel_bytes, &builtin_tels())
             .map_err(|e| ResolutionError::MalformedSchemaBody {
                 detail: format!("BinTEL decode error {:?}: {}", e.code, e.context),
             })?;
-        // The decoded bytes must declare themselves a tel-schema document:
-        // the carried signature must be tel-schema's signature.
-        if decoded.signature != builtin_tel_schema_signature() {
+        // The decoded bytes must declare themselves a tels document:
+        // the carried signature must be tels's signature.
+        if decoded.signature != builtin_tels_signature() {
             return Err(ResolutionError::SignatureMismatch {
-                expected: builtin_tel_schema_signature(),
+                expected: builtin_tels_signature(),
                 actual: decoded.signature,
             });
         }
-        // Validate the decoded schema document under tel-schema — catches any
+        // Validate the decoded schema document under tels — catches any
         // structural issues that the BinTEL decoder did not detect (e.g.,
         // missing required scalars after composition).
-        let ta = type_assign(&decoded.document, &builtin_tel_schema(), None);
+        let ta = type_assign(&decoded.document, &builtin_tels(), None);
         if !ta.errors.is_empty() {
             return Err(ResolutionError::MalformedSchemaBody {
-                detail: format!("{} type-assignment errors against tel-schema", ta.errors.len()),
+                detail: format!("{} type-assignment errors against tels", ta.errors.len()),
             });
         }
         Ok(self.add_components_from_document(&decoded.document))
@@ -267,12 +267,12 @@ impl<F: SchemaFetcher> Resolver<F> {
     /// Resolve an identifier to a `Schema`, applying §8.2's five-step
     /// protocol.
     pub fn resolve(&mut self, identifier: &SchemaIdentifier) -> Result<Schema, ResolutionError> {
-        // Step 1: built-in lookup. The tel-schema built-in is identified by
+        // Step 1: built-in lookup. The tels built-in is identified by
         // its single-component signature (33 bytes: 32-byte BLAKE3-256 hash
-        // of the canonical tel-schema.tel + cadence trailer).
+        // of the canonical tels.tel + cadence trailer).
         if let Some(sig) = &identifier.signature {
-            if sig.len() == 33 && sig == &builtin_tel_schema_signature() {
-                return Ok(builtin_tel_schema());
+            if sig.len() == 33 && sig == &builtin_tels_signature() {
+                return Ok(builtin_tels());
             }
         }
 
@@ -388,7 +388,7 @@ fn parse_schema_body(body: &str) -> Result<Schema, ResolutionError> {
             detail: format!("{} parse errors", parsed.errors.len()),
         });
     }
-    let ta = type_assign(&parsed.document, &builtin_tel_schema(), None);
+    let ta = type_assign(&parsed.document, &builtin_tels(), None);
     if !ta.errors.is_empty() {
         return Err(ResolutionError::MalformedSchemaBody {
             detail: format!("{} type-assignment errors", ta.errors.len()),
@@ -443,16 +443,16 @@ mod tests {
     }
 
     #[test]
-    fn resolver_returns_builtin_for_tel_schema_hash() {
+    fn resolver_returns_builtin_for_tels_hash() {
         // Construct the expected signature dynamically (the BLAKE3-256 hash
-        // of tel-schema.tel is computed at runtime; once pinned, callers can
+        // of tels.tel is computed at runtime; once pinned, callers can
         // copy it into a const).
-        let sig = super::builtin_tel_schema_signature();
+        let sig = super::builtin_tels_signature();
         assert_eq!(sig.len(), 33);
         let id = SchemaIdentifier { url: None, signature: Some(sig) };
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let s = r.resolve(&id).unwrap();
-        assert_eq!(s.name, "tel-schema");
+        assert_eq!(s.name, "tels");
     }
 
     #[test]
@@ -617,14 +617,14 @@ layer
     }
 
     #[test]
-    fn add_bintel_to_library_rejects_non_tel_schema_signature() {
-        // A BinTEL document not signed under tel-schema is not a valid
+    fn add_bintel_to_library_rejects_non_tels_signature() {
+        // A BinTEL document not signed under tels is not a valid
         // schema-representation; add_bintel_to_library MUST reject it.
         let src = "tel 1.0\n\nname my-schema\n\ndocument\n  field x String\n";
         let parsed = parse(src);
         let composed = construct_schema(&parsed.document);
         // Encode the data using `composed` itself as the schema — a
-        // non-tel-schema signature.
+        // non-tels signature.
         let data_doc = crate::Document {
             interpreter_directive: None, pragma: None,
             line_endings: crate::LineEndings::LF,

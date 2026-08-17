@@ -16,7 +16,7 @@
 use crate::{
     Atom, Block, CodecBindingFn, CodecResolver, Compound, Diagnostic, Document, LineEndings,
     Member, Schema, Struct, Type,
-    builtin_tel_schema, compose_schema, construct_schema,
+    builtin_tels, compose_schema, construct_schema,
     resolve, ResolvedType, scalar_value_text,
 };
 #[cfg(test)]
@@ -566,13 +566,13 @@ pub fn schema_base_hash(schema_doc: &Document) -> [u8; 32] {
             trailing_blank_lines: b.trailing_blank_lines,
         }).collect(),
     };
-    value_hash(&base_doc, &builtin_tel_schema())
+    value_hash(&base_doc, &builtin_tels())
 }
 
 /// Compute the BinTEL value hash of a single `layer` compound, per §8.1.
 /// The layer's children are treated as the document root of a virtual schema
-/// whose `document` Struct is the tel-schema `Layer` Definition; the
-/// Definition namespace is inherited from tel-schema unchanged.
+/// whose `document` Struct is the tels `Layer` Definition; the
+/// Definition namespace is inherited from tels unchanged.
 pub fn schema_layer_hash(layer_compound: &Compound) -> [u8; 32] {
     let layer_doc = Document {
         interpreter_directive: None,
@@ -580,9 +580,9 @@ pub fn schema_layer_hash(layer_compound: &Compound) -> [u8; 32] {
         line_endings: LineEndings::LF,
         children: layer_compound.children.clone(),
     };
-    let tel = builtin_tel_schema();
+    let tel = builtin_tels();
     let layer_def = tel.records.iter().find(|d| d.name == "Layer")
-        .expect("builtin tel-schema must define the Layer record");
+        .expect("builtin tels must define the Layer record");
     let synth_schema = Schema {
         name: "tel-layer".to_string(),
         document: Struct {
@@ -638,7 +638,7 @@ pub fn schema_component_hashes(schema_doc: &Document) -> Vec<[u8; 32]> {
 pub struct DecodedSelfContained {
     pub signature: Vec<u8>,
     /// The embedded schema as a TEL document (the bytes that were
-    /// length-prefixed in §6.2 field 3, parsed under tel-schema).
+    /// length-prefixed in §6.2 field 3, parsed under tels).
     pub schema_document: Document,
     /// The composed `Schema` obtained from the embedded schema document
     /// via `construct_schema` + `compose_schema`.
@@ -651,7 +651,7 @@ pub struct DecodedSelfContained {
 ///
 /// - `doc` is the data document to encode as the outer document root.
 /// - `schema_doc` is the schema as a TEL document; it is encoded as the
-///   embedded schema body using `tel-schema` (the schema-for-schemas) and
+///   embedded schema body using `tels` (the schema-for-schemas) and
 ///   provides the §8.2 resolution-protocol step-0 lookup.
 /// - `composed_schema` is the composed schema (base + layers merged) used
 ///   to encode `doc` itself.
@@ -669,7 +669,7 @@ pub fn encode_document_self_contained(
 }
 
 /// `encode_document_self_contained` with a codec binding (TEL §21.7). The
-/// embedded schema body is governed by `tel-schema`, which declares no
+/// embedded schema body is governed by `tels`, which declares no
 /// encodings, so only the outer document root uses the binding.
 pub fn encode_document_self_contained_with_codecs(
     doc: &Document,
@@ -683,7 +683,7 @@ pub fn encode_document_self_contained_with_codecs(
     let signature = schema_signature_from_hashes(component_hashes);
     out.extend(encode_varint(signature.len() as u64));
     out.extend_from_slice(&signature);
-    let schema_bytes = encode_root(schema_doc, &builtin_tel_schema());
+    let schema_bytes = encode_root(schema_doc, &builtin_tels());
     out.extend(encode_varint(schema_bytes.len() as u64));
     out.extend_from_slice(&schema_bytes);
     out.extend(encode_root_with_codecs(doc, composed_schema, codec_binding)?);
@@ -691,16 +691,16 @@ pub fn encode_document_self_contained_with_codecs(
 }
 
 /// Encode a schema as a complete BinTEL document (external-schema mode)
-/// under the `tel-schema` axiom. The resulting bytes are a portable
+/// under the `tels` axiom. The resulting bytes are a portable
 /// representation of the schema — the BinTEL counterpart to TEL schema
 /// source text — usable directly with `Resolver::add_bintel_to_library`.
 ///
 /// `schema_doc` is the schema as a TEL document; it is encoded under
-/// tel-schema and the carried signature is tel-schema's own signature
-/// (because tel-schema is the schema being used to type the bytes).
+/// tels and the carried signature is tels's own signature
+/// (because tels is the schema being used to type the bytes).
 pub fn schema_to_bintel(schema_doc: &Document) -> Vec<u8> {
-    let tel = builtin_tel_schema();
-    let tel_hash = crate::builtin_tel_schema_value_hash();
+    let tel = builtin_tels();
+    let tel_hash = crate::builtin_tels_value_hash();
     encode_document_with_signature(schema_doc, &tel, &[tel_hash])
 }
 
@@ -714,7 +714,7 @@ pub fn decode_document_self_contained(
 }
 
 /// `decode_document_self_contained` with a codec binding (TEL §21.7).
-/// The embedded schema body is governed by `tel-schema`, which declares
+/// The embedded schema body is governed by `tels`, which declares
 /// no encodings, so the bootstrap never needs the binding; only the outer
 /// data root does (B13/B14/B15 semantics as in
 /// `decode_document_with_codecs`).
@@ -756,11 +756,11 @@ pub fn decode_document_self_contained_with_codecs(
     cur = schema_end;
 
     // Decode the embedded schema body as a bare document-root under the
-    // hardwired tel-schema axiom.
-    let tel = builtin_tel_schema();
+    // hardwired tels axiom.
+    let tel = builtin_tels();
     let (schema_blocks, schema_consumed) = decode_root_into_blocks(schema_bytes, &tel)
         .map_err(|e| DecodeError::new(BCode::B12,
-            format!("embedded schema body does not decode under tel-schema: {}", e.context)))?;
+            format!("embedded schema body does not decode under tels: {}", e.context)))?;
     if schema_consumed != schema_bytes.len() {
         return Err(DecodeError::new(BCode::B12,
             format!("embedded schema body has {} trailing bytes after decode",
@@ -861,7 +861,7 @@ pub enum BCode {
     /// carried signature byte-for-byte.
     B11,
     /// B12: In self-contained mode (§6.2), the embedded schema body
-    /// does not decode as a valid TEL document under `tel-schema`
+    /// does not decode as a valid TEL document under `tels`
     /// (structural error during bootstrap).
     B12,
     /// B13: The composed schema declares an `encoding` for a Scalar but
@@ -891,7 +891,7 @@ impl BCode {
             BCode::B09 => "end of input reached mid-decode",
             BCode::B10 => "Reference type does not resolve to a Definition",
             BCode::B11 => "embedded schema body signature mismatch (self-contained mode)",
-            BCode::B12 => "embedded schema body is not a valid tel-schema document (self-contained mode)",
+            BCode::B12 => "embedded schema body is not a valid tels document (self-contained mode)",
             BCode::B13 => "scalar's declared encoding is not resolved by the codec binding",
             BCode::B14 => "encoded scalar's value bytes rejected by the codec decoder",
             BCode::B15 => "codec canonicality check failed: re-encoded bytes differ",
@@ -1220,7 +1220,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
@@ -1260,7 +1260,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()] }),
@@ -1285,7 +1285,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
@@ -1327,7 +1327,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "ok".to_string(),
                     r#type: crate::Type::Flag, default: None,
@@ -1358,17 +1358,17 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "person".to_string(),
                     r#type: crate::Type::Struct(crate::Struct {
                         members: vec![
-                            crate::Member::Field(crate::Field { description: None,
+                            crate::Member::Field(crate::Field { key: false, description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "first".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                             }),
-                            crate::Member::Field(crate::Field { description: None,
+                            crate::Member::Field(crate::Field { key: false, description: None,
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "last".to_string(),
                                 r#type: crate::Type::Scalar(crate::Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
@@ -1458,7 +1458,7 @@ mod tests {
         crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
                     r#type: crate::Type::Scalar(crate::Scalar { encoding: None,
@@ -1615,7 +1615,7 @@ mod tests {
         let bad_schema = crate::Schema {
             name: "bad".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "child".to_string(),
                     r#type: crate::Type::Reference("missing-definition".to_string()), default: None,
@@ -1758,19 +1758,19 @@ mod tests {
     }
 
     #[test]
-    fn schema_to_bintel_round_trip_under_tel_schema() {
+    fn schema_to_bintel_round_trip_under_tels() {
         // schema_to_bintel produces a complete BinTEL document carrying
-        // tel-schema's signature; decoding it under tel-schema yields back
+        // tels's signature; decoding it under tels yields back
         // the schema's semantic model.
         let (schema_doc, _composed, _hashes) = small_schema();
         let bytes = schema_to_bintel(&schema_doc);
-        // External-mode magic with tel-schema's signature.
+        // External-mode magic with tels's signature.
         assert_eq!(&bytes[0..4], &MAGIC);
-        let tel = crate::builtin_tel_schema();
+        let tel = crate::builtin_tels();
         let decoded = decode_document(&bytes, &tel)
-            .expect("schema bytes must decode under tel-schema");
-        // Carried signature equals tel-schema's full signature.
-        let tel_sig = schema_signature_from_hashes(&[crate::builtin_tel_schema_value_hash()]);
+            .expect("schema bytes must decode under tels");
+        // Carried signature equals tels's full signature.
+        let tel_sig = schema_signature_from_hashes(&[crate::builtin_tels_value_hash()]);
         assert_eq!(decoded.signature, tel_sig);
         // The decoded Document reconstructs into the same schema (name etc.).
         let reconstructed = crate::construct_schema(&decoded.document);

@@ -22,7 +22,7 @@ Document {
                     keyword: "name",
                     atoms: [
                         Inline {
-                            text: "schema-with-encoding",
+                            text: "e221-test",
                             preceding_spaces: 1,
                         },
                     ],
@@ -37,10 +37,10 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "scalar",
+                    keyword: "record",
                     atoms: [
                         Inline {
-                            text: "Fingerprint",
+                            text: "Item",
                             preceding_spaces: 1,
                         },
                     ],
@@ -51,10 +51,18 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
-                                    keyword: "validate",
+                                    keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "hex",
+                                            text: "label",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Identifier",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "key",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -62,21 +70,19 @@ Document {
                                     children: [],
                                 },
                                 Compound {
-                                    keyword: "encoding",
+                                    keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "hex-bytes",
+                                            text: "serial",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [],
-                                },
-                                Compound {
-                                    keyword: "description",
-                                    atoms: [
-                                        Source {
-                                            text: "A hex-encoded binary fingerprint, carried as raw bytes in BinTEL.",
+                                        Inline {
+                                            text: "Identifier",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "key",
+                                            preceding_spaces: 1,
                                         },
                                     ],
                                     remark: None,
@@ -87,6 +93,13 @@ Document {
                         },
                     ],
                 },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
                 Compound {
                     keyword: "document",
                     atoms: [],
@@ -100,11 +113,19 @@ Document {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "fingerprint",
+                                            text: "item",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "Fingerprint",
+                                            text: "Item",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -121,3 +142,5 @@ Document {
         },
     ],
 }
+errors:
+  E221 [0,0): More than one key field in a Struct: record `Item` declares 2 key fields (label, serial); at most one is permitted

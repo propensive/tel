@@ -50,7 +50,7 @@ export const BCode = Object.freeze({
   B09: "B09", // end of input mid-decode
   B10: "B10", // Reference does not resolve to a Definition
   B11: "B11", // embedded-schema signature mismatch (self-contained)
-  B12: "B12", // embedded schema does not decode under tel-schema (self-contained)
+  B12: "B12", // embedded schema does not decode under tels (self-contained)
   B13: "B13", // scalar's declared encoding not resolved by the codec binding
   B14: "B14", // encoded scalar's value bytes rejected by the codec decoder
   B15: "B15", // codec canonicality check failed (re-encoded bytes differ)
@@ -111,7 +111,7 @@ export function decodeVarint(bytes, offset = 0) {
 
 // ── Schema-driven type resolution ────────────────────────────────────────────
 
-// Built-in type names recognised by `tel-schema` resolution. Maps the
+// Built-in type names recognised by `tels` resolution. Maps the
 // reference name to a resolved type descriptor (the same shape used for
 // Field types after resolution).
 const BUILT_INS = Object.freeze({
@@ -553,21 +553,21 @@ function bytesEqual(a, b) {
 //   - `rootChildren`: the data document's root children
 //   - `composedSchema`: the composed schema to encode `rootChildren` against
 //   - `schemaChildren`: the schema document's own root children (encoded
-//     under tel-schema)
-//   - `telSchema`: the tel-schema axiom (Schema), used to encode the
+//     under tels)
+//   - `tels`: the tels axiom (Schema), used to encode the
 //     embedded schema body
 //   - `componentHashes`: the ordered component hashes of `composedSchema`
 //     — base hash followed by each layer hash. The carried signature MUST
 //     match the composed signature of `schemaChildren`; the caller is
 //     responsible for ensuring consistency.
 export function encodeDocumentSelfContained({
-  rootChildren, composedSchema, schemaChildren, telSchema, componentHashes, codecs,
+  rootChildren, composedSchema, schemaChildren, tels, componentHashes, codecs,
 }) {
   const signature = schemaSignatureFromHashes(componentHashes);
   const sigLenVarint = encodeVarint(signature.length);
-  // The embedded schema body is governed by tel-schema, which declares no
+  // The embedded schema body is governed by tels, which declares no
   // encodings — no codec binding is needed for it.
-  const schemaBytes = encodeRoot(schemaChildren, telSchema);
+  const schemaBytes = encodeRoot(schemaChildren, tels);
   const schemaLenVarint = encodeVarint(schemaBytes.length);
   const root = encodeRoot(rootChildren, composedSchema, codecs);
   return concatBytes([
@@ -578,9 +578,9 @@ export function encodeDocumentSelfContained({
 
 // Decode a self-contained-mode BinTEL document.
 //
-// `telSchema` is the hardwired schema-for-schemas. `buildSchema` is a
+// `tels` is the hardwired schema-for-schemas. `buildSchema` is a
 // pluggable callable that receives the decoded embedded-schema children
-// (under tel-schema) and returns:
+// (under tels) and returns:
 //
 //   { composedSchema, componentHashes }
 //
@@ -592,7 +592,7 @@ export function encodeDocumentSelfContained({
 //
 // Throws B11 if the recomputed signature doesn't match the carried one,
 // B12 if the embedded schema body fails to decode or fails to construct.
-export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema, codecs, checkCanonical = false }) {
+export function decodeDocumentSelfContained(bytes, { tels, buildSchema, codecs, checkCanonical = false }) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC_SELF_CONTAINED, "selfContained");
   const signature = readSignature(cur);
@@ -605,10 +605,10 @@ export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema, cod
 
   let embeddedSchemaChildren;
   try {
-    embeddedSchemaChildren = decodeRoot(schemaBytes, telSchema);
+    embeddedSchemaChildren = decodeRoot(schemaBytes, tels);
   } catch (e) {
     throw new BintelDecodeError(BCode.B12,
-      `embedded schema body does not decode under tel-schema: ${e.message ?? e}`);
+      `embedded schema body does not decode under tels: ${e.message ?? e}`);
   }
 
   let built;
@@ -637,16 +637,16 @@ export function decodeDocumentSelfContained(bytes, { telSchema, buildSchema, cod
 // ── Schema-to-BinTEL (helper for self-contained-mode producers) ──────────────
 
 // Encode a schema document as a complete external-mode BinTEL document
-// under the tel-schema axiom. The carried signature is tel-schema's
+// under the tels axiom. The carried signature is tels's
 // signature; the body is the schema's root children encoded under
-// tel-schema.
+// tels.
 //
 // `schemaChildren` is the schema document's root children.
-// `telSchema` is the tel-schema axiom.
-// `telSchemaValueHash` is tel-schema's BLAKE3-256 value hash (Uint8Array
+// `tels` is the tels axiom.
+// `telsValueHash` is tels's BLAKE3-256 value hash (Uint8Array
 // of HASH_LEN bytes); the caller supplies it because BLAKE3 is pluggable.
-export function schemaToBintel(schemaChildren, telSchema, telSchemaValueHash) {
-  return encodeDocument(schemaChildren, telSchema, [telSchemaValueHash]);
+export function schemaToBintel(schemaChildren, tels, telsValueHash) {
+  return encodeDocument(schemaChildren, tels, [telsValueHash]);
 }
 
 // ── Hash convenience ─────────────────────────────────────────────────────────

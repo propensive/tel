@@ -22,7 +22,7 @@ Document {
                     keyword: "name",
                     atoms: [
                         Inline {
-                            text: "base-schema-with-layer",
+                            text: "e219-test",
                             preceding_spaces: 1,
                         },
                     ],
@@ -37,8 +37,13 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "document",
-                    atoms: [],
+                    keyword: "record",
+                    atoms: [
+                        Inline {
+                            text: "Item",
+                            preceding_spaces: 1,
+                        },
+                    ],
                     remark: None,
                     children: [
                         Block {
@@ -49,7 +54,7 @@ Document {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "name",
+                                            text: "label",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
@@ -73,7 +78,52 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "layer",
+                    keyword: "record",
+                    atoms: [
+                        Inline {
+                            text: "Box",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [
+                        Block {
+                            comments: [],
+                            tabulation: None,
+                            compounds: [
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "contents",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Item",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "key",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                            ],
+                            trailing_blank_lines: 0,
+                        },
+                    ],
+                },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
+                Compound {
+                    keyword: "document",
                     atoms: [],
                     remark: None,
                     children: [
@@ -82,62 +132,30 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
-                                    keyword: "name",
+                                    keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "extension-v1",
+                                            text: "box",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Box",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
                                     remark: None,
                                     children: [],
                                 },
-                                Compound {
-                                    keyword: "overlay",
-                                    atoms: [],
-                                    remark: None,
-                                    children: [
-                                        Block {
-                                            comments: [],
-                                            tabulation: None,
-                                            compounds: [
-                                                Compound {
-                                                    keyword: "field",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "email",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "String",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                                Compound {
-                                                    keyword: "field",
-                                                    atoms: [
-                                                        Inline {
-                                                            text: "active",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                        Inline {
-                                                            text: "Flag",
-                                                            preceding_spaces: 1,
-                                                        },
-                                                    ],
-                                                    remark: None,
-                                                    children: [],
-                                                },
-                                            ],
-                                            trailing_blank_lines: 1,
-                                        },
-                                    ],
-                                },
                             ],
-                            trailing_blank_lines: 0,
+                            trailing_blank_lines: 1,
                         },
                     ],
                 },
@@ -146,3 +164,5 @@ Document {
         },
     ],
 }
+errors:
+  E219 [0,0): Key field's type does not resolve to a Scalar: key field `contents` in record `Box` does not resolve to a Scalar

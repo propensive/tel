@@ -2446,23 +2446,15 @@ MUST produce a byte-identical BinTEL encoding of that schema and the same 256-bi
 hash (§3 of the BinTEL Specification). The hash is normative — two conforming implementations
 MUST agree on it.
 
-> **Draft note (pending re-pin).** The pinned values below predate the addition of the `key`
-> member to the `Field` record and MUST be recomputed (together with
-> [`demo/tels.hash`](demo/tels.hash),
-> [`demo/tels.bintel.hex`](demo/tels.bintel.hex), the byte length cited below, and
-> the copy of this table in §3 of the [BinTEL Specification](bintel.md)) once an updated
-> BinTEL encoder is available. Note that `key` sits at keyword index 6 of `Field`, shifting
-> `default` and `description` to indices 7 and 8 in every schema document's BinTEL encoding.
-
 The pinned value, computed against the canonical
 [`tels.tel`](tels.tel) in this repository, is:
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | `da84d460755492014ab924b056045eb07fa41626d684dd78d388f2ccdbcff300`   |
-| BASE-256   | `ῚẄÔŠuTƒḁJιḤưVĄŞưſƤЖȦӖẄӝxǓẈỲỌӛϏỳḀ`                                  |
+| BLAKE3-256 | `780979f62e3232703a733e260689a5d2dfa2ce82ce0ee950715ebdfac473cb8a`   |
+| BASE-256   | `xȉyǶĮ22pĺsľȦĆẉƥǒӟҢώẂώĎῩPqŞẽῺτsϋΊ`                                  |
 
-The BinTEL document root encoding of `tels.tel` is 1691 bytes; the raw bytes are recorded
+The BinTEL document root encoding of `tels.tel` is 1699 bytes; the raw bytes are recorded
 in [`demo/tels.bintel.hex`](demo/tels.bintel.hex) and the hash in
 [`demo/tels.hash`](demo/tels.hash). The same value is pinned in §3 of the BinTEL
 Specification.

@@ -22,7 +22,7 @@ Document {
                     keyword: "name",
                     atoms: [
                         Inline {
-                            text: "schema-with-encoding",
+                            text: "e220-test",
                             preceding_spaces: 1,
                         },
                     ],
@@ -37,10 +37,10 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "scalar",
+                    keyword: "record",
                     atoms: [
                         Inline {
-                            text: "Fingerprint",
+                            text: "Item",
                             preceding_spaces: 1,
                         },
                     ],
@@ -51,32 +51,23 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
-                                    keyword: "validate",
+                                    keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "hex",
+                                            text: "label",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [],
-                                },
-                                Compound {
-                                    keyword: "encoding",
-                                    atoms: [
                                         Inline {
-                                            text: "hex-bytes",
+                                            text: "Identifier",
                                             preceding_spaces: 1,
                                         },
-                                    ],
-                                    remark: None,
-                                    children: [],
-                                },
-                                Compound {
-                                    keyword: "description",
-                                    atoms: [
-                                        Source {
-                                            text: "A hex-encoded binary fingerprint, carried as raw bytes in BinTEL.",
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "key",
+                                            preceding_spaces: 1,
                                         },
                                     ],
                                     remark: None,
@@ -87,6 +78,13 @@ Document {
                         },
                     ],
                 },
+            ],
+            trailing_blank_lines: 1,
+        },
+        Block {
+            comments: [],
+            tabulation: None,
+            compounds: [
                 Compound {
                     keyword: "document",
                     atoms: [],
@@ -100,11 +98,19 @@ Document {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
-                                            text: "fingerprint",
+                                            text: "item",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
-                                            text: "Fingerprint",
+                                            text: "Item",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "repeatable",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -121,3 +127,5 @@ Document {
         },
     ],
 }
+errors:
+  E220 [0,0): Key field must be effectively required and non-repeatable: key field `label` in record `Item` must be effectively required and non-repeatable

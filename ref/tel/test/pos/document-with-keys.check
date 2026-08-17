@@ -7,7 +7,7 @@ Document {
                 0,
             ),
             schema: Some(
-                "https://tel-lang.org/schema/tels",
+                "https://tel-lang.org/schema/keyed-schema",
             ),
             sigil: None,
         },
@@ -19,10 +19,10 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "name",
+                    keyword: "owner",
                     atoms: [
                         Inline {
-                            text: "e211-test",
+                            text: "amy",
                             preceding_spaces: 1,
                         },
                     ],
@@ -37,8 +37,13 @@ Document {
             tabulation: None,
             compounds: [
                 Compound {
-                    keyword: "document",
-                    atoms: [],
+                    keyword: "contact",
+                    atoms: [
+                        Inline {
+                            text: "amy",
+                            preceding_spaces: 1,
+                        },
+                    ],
                     remark: None,
                     children: [
                         Block {
@@ -46,14 +51,10 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
-                                    keyword: "field",
+                                    keyword: "email",
                                     atoms: [
                                         Inline {
-                                            text: "tel",
-                                            preceding_spaces: 1,
-                                        },
-                                        Inline {
-                                            text: "string",
+                                            text: "amy@example.com",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -61,14 +62,34 @@ Document {
                                     children: [],
                                 },
                             ],
-                            trailing_blank_lines: 1,
+                            trailing_blank_lines: 0,
                         },
                     ],
                 },
+                Compound {
+                    keyword: "contact",
+                    atoms: [
+                        Inline {
+                            text: "bea",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [],
+                },
+                Compound {
+                    keyword: "contact",
+                    atoms: [
+                        Inline {
+                            text: "chu",
+                            preceding_spaces: 1,
+                        },
+                    ],
+                    remark: None,
+                    children: [],
+                },
             ],
-            trailing_blank_lines: 0,
+            trailing_blank_lines: 1,
         },
     ],
 }
-errors:
-  E310 [0,6): Scalar value failed validation: `type` failed validation: TypeName must start with an uppercase ASCII letter

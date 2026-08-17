@@ -72,7 +72,7 @@ Document {
                     keyword: "name",
                     atoms: [
                         Inline {
-                            text: "tel-schema",
+                            text: "tels",
                             preceding_spaces: 1,
                         },
                     ],
@@ -104,10 +104,19 @@ Document {
                     text: "A `field` declaration at a member position. The four loosen/tighten flags",
                 },
                 Comment {
-                    text: "yield the per-axis Polarity (§20). `default` is permitted only on required",
+                    text: "yield the per-axis Polarity (§20). `key` marks the identifying field of the",
                 },
                 Comment {
-                    text: "Scalar-typed fields (E203).",
+                    text: "enclosing struct (E219–E221; instance-level uniqueness is E314). It must",
+                },
+                Comment {
+                    text: "precede `default` in member order so that a trailing `key` atom is consumed",
+                },
+                Comment {
+                    text: "as a flag, not as a default value (§20.5). `default` is permitted only on",
+                },
+                Comment {
+                    text: "required Scalar-typed fields (E203).",
                 },
             ],
             tabulation: None,
@@ -126,6 +135,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A field declaration at a member position.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "field",
                                     atoms: [
@@ -236,7 +255,45 @@ Document {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
+                                            text: "key",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Flag",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
                                             text: "default",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "description",
                                             preceding_spaces: 1,
                                         },
                                         Inline {
@@ -284,6 +341,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A select declaration at a member position, referencing a top-level SelectDefinition.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "field",
                                     atoms: [
@@ -406,6 +473,16 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A variant declaration inside a Select body.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
@@ -429,6 +506,25 @@ Document {
                                         },
                                         Inline {
                                             text: "TypeName",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "description",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -466,6 +562,16 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A record declaration: a named struct definition.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
@@ -499,6 +605,25 @@ Document {
                                     remark: None,
                                     children: [],
                                 },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "description",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                             ],
                             trailing_blank_lines: 0,
                         },
@@ -510,7 +635,10 @@ Document {
         Block {
             comments: [
                 Comment {
-                    text: "A `scalar` declaration: a named scalar definition (one or more validators).",
+                    text: "A `scalar` declaration: a named scalar definition (one or more validators",
+                },
+                Comment {
+                    text: "and an optional binary encoding).",
                 },
             ],
             tabulation: None,
@@ -529,6 +657,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A scalar declaration: a named scalar definition with one or more validators and an optional encoding.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "field",
                                     atoms: [
@@ -557,6 +695,44 @@ Document {
                                         },
                                         Inline {
                                             text: "repeatable",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "encoding",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "Identifier",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "description",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -600,6 +776,16 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A top-level select declaration: a named sum type.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
                                     keyword: "field",
                                     atoms: [
                                         Inline {
@@ -623,6 +809,25 @@ Document {
                                         },
                                         Inline {
                                             text: "repeatable",
+                                            preceding_spaces: 1,
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
+                                    keyword: "field",
+                                    atoms: [
+                                        Inline {
+                                            text: "description",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "String",
+                                            preceding_spaces: 1,
+                                        },
+                                        Inline {
+                                            text: "optional",
                                             preceding_spaces: 1,
                                         },
                                     ],
@@ -662,6 +867,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "The shared struct shape used by document and overlay.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "select",
                                     atoms: [
@@ -711,6 +926,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "A layer declaration: per-layer definitions and an optional overlay.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "field",
                                     atoms: [
@@ -861,6 +1086,16 @@ Document {
                             tabulation: None,
                             compounds: [
                                 Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "Members admissible inside a struct-shaped body: a field, select, or validator.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
+                                Compound {
                                     keyword: "variant",
                                     atoms: [
                                         Inline {
@@ -938,6 +1173,16 @@ Document {
                             comments: [],
                             tabulation: None,
                             compounds: [
+                                Compound {
+                                    keyword: "description",
+                                    atoms: [
+                                        Source {
+                                            text: "Children admissible inside a Select body: a variant, exclude, or validator.",
+                                        },
+                                    ],
+                                    remark: None,
+                                    children: [],
+                                },
                                 Compound {
                                     keyword: "variant",
                                     atoms: [

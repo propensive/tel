@@ -196,7 +196,7 @@ test("decodeDocument: self-contained magic on external decoder → B01 with hint
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const bytes = encodeDocumentSelfContained({
     rootChildren: children, composedSchema: nameSchema,
-    schemaChildren: children, telSchema: nameSchema,
+    schemaChildren: children, tels: nameSchema,
     componentHashes: [baseHash],
   });
   try {
@@ -293,7 +293,7 @@ test("schemaSignatureFromHashes: three components is 39 bytes", () => {
 // ── §6.2 Self-contained mode ─────────────────────────────────────────────────
 
 test("encode/decodeDocumentSelfContained: round trip", () => {
-  // Use nameSchema as both "tel-schema" and the embedded "data schema"
+  // Use nameSchema as both "tels" and the embedded "data schema"
   // — the wire-format mechanics are agnostic to that choice. The
   // embedded body is the same children we'd encode at the root if we
   // wanted; for this test we use a separate small embedded payload.
@@ -303,7 +303,7 @@ test("encode/decodeDocumentSelfContained: round trip", () => {
 
   const bytes = encodeDocumentSelfContained({
     rootChildren: dataChildren, composedSchema: nameSchema,
-    schemaChildren, telSchema: nameSchema,
+    schemaChildren, tels: nameSchema,
     componentHashes: [baseHash],
   });
   // Header magic is the self-contained variant.
@@ -317,7 +317,7 @@ test("encode/decodeDocumentSelfContained: round trip", () => {
     };
   };
 
-  const decoded = decodeDocumentSelfContained(bytes, { telSchema: nameSchema, buildSchema });
+  const decoded = decodeDocumentSelfContained(bytes, { tels: nameSchema, buildSchema });
   assert.equal(decoded.signature.length, 33);
   assert.deepEqual(decoded.children, dataChildren);
   assert.deepEqual(decoded.embeddedSchemaChildren, schemaChildren);
@@ -330,7 +330,7 @@ test("decodeDocumentSelfContained: tampered embedded body → B11 or B12", () =>
 
   const bytes = encodeDocumentSelfContained({
     rootChildren: dataChildren, composedSchema: nameSchema,
-    schemaChildren, telSchema: nameSchema,
+    schemaChildren, tels: nameSchema,
     componentHashes: [baseHash],
   });
   // Flip a byte in the embedded body. Layout: 4 magic + 1 sig_len_varint +
@@ -345,7 +345,7 @@ test("decodeDocumentSelfContained: tampered embedded body → B11 or B12", () =>
   });
 
   try {
-    decodeDocumentSelfContained(bytes, { telSchema: nameSchema, buildSchema });
+    decodeDocumentSelfContained(bytes, { tels: nameSchema, buildSchema });
     assert.fail("expected B11 or B12 after tampering");
   } catch (e) {
     assert.ok(e instanceof BintelDecodeError, `got ${e}`);
@@ -359,7 +359,7 @@ test("decodeDocumentSelfContained: external magic → B01 with hint", () => {
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const bytes = encodeDocument(children, nameSchema, [baseHash]);
   try {
-    decodeDocumentSelfContained(bytes, { telSchema: nameSchema, buildSchema: () => ({}) });
+    decodeDocumentSelfContained(bytes, { tels: nameSchema, buildSchema: () => ({}) });
     assert.fail("expected B01");
   } catch (e) {
     assert.ok(e instanceof BintelDecodeError);
@@ -370,17 +370,17 @@ test("decodeDocumentSelfContained: external magic → B01 with hint", () => {
 
 // ── schema_to_bintel helper ──────────────────────────────────────────────────
 
-test("schemaToBintel: encodes a schema document under tel-schema with tel-schema's signature", () => {
+test("schemaToBintel: encodes a schema document under tels with tels's signature", () => {
   const schemaChildren = [{ keyword: "name", kind: "scalar", text: "my-schema" }];
-  const telSchemaValueHash = valueHash(
-    [{ keyword: "name", kind: "scalar", text: "tel-schema" }],
+  const telsValueHash = valueHash(
+    [{ keyword: "name", kind: "scalar", text: "tels" }],
     nameSchema,
     stubBlake3,
   );
-  const bytes = schemaToBintel(schemaChildren, nameSchema, telSchemaValueHash);
+  const bytes = schemaToBintel(schemaChildren, nameSchema, telsValueHash);
   const decoded = decodeDocument(bytes, nameSchema);
-  // Carried signature equals the tel-schema-stand-in signature.
-  const expectedSig = schemaSignatureFromHashes([telSchemaValueHash]);
+  // Carried signature equals the tels-stand-in signature.
+  const expectedSig = schemaSignatureFromHashes([telsValueHash]);
   assert.deepEqual(decoded.signature, expectedSig);
   // The decoded body is the schema-document children.
   assert.deepEqual(decoded.children, schemaChildren);
@@ -396,7 +396,7 @@ test("value hash is mode-invariant: external and self-contained produce identica
   const external = encodeDocument(dataChildren, nameSchema, [baseHash]);
   const selfContained = encodeDocumentSelfContained({
     rootChildren: dataChildren, composedSchema: nameSchema,
-    schemaChildren, telSchema: nameSchema,
+    schemaChildren, tels: nameSchema,
     componentHashes: [baseHash],
   });
 

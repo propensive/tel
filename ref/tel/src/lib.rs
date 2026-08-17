@@ -11,7 +11,7 @@
 //! - **Schema composition** (`compose_schema`) implementing §20.3's MergeStruct algorithm,
 //!   producing the subtype guaranteed by §24.4.
 //! - **Indentation recovery** for E107 / E111 per §19.5.
-//! - **Built-in `tel-schema`** (`builtin_tel_schema`) with pinned BinTEL value hash per §20.5.
+//! - **Built-in `tels`** (`builtin_tels`) with pinned BinTEL value hash per §20.5.
 //!
 //! Sub-modules: [`bintel`] (§7 of BinTEL Specification), [`canonical`] (§22.3),
 //! [`mutate`] (§22.2 machine operations), [`resolver`] (§8.2 schema resolution),
@@ -29,22 +29,22 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-/// The canonical `tel-schema.tel` source text, baked into the crate so the
+/// The canonical `tels.tel` source text, baked into the crate so the
 /// hardwired schema-for-schemas (§20.5 of the TEL Specification) is
 /// available without a runtime file dependency. Used by the resolver's
 /// built-in lookup, the BinTEL self-contained-mode bootstrap, and the
 /// programmatic `add_bintel_to_library` API.
-pub const TEL_SCHEMA_SOURCE: &str = include_str!("../../../tel-schema.tel");
+pub const TELS_SOURCE: &str = include_str!("../../../tels.tel");
 
-/// Lazily-computed BLAKE3-256 value hash of the canonical tel-schema (§3
+/// Lazily-computed BLAKE3-256 value hash of the canonical tels (§3
 /// of the BinTEL Specification). This is the base hash of a single-
-/// component tel-schema signature; the full 33-byte signature is obtained
-/// by `bintel::schema_signature_from_hashes(&[builtin_tel_schema_value_hash()])`.
-pub fn builtin_tel_schema_value_hash() -> [u8; 32] {
+/// component tels signature; the full 33-byte signature is obtained
+/// by `bintel::schema_signature_from_hashes(&[builtin_tels_value_hash()])`.
+pub fn builtin_tels_value_hash() -> [u8; 32] {
     static CACHE: OnceLock<[u8; 32]> = OnceLock::new();
     *CACHE.get_or_init(|| {
-        let parsed = parse(TEL_SCHEMA_SOURCE);
-        bintel::value_hash(&parsed.document, &builtin_tel_schema())
+        let parsed = parse(TELS_SOURCE);
+        bintel::value_hash(&parsed.document, &builtin_tels())
     })
 }
 
@@ -65,10 +65,10 @@ pub enum ErrorCode {
     E116, E117, E118, E119, E120, E121, E122, E123,
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
-    E211, E212, E213, E214, E215, E216, E217, E218,
+    E211, E212, E213, E214, E215, E216, E217, E218, E219, E220, E221,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
-    E312, E313,
+    E312, E313, E314,
 }
 
 impl ErrorCode {
@@ -114,6 +114,9 @@ impl ErrorCode {
             Self::E216 => "Exclude operation appears outside a layer's SelectDefinition body",
             Self::E217 => "Reference/SelectRef kind mismatch (Reference resolved to a SelectDefinition, or SelectRef resolved to a Record/Scalar)",
             Self::E218 => "Layer declares a conflicting encoding for an existing scalar",
+            Self::E219 => "Key field's type does not resolve to a Scalar",
+            Self::E220 => "Key field must be effectively required and non-repeatable",
+            Self::E221 => "More than one key field in a Struct",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -127,6 +130,7 @@ impl ErrorCode {
             Self::E311 => "Flag-typed compound has atoms or compound children",
             Self::E312 => "Scalar value rejected by its type's codec encoder",
             Self::E313 => "Scalar type names a codec the codec binding does not provide",
+            Self::E314 => "Duplicate key value among keyed children of one parent",
         }
     }
 }
@@ -366,6 +370,12 @@ pub enum Member {
 pub struct Field {
     pub required: Polarity,
     pub repeatable: Polarity,
+    /// True when this field is the identifying key of its enclosing Struct
+    /// (§20). Constraints: type resolves to Scalar (E219), effectively
+    /// required and non-repeatable on the composed member (E220), at most
+    /// one per Struct (E221). Instance-level uniqueness is E314 (§21.6).
+    /// Monotone across layers: a layer may set it, never clear it (§20.3).
+    pub key: bool,
     pub keyword: String,
     pub r#type: Type,
     /// Per-use-site default value, applied when a required Scalar-typed
@@ -729,12 +739,12 @@ pub fn validate_with_builtins(
     }
 }
 
-// ── Built-in tel-schema (§20.5 bootstrap requirement) ───────────────────────
+// ── Built-in tels (§20.5 bootstrap requirement) ───────────────────────
 
 /// The hardcoded `Schema` value describing TEL's schema language. This is
 /// the schema referenced by every TEL schema document, and the closure
-/// invariant of §20.5 requires it to match what `tel-schema.tel` describes.
-pub fn builtin_tel_schema() -> Schema {
+/// invariant of §20.5 requires it to match what `tels.tel` describes.
+pub fn builtin_tels() -> Schema {
     // Helpers. Every Type used here is a Reference; resolution at type
     // assignment time (§20.2) picks the matching Definition or built-in.
     let id_type = || Type::Reference("Identifier".to_string());
@@ -751,7 +761,7 @@ pub fn builtin_tel_schema() -> Schema {
     // Field-construction helper. Polarity defaults: Default/Default unless
     // a loosening flag was explicitly chosen.
     let field = |req: Polarity, rep: Polarity, kw: &str, t: Type| Member::Field(Field {
-        required: req, repeatable: rep, keyword: kw.to_string(),
+        required: req, repeatable: rep, key: false, keyword: kw.to_string(),
         r#type: t, default: None, description: None,
     });
     // SelectRef-construction helper.
@@ -774,6 +784,7 @@ pub fn builtin_tel_schema() -> Schema {
             field(loose, dflt, "required", flag_type()),
             field(loose, dflt, "repeatable", flag_type()),
             field(loose, dflt, "irrepeatable", flag_type()),
+            field(loose, dflt, "key", flag_type()),
             field(loose, dflt, "default", str_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
@@ -907,7 +918,7 @@ pub fn builtin_tel_schema() -> Schema {
     };
 
     Schema {
-        name: "tel-schema".to_string(),
+        name: "tels".to_string(),
         document,
         layers: vec![],
         sigil: None,
@@ -1125,6 +1136,9 @@ fn assign_compound_children_at_root(
 
     // Constraint check (§20.2 step 5)
     check_member_constraints(members, &fill_counts, errors);
+
+    // Key uniqueness among the root's keyed children (§21.6, E314).
+    check_key_uniqueness(blocks, members, &k, schema, errors);
 }
 
 /// `K`: keyword → (member index, type — already cloned for ownership ease).
@@ -1423,6 +1437,9 @@ fn type_assign_compound(
             // Constraint check (E307, E308)
             check_member_constraints(members, &fill_counts, errors);
 
+            // Key uniqueness among this compound's keyed children (§21.6, E314).
+            check_key_uniqueness(&c.children, members, &k, schema, errors);
+
             // Struct-level validators (§21.6). The validators are
             // declared on the *Type*, not on the resolved members
             // alone, so look them up via the original Type. After
@@ -1456,6 +1473,114 @@ fn struct_validators<'a>(t: &'a Type, schema: &'a Schema) -> Option<&'a [String]
             .map(|d| d.validators.as_slice()),
         _ => None,
     }
+}
+
+/// §21.6 Key Uniqueness (E314): among the compound children of one parent
+/// that fill effectively `repeatable` members and whose type resolves to a
+/// Struct with a key-flagged field, key values must be pairwise distinct —
+/// across all such members and keywords, in semantic order. Children whose
+/// key value is unavailable (key field absent with no default — E307
+/// territory) are excluded from the comparison.
+fn check_key_uniqueness(
+    blocks: &[Block],
+    members: &[Member],
+    k: &std::collections::HashMap<String, (usize, Type)>,
+    schema: &Schema,
+    errors: &mut Vec<TelError>,
+) {
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for block in blocks {
+        for child in &block.compounds {
+            let Some(&(i, ref child_type)) = k.get(child.keyword.as_str()) else { continue };
+            let repeatable = match &members[i] {
+                Member::Field(f) => f.repeatable.effective_repeatable(),
+                Member::SelectRef(s) => s.repeatable.effective_repeatable(),
+                Member::Exclude(_) => false,
+            };
+            if !repeatable { continue; }
+            let child_members = match resolve(child_type, schema) {
+                ResolvedType::Struct(m) => m,
+                _ => continue,
+            };
+            let Some(kv) = key_value_of(child, child_members, schema) else { continue };
+            if let Some(prev_kw) = seen.insert(kv.clone(), child.keyword.clone()) {
+                errors.push(TelError::with_detail(
+                    ErrorCode::E314, 0, 0,
+                    format!("duplicate key value `{}` among keyed children (`{}` and `{}`)",
+                            kv, prev_kw, child.keyword),
+                ));
+            }
+        }
+    }
+}
+
+/// The key value of a keyed child (§21.6): the semantic text filling the
+/// child's key-flagged field, including a default-supplied value. Returns
+/// `None` when the Struct type has no key field or the key field is absent
+/// with no default.
+fn key_value_of(c: &Compound, members: &[Member], schema: &Schema) -> Option<String> {
+    let (key_idx, key_field) = members.iter().enumerate().find_map(|(i, m)| match m {
+        Member::Field(f) if f.key => Some((i, f)),
+        _ => None,
+    })?;
+    // Atom-phase simulation (§20.2 step 3): find the atom, if any, that is
+    // positionally assigned to the key member. Mirrors the skip logic of
+    // `type_assign_compound` without emitting errors.
+    let mut pos = 0usize;
+    for atom in &c.atoms {
+        let text = atom_text(atom);
+        while pos < members.len() {
+            let (required, skip) = match &members[pos] {
+                Member::Field(f) => {
+                    let resolved = resolve(&f.r#type, schema);
+                    let is_flag = matches!(resolved, ResolvedType::Flag);
+                    let atom_assignable = matches!(resolved,
+                        ResolvedType::Scalar(_) | ResolvedType::Flag);
+                    let required = f.required.effective_required();
+                    (required, !required && (!atom_assignable || (is_flag && f.keyword != text)))
+                }
+                Member::SelectRef(s) => {
+                    let variants = resolve_select_ref(&s.reference, schema).unwrap_or(&[]);
+                    let all_flag = variants.iter().all(|v|
+                        matches!(resolve(&v.r#type, schema), ResolvedType::Flag));
+                    let matches_some = variants.iter().any(|v| v.keyword == text);
+                    let required = s.required.effective_required();
+                    (required, !required && (!all_flag || !matches_some))
+                }
+                Member::Exclude(_) => (false, true),
+            };
+            if required || !skip { break; }
+            pos += 1;
+        }
+        if pos >= members.len() { break; }
+        // Non-atom-assignable member at `pos`: mirror the E303 bail-out.
+        let assignable = match &members[pos] {
+            Member::Field(f) => matches!(resolve(&f.r#type, schema),
+                ResolvedType::Scalar(_) | ResolvedType::Flag),
+            Member::SelectRef(s) => resolve_select_ref(&s.reference, schema)
+                .unwrap_or(&[]).iter()
+                .all(|v| matches!(resolve(&v.r#type, schema), ResolvedType::Flag)),
+            Member::Exclude(_) => false,
+        };
+        if !assignable { break; }
+        if pos == key_idx { return Some(text); }
+        let repeatable = match &members[pos] {
+            Member::Field(f) => f.repeatable.effective_repeatable(),
+            Member::SelectRef(s) => s.repeatable.effective_repeatable(),
+            Member::Exclude(_) => false,
+        };
+        if !repeatable { pos += 1; }
+    }
+    // Compound-child fill of the key field.
+    for block in &c.children {
+        for child in &block.compounds {
+            if child.keyword == key_field.keyword {
+                return Some(scalar_value_text(child));
+            }
+        }
+    }
+    // Default-supplied key value (§18.3 step 5).
+    key_field.default.clone()
 }
 
 fn check_member_constraints(
@@ -1538,12 +1663,12 @@ impl fmt::Display for SchemaError {
 // ── Schema construction from semantic model (§20.6) ────────────────────────
 
 /// Walk a parsed `Document` (which is presumed to be a schema document, i.e.
-/// already type-checked against the built-in tel-schema) and build a `Schema`
+/// already type-checked against the built-in tels) and build a `Schema`
 /// value. The construction is deterministic per §20.6; source order is
 /// preserved in all `Vec`s.
 ///
-/// This function does NOT re-check tel-schema conformance — call `type_assign`
-/// against `builtin_tel_schema()` first if you need that.
+/// This function does NOT re-check tels conformance — call `type_assign`
+/// against `builtin_tels()` first if you need that.
 pub fn construct_schema(doc: &Document) -> Schema {
     let mut name = String::new();
     let mut sigil: Option<char> = None;
@@ -1734,12 +1859,13 @@ fn polarity_of(loose: bool, tight: bool) -> Polarity {
 fn construct_field(c: &Compound) -> Field {
     // Atom phase against the Field record's member order (§20.5):
     //   keyword (req Scalar), type (req Scalar),
-    //   optional/required/repeatable/irrepeatable (opt Flags),
+    //   optional/required/repeatable/irrepeatable/key (opt Flags),
     //   default (opt Scalar).
     let mut optional_flag = false;
     let mut required_flag = false;
     let mut repeatable_flag = false;
     let mut irrepeatable_flag = false;
+    let mut key_flag = false;
     let mut keyword = String::new();
     let mut type_name = String::new();
     let mut default: Option<String> = None;
@@ -1761,6 +1887,7 @@ fn construct_field(c: &Compound) -> Field {
             "required" => required_flag = true,
             "repeatable" => repeatable_flag = true,
             "irrepeatable" => irrepeatable_flag = true,
+            "key" => key_flag = true,
             _ => {
                 if default.is_none() {
                     default = Some(t);
@@ -1777,6 +1904,7 @@ fn construct_field(c: &Compound) -> Field {
                 "required" => required_flag = true,
                 "repeatable" => repeatable_flag = true,
                 "irrepeatable" => irrepeatable_flag = true,
+                "key" => key_flag = true,
                 "type" => type_name = scalar_value_text(child),
                 "default" => default = Some(scalar_value_text(child)),
                 _ => {}
@@ -1787,7 +1915,7 @@ fn construct_field(c: &Compound) -> Field {
     let repeatable = polarity_of(repeatable_flag, irrepeatable_flag);
     let r#type = Type::Reference(type_name);
     let description = description_of(c);
-    Field { required, repeatable, keyword, r#type, default, description }
+    Field { required, repeatable, key: key_flag, keyword, r#type, default, description }
 }
 
 /// Construct a `SelectRef` at a member position. The first inline atom is
@@ -2035,7 +2163,79 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         errors.extend(compose_errs);
     }
 
+    // E219–E221 (§20.1): key-field constraints, checked against the
+    // composed schema's Structs — a layer may both key a field and tighten
+    // its polarity, so effective polarity is meaningful only after
+    // composition.
+    check_key_constraints(s, &mut errors);
+
     errors
+}
+
+/// E219–E221 (§20.1): key-field constraints over every Struct of the
+/// composed schema (document root and every RecordDefinition body,
+/// recursing into merge-produced nested `Type::Struct`s).
+fn check_key_constraints(s: &Schema, errors: &mut Vec<SchemaError>) {
+    let composed_storage;
+    let target = if s.layers.is_empty() {
+        s
+    } else {
+        composed_storage = compose_schema(s).0;
+        &composed_storage
+    };
+    check_key_constraints_in_members(&target.document.members, "document", target, errors);
+    for d in &target.records {
+        check_key_constraints_in_members(
+            &d.members, &format!("record `{}`", d.name), target, errors);
+    }
+}
+
+fn check_key_constraints_in_members(
+    members: &[Member],
+    where_: &str,
+    schema: &Schema,
+    errors: &mut Vec<SchemaError>,
+) {
+    let mut key_keywords: Vec<&str> = Vec::new();
+    for m in members {
+        let f = match m {
+            Member::Field(f) => f,
+            Member::SelectRef(_) | Member::Exclude(_) => continue,
+        };
+        // Recurse into merge-produced nested Structs regardless of `key`.
+        if let Type::Struct(st) = &f.r#type {
+            check_key_constraints_in_members(
+                &st.members, &format!("{} → field `{}`", where_, f.keyword), schema, errors);
+        }
+        if !f.key { continue; }
+        key_keywords.push(&f.keyword);
+        // E219: the key field's type must resolve to a Scalar.
+        if !matches!(resolve(&f.r#type, schema), ResolvedType::Scalar(_)) {
+            errors.push(SchemaError {
+                code: ErrorCode::E219,
+                detail: format!(
+                    "key field `{}` in {} does not resolve to a Scalar", f.keyword, where_),
+            });
+        }
+        // E220: effectively required and non-repeatable.
+        if !f.required.effective_required() || f.repeatable.effective_repeatable() {
+            errors.push(SchemaError {
+                code: ErrorCode::E220,
+                detail: format!(
+                    "key field `{}` in {} must be effectively required and non-repeatable",
+                    f.keyword, where_),
+            });
+        }
+    }
+    // E221: at most one key field per Struct.
+    if key_keywords.len() > 1 {
+        errors.push(SchemaError {
+            code: ErrorCode::E221,
+            detail: format!(
+                "{} declares {} key fields ({}); at most one is permitted",
+                where_, key_keywords.len(), key_keywords.join(", ")),
+        });
+    }
 }
 
 /// Collect every Field/Variant keyword reachable from the schema (for E208 check).
@@ -2361,6 +2561,10 @@ fn merge_field_with(
     Some(Field {
         required: merged_required,
         repeatable: merged_repeatable,
+        // Monotone OR (§20.3): a layer may mark a field as key; nothing
+        // can clear it. E219/E220/E221 are re-checked on the composed
+        // schema by `check_key_constraints`.
+        key: base.key || layer.key,
         keyword: base.keyword.clone(),
         r#type: merged_type,
         default: base.default.clone(),
@@ -4157,20 +4361,20 @@ mod tests {
     /// document, returning its parse errors plus any schema/type errors.
     /// Two test conventions:
     ///
-    /// (1) Pragma names tel-schema (via its placeholder URL): type-assign
-    ///     against the built-in tel-schema, and if that passes, construct a
+    /// (1) Pragma names tels (via its placeholder URL): type-assign
+    ///     against the built-in tels, and if that passes, construct a
     ///     Schema and validate it.
     ///
     /// (2) Pragma URL ends with `/<NAME>` where <NAME> matches a sibling
     ///     `<NAME>.tel` file in `test_dir`: parse that file as a schema
-    ///     document (type-checked against tel-schema), construct the user
+    ///     document (type-checked against tels), construct the user
     ///     schema, and type-check this document against it.
     fn document_all_errors(result: &ParseResult, test_dir: &std::path::Path) -> Vec<TelError> {
         let mut all_errors: Vec<TelError> = result.errors.clone();
         if let Some(ref pr) = result.document.pragma {
             if let Some(schema_url) = pr.schema.as_deref() {
-                if schema_url == "https://tel-lang.org/schema/tel-schema" {
-                    let builtin = builtin_tel_schema();
+                if schema_url == "https://tel-lang.org/schema/tels" {
+                    let builtin = builtin_tels();
                     let ta = type_assign(&result.document, &builtin, None);
                     let had_ta_errors = !ta.errors.is_empty();
                     all_errors.extend(ta.errors);
@@ -4193,7 +4397,7 @@ mod tests {
                     if let Ok(schema_src) = schema_src_result {
                         // Parse the schema document and build a Schema
                         let schema_parsed = parse(&schema_src);
-                        let builtin = builtin_tel_schema();
+                        let builtin = builtin_tels();
                         let schema_ta = type_assign(
                             &schema_parsed.document, &builtin, None,
                         );
@@ -4215,7 +4419,7 @@ mod tests {
                             all_errors.extend(doc_ta.errors);
                         }
                         // If the schema document itself doesn't parse against
-                        // tel-schema, we don't surface those errors here —
+                        // tels, we don't surface those errors here —
                         // that's the schema's own bug, not the test document's.
                     }
                 }
@@ -4446,15 +4650,15 @@ mod tests {
     // ── Schema unit tests ───────────────────────────────────────────────────
 
     #[test]
-    fn builtin_tel_schema_is_valid() {
-        let s = builtin_tel_schema();
+    fn builtin_tels_is_valid() {
+        let s = builtin_tels();
         let errors = validate_schema(&s);
-        assert!(errors.is_empty(), "built-in tel-schema reports errors: {:?}", errors);
+        assert!(errors.is_empty(), "built-in tels reports errors: {:?}", errors);
     }
 
     #[test]
-    fn builtin_tel_schema_has_expected_definitions() {
-        let s = builtin_tel_schema();
+    fn builtin_tels_has_expected_definitions() {
+        let s = builtin_tels();
         let record_names: Vec<&str> = s.records.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(record_names, vec![
             "Field", "SelectRef", "Variant", "Record", "Scalar",
@@ -4468,7 +4672,7 @@ mod tests {
     fn validate_identifier_accepts_kebab_case() {
         assert_eq!(validate_identifier("foo"), ValidationResponse::Valid);
         assert_eq!(validate_identifier("update-value"), ValidationResponse::Valid);
-        assert_eq!(validate_identifier("tel-schema"), ValidationResponse::Valid);
+        assert_eq!(validate_identifier("tels"), ValidationResponse::Valid);
         assert_eq!(validate_identifier("a"), ValidationResponse::Valid);
         assert_eq!(validate_identifier("a-b-c-d"), ValidationResponse::Valid);
         assert_eq!(validate_identifier("foo123"), ValidationResponse::Valid);
@@ -4530,12 +4734,12 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
@@ -4577,7 +4781,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, // not required, so default is illegal
                         repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
@@ -4614,7 +4818,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "tel".to_string(),
                         r#type: Type::Flag, default: None,
@@ -4634,7 +4838,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Reference("missing".to_string()), default: None,
@@ -4779,7 +4983,7 @@ mod tests {
     }
 
     fn field(req: bool, rep: bool, kw: &str, t: Type) -> Member {
-        Member::Field(Field { description: None,
+        Member::Field(Field { key: false, description: None,
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: if rep { Polarity::Loose } else { Polarity::Default },
             keyword: kw.to_string(), r#type: t, default: None,
@@ -4841,7 +5045,7 @@ mod tests {
         // Required Scalar Field with a Field.default — the default is
         // substituted when the field is absent from the document.
         let s = schema_with_root(vec![
-            Member::Field(Field { description: None,
+            Member::Field(Field { key: false, description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
                 r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()] }),
@@ -4868,7 +5072,7 @@ mod tests {
     fn type_assign_catches_e310_validator_failure() {
         // schema with identifier validator on `id` field
         let s = schema_with_root(vec![
-            Member::Field(Field { description: None,
+            Member::Field(Field { key: false, description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
                 r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["identifier".to_string()]}), default: None,
@@ -4920,7 +5124,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -5025,7 +5229,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn flag_field(req: bool, kw: &str) -> Member {
-        Member::Field(Field { description: None,
+        Member::Field(Field { key: false, description: None,
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: Polarity::Default,
             keyword: kw.to_string(), r#type: Type::Flag, default: None,
@@ -5038,13 +5242,13 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default, keyword: "name".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], validators: Vec::new()},
             layers: vec![layer("with-email", vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default, keyword: "email".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
@@ -5067,7 +5271,7 @@ mod tests {
             layers: vec![layer("ext", vec![], vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default, keyword: "postcode".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
@@ -5077,7 +5281,7 @@ mod tests {
             records: vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default, keyword: "street".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
@@ -5262,7 +5466,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5270,7 +5474,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Tight, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5296,7 +5500,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5304,7 +5508,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Tight,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5328,7 +5532,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5336,7 +5540,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5356,7 +5560,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5364,7 +5568,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field { description: None,
+                Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -5423,17 +5627,77 @@ mod tests {
         }
     }
 
-    /// THE bootstrap closure: parsing tel-schema.tel, constructing a Schema
+    /// A trailing `key` atom sets the flag; it must not be captured by the
+    /// optional `default` Scalar (which follows `key` in the tels `Field`
+    /// member order — the ordering is load-bearing, §20.5).
+    #[test]
+    fn construct_field_key_flag_is_not_captured_as_default() {
+        let source = "tel 1.0\n\nname key-order-test\n\ndocument\n  field username Identifier key\n";
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let ta = type_assign(&parsed.document, &builtin_tels(), None);
+        assert!(ta.errors.is_empty(), "type errors: {:?}", ta.errors);
+        let s = construct_schema(&parsed.document);
+        match &s.document.members[0] {
+            Member::Field(f) => {
+                assert!(f.key, "key flag should be set");
+                assert_eq!(f.default, None, "`key` must not be consumed as a default value");
+            }
+            _ => panic!("expected Field"),
+        }
+    }
+
+    /// A layer may mark an existing field as key (monotone OR, §20.3); the
+    /// composed record carries the flag and validates cleanly.
+    #[test]
+    fn compose_layer_can_mark_field_as_key() {
+        let source = "tel 1.0\n\nname base\n\nrecord Contact\n  field name Identifier\n\ndocument\n  field contact Contact optional repeatable\n\nlayer keys\n  record Contact\n    field name Identifier key\n";
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let s = construct_schema(&parsed.document);
+        assert!(validate_schema(&s).is_empty(), "schema errors: {:?}", validate_schema(&s));
+        let (composed, errs) = compose_schema(&s);
+        assert!(errs.is_empty(), "compose errors: {:?}", errs);
+        let contact = composed.records.iter().find(|r| r.name == "Contact").unwrap();
+        match &contact.members[0] {
+            Member::Field(f) => assert!(f.key, "composed field should be key after layer merge"),
+            _ => panic!("expected Field"),
+        }
+    }
+
+    /// Default-supplied key values participate in the E314 comparison
+    /// (§21.6): two siblings that both elide a defaulted key field share
+    /// the default as their key value and collide.
+    #[test]
+    fn e314_fires_on_default_supplied_key_values() {
+        let schema_src = "tel 1.0\n\nname defaulted-keys\n\nrecord Item\n  field label Identifier key fallback\n\ndocument\n  field item Item optional repeatable\n";
+        let parsed = parse(schema_src);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let schema = construct_schema(&parsed.document);
+        assert!(validate_schema(&schema).is_empty(),
+                "schema errors: {:?}", validate_schema(&schema));
+        let doc = parse("item\nitem\n");
+        let ta = type_assign(&doc.document, &schema, None);
+        assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E314),
+                "expected E314, got: {:?}", ta.errors);
+        // A single elision is fine.
+        let doc_ok = parse("item\nitem other\n");
+        let ta_ok = type_assign(&doc_ok.document, &schema, None);
+        assert!(!ta_ok.errors.iter().any(|e| e.code == ErrorCode::E314),
+                "unexpected E314: {:?}", ta_ok.errors);
+    }
+
+    /// THE bootstrap closure: parsing tels.tel, constructing a Schema
     /// from the result, and confirming it equals the hardcoded built-in.
     #[test]
-    fn tel_schema_self_bootstrap_closure() {
-        let source = fs::read_to_string("../../tel-schema.tel")
-            .expect("tel-schema.tel must exist at the project root");
+    fn tels_self_bootstrap_closure() {
+        let source = fs::read_to_string("../../tels.tel")
+            .expect("tels.tel must exist at the project root");
         let parsed = parse(&source);
         assert!(parsed.errors.is_empty(),
-                "parsing tel-schema.tel produced errors: {:?}", parsed.errors);
-        // Type-check against the built-in tel-schema.
-        let builtin = builtin_tel_schema();
+                "parsing tels.tel produced errors: {:?}", parsed.errors);
+        // Type-check against the built-in tels.
+        let builtin = builtin_tels();
         let ta = type_assign(&parsed.document, &builtin, None);
         assert!(ta.errors.is_empty(),
                 "type assignment errors against built-in: {:?}", ta.errors);
@@ -5455,7 +5719,7 @@ mod tests {
         // Lastly: a constructed schema should itself be valid.
         let errs = validate_schema(&constructed);
         assert!(errs.is_empty(),
-                "constructed tel-schema reports validity errors: {:?}", errs);
+                "constructed tels reports validity errors: {:?}", errs);
     }
 
     #[test]
@@ -5574,13 +5838,13 @@ layer fancy
             name: "round-trip".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Reference("String".to_string()),
                         default: None,
                     }),
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Reference("Flag".to_string()),
@@ -5640,15 +5904,15 @@ layer fancy
             .collect()
     }
 
-    /// Read the pinned BLAKE3-256 value hash of `tel-schema.tel` from
-    /// `demo/tel-schema.hash`, which lists both the BLAKE3 hex and the
+    /// Read the pinned BLAKE3-256 value hash of `tels.tel` from
+    /// `demo/tels.hash`, which lists both the BLAKE3 hex and the
     /// BASE-256 form. Returns the 32 raw bytes.
-    fn pinned_tel_schema_hash() -> [u8; 32] {
-        let body = fs::read_to_string("../../demo/tel-schema.hash")
-            .expect("demo/tel-schema.hash must exist");
+    fn pinned_tels_hash() -> [u8; 32] {
+        let body = fs::read_to_string("../../demo/tels.hash")
+            .expect("demo/tels.hash must exist");
         let hex_line = body.lines()
             .find(|l| l.starts_with("blake3:"))
-            .expect("demo/tel-schema.hash must contain a `blake3:` line");
+            .expect("demo/tels.hash must contain a `blake3:` line");
         let hex = hex_line.trim_start_matches("blake3:").trim();
         let bytes = hex_decode(hex);
         assert_eq!(bytes.len(), 32, "blake3 hex must be 64 chars");
@@ -5658,34 +5922,34 @@ layer fancy
     }
 
     #[test]
-    fn tel_schema_bintel_value_hash_matches_normative() {
-        let source = fs::read_to_string("../../tel-schema.tel")
-            .expect("tel-schema.tel must exist at the project root");
+    fn tels_bintel_value_hash_matches_normative() {
+        let source = fs::read_to_string("../../tels.tel")
+            .expect("tels.tel must exist at the project root");
         let parsed = parse(&source);
-        assert!(parsed.errors.is_empty(), "tel-schema.tel must parse cleanly");
-        let schema = builtin_tel_schema();
+        assert!(parsed.errors.is_empty(), "tels.tel must parse cleanly");
+        let schema = builtin_tels();
         let hash = bintel::value_hash(&parsed.document, &schema);
         let bytes = bintel::encode_root(&parsed.document, &schema);
-        // When DUMP_TEL_SCHEMA_BINTEL is set, write the canonical BinTEL
+        // When DUMP_TELS_BINTEL is set, write the canonical BinTEL
         // hex and the pinned hash (both BLAKE3 hex and BASE-256) to the
         // demo/ directory. Useful for regenerating the pinned artefacts
         // after schema changes.
-        if std::env::var("DUMP_TEL_SCHEMA_BINTEL").is_ok() {
+        if std::env::var("DUMP_TELS_BINTEL").is_ok() {
             let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-            fs::write("../../demo/tel-schema.bintel.hex", &hex).ok();
+            fs::write("../../demo/tels.bintel.hex", &hex).ok();
             let blake3_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
             let base256_text = base256::encode(&hash);
             let hash_file = format!("blake3:  {}\nbase256: {}\n", blake3_hex, base256_text);
-            fs::write("../../demo/tel-schema.hash", &hash_file).ok();
-            eprintln!("wrote {} bytes to demo/tel-schema.bintel.hex", bytes.len());
-            eprintln!("wrote BLAKE3 hash to demo/tel-schema.hash");
+            fs::write("../../demo/tels.hash", &hash_file).ok();
+            eprintln!("wrote {} bytes to demo/tels.bintel.hex", bytes.len());
+            eprintln!("wrote BLAKE3 hash to demo/tels.hash");
             return;
         }
-        let expected = pinned_tel_schema_hash();
+        let expected = pinned_tels_hash();
         assert_eq!(hash.to_vec(), expected.to_vec(),
-                   "tel-schema.tel value hash does not match the value \
-                   pinned in demo/tel-schema.hash; computed hex={} (bintel bytes={}). \
-                   Re-run with DUMP_TEL_SCHEMA_BINTEL=1 to regenerate the demo artefacts.",
+                   "tels.tel value hash does not match the value \
+                   pinned in demo/tels.hash; computed hex={} (bintel bytes={}). \
+                   Re-run with DUMP_TELS_BINTEL=1 to regenerate the demo artefacts.",
                    hash.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
                    bytes.len());
     }
@@ -5697,7 +5961,7 @@ layer fancy
         let parsed = parse(&source);
         assert!(parsed.errors.is_empty(),
                 "layered contact schema parse errors: {:?}", parsed.errors);
-        let ta = type_assign(&parsed.document, &builtin_tel_schema(), None);
+        let ta = type_assign(&parsed.document, &builtin_tels(), None);
         assert!(ta.errors.is_empty(),
                 "layered contact schema type-assignment errors: {:?}", ta.errors);
         let s = construct_schema(&parsed.document);
@@ -5796,7 +6060,7 @@ layer fancy
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "outer".to_string(),
@@ -5809,7 +6073,7 @@ layer fancy
             sigil: None,
             records: vec![RecordDefinition { description: None,
                 name: "Outer".to_string(),
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "inner".to_string(),
@@ -5857,7 +6121,7 @@ layer fancy
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { description: None,
+                members: vec![Member::Field(Field { key: false, description: None,
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "a".to_string(),
                     r#type: Type::Reference("A".to_string()),
@@ -5870,7 +6134,7 @@ layer fancy
             records: vec![
                 RecordDefinition { description: None,
                     name: "A".to_string(),
-                    members: vec![Member::Field(Field { description: None,
+                    members: vec![Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
                         r#type: Type::Reference("B".to_string()),
@@ -5881,13 +6145,13 @@ layer fancy
                 RecordDefinition { description: None,
                     name: "B".to_string(),
                     members: vec![
-                        Member::Field(Field { description: None,
+                        Member::Field(Field { key: false, description: None,
                             required: Polarity::Loose, repeatable: Polarity::Default,
                             keyword: "shared".to_string(),
                             r#type: Type::Reference("String".to_string()),
                             default: None,
                         }),
-                        Member::Field(Field { description: None,
+                        Member::Field(Field { key: false, description: None,
                             required: Polarity::Default, repeatable: Polarity::Default,
                             keyword: "c".to_string(),
                             r#type: Type::Reference("C".to_string()),
@@ -5898,7 +6162,7 @@ layer fancy
                 },
                 RecordDefinition { description: None,
                     name: "C".to_string(),
-                    members: vec![Member::Field(Field { description: None,
+                    members: vec![Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "shared".to_string(),
                         r#type: Type::Reference("String".to_string()),
@@ -6089,18 +6353,18 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "address".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field { description: None,
+                                Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
                                     r#type: Type::Scalar(Scalar { encoding: None,
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field { description: None,
+                                Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
                                     r#type: Type::Scalar(Scalar { encoding: None,
@@ -6156,12 +6420,12 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -6198,17 +6462,17 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "record".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field { description: None,
+                                Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
                                     r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field { description: None,
+                                Member::Field(Field { key: false, description: None,
                                     required: Polarity::Loose, repeatable: Polarity::Default,
                                     keyword: "active".to_string(),
                                     r#type: Type::Flag, default: None,
@@ -6242,12 +6506,12 @@ layer fancy
             name: "greeting".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
                         r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field { description: None,
+                    Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "bold".to_string(),
                         r#type: Type::Flag, default: None,
@@ -6275,23 +6539,23 @@ layer fancy
     }
 
     /// Diagnostic helper — prints the bytes/hash for human inspection. Run
-    /// with `cargo test print_tel_schema_value_hash -- --nocapture`.
+    /// with `cargo test print_tels_value_hash -- --nocapture`.
     #[test]
-    fn print_tel_schema_value_hash() {
-        let source = fs::read_to_string("../../tel-schema.tel")
-            .expect("tel-schema.tel must exist at the project root");
+    fn print_tels_value_hash() {
+        let source = fs::read_to_string("../../tels.tel")
+            .expect("tels.tel must exist at the project root");
         let parsed = parse(&source);
-        assert!(parsed.errors.is_empty(), "tel-schema.tel must parse cleanly");
-        let schema = builtin_tel_schema();
+        assert!(parsed.errors.is_empty(), "tels.tel must parse cleanly");
+        let schema = builtin_tels();
         let bytes = bintel::encode_root(&parsed.document, &schema);
         let hash = bintel::value_hash(&parsed.document, &schema);
         let hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
         let b256 = base256::encode(&hash);
-        eprintln!("tel-schema.tel BinTEL root length:    {} bytes", bytes.len());
-        eprintln!("tel-schema.tel value hash (hex):      {}", hex);
-        eprintln!("tel-schema.tel value hash (base-256): {}", b256);
+        eprintln!("tels.tel BinTEL root length:    {} bytes", bytes.len());
+        eprintln!("tels.tel value hash (hex):      {}", hex);
+        eprintln!("tels.tel value hash (base-256): {}", b256);
         let bintel_hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        eprintln!("tel-schema.tel BinTEL root (hex):     {}", bintel_hex);
+        eprintln!("tels.tel BinTEL root (hex):     {}", bintel_hex);
     }
 
     // ── Scalar encodings / codecs (§21.7) ───────────────────────────────
@@ -6348,9 +6612,9 @@ layer fancy
 
     #[test]
     fn builtin_scalar_record_keyword_order_includes_encoding() {
-        // Guards the keyword-index layout of tel-schema's `Scalar` record:
+        // Guards the keyword-index layout of tels's `Scalar` record:
         // name=0, validate=1, encoding=2, description=3.
-        let tel = builtin_tel_schema();
+        let tel = builtin_tels();
         let scalar_rec = tel.records.iter().find(|r| r.name == "Scalar").unwrap();
         let keywords: Vec<&str> = scalar_rec.members.iter().map(|m| match m {
             Member::Field(f) => f.keyword.as_str(),
