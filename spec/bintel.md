@@ -62,7 +62,7 @@ as 33 BASE-256 characters.
 
 ### Normative Test Vector
 
-The value hash of [`tel-schema.tel`](tel-schema.tel) — the schema-for-schemas defined in §20.5
+The value hash of [`tels.tel`](tels.tel) — the schema-for-schemas defined in §20.5
 of the TEL Specification — is:
 
 ```
@@ -70,11 +70,11 @@ BLAKE3-256: da84d460755492014ab924b056045eb07fa41626d684dd78d388f2ccdbcff300
 BASE-256:   ῚẄÔŠuTƒḁJιḤưVĄŞưſƤЖȦӖẄӝxǓẈỲỌӛϏỳḀ
 ```
 
-A conforming implementation that encodes the canonical `tel-schema.tel` (1691 BinTEL bytes; raw
-bytes recorded in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex)) and hashes the
+A conforming implementation that encodes the canonical `tels.tel` (1691 BinTEL bytes; raw
+bytes recorded in [`demo/tels.bintel.hex`](demo/tels.bintel.hex)) and hashes the
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
-`tel-schema` declares no encodings, so this vector's derivation involves no codec.
+`tels` declares no encodings, so this vector's derivation involves no codec.
 
 ## 4. Integer Encoding
 
@@ -138,7 +138,7 @@ A BinTEL document MAY appear in one of two **modes**, distinguished by its leadi
   §8.2 of the TEL Specification.
 - **Self-contained mode** (§6.2, magic `B2 C4 B5 BC`) — the document carries both the schema
   signature and the schema body inline. The embedded schema body is interpreted under the
-  hardwired `tel-schema` axiom (§20.5 of the TEL Specification); a receiver carrying only that
+  hardwired `tels` axiom (§20.5 of the TEL Specification); a receiver carrying only that
   axiom can fully decode a self-contained BinTEL document with no external resolution.
 
 The two modes produce **identical document-root encodings** for the same semantic content and
@@ -195,17 +195,17 @@ A BinTEL document in self-contained mode consists of the following fields in ord
    and verify equality byte-for-byte; mismatch is fatal (B11).
 3. **Embedded schema body**: the byte length of the schema body (integer), followed by that many
    bytes. The bytes are the bare document-root encoding (§7.1) of the schema document, with the
-   root struct's member list taken to be `tel-schema.document.members` (an axiomatic property
+   root struct's member list taken to be `tels.document.members` (an axiomatic property
    of any conforming implementation, per §20.5 of the TEL Specification). No nested magic
    number and no nested signature appear: framing is provided by the outer schema_bytes_len
-   varint, and the implicit governing schema is `tel-schema`.
+   varint, and the implicit governing schema is `tels`.
 
    The embedded schema body MAY contain `layer` compounds. A decoder reconstructs the composed
    schema by stripping the `layer` compounds to obtain the base schema, treating each `layer`
-   compound as a tel-schema `Layer` Definition (§8.1), and applying the layers in source order
+   compound as a TELS `Layer` Definition (§8.1), and applying the layers in source order
    per §20.3 of the TEL Specification.
 
-   The embedded schema body is governed by `tel-schema`, which declares no encodings; decoding
+   The embedded schema body is governed by `tels`, which declares no encodings; decoding
    the embedded body therefore never requires a codec binding, and the bootstrap of §7.8 is
    unaffected by codecs. Only the document root (field 4) may contain encoded scalars, governed
    by the schema the body defines.
@@ -221,7 +221,7 @@ verified equal to the carried signature (B11 on mismatch); it MUST NOT emit a pa
 when verification fails.
 
 A receiver that already has the embedded schema cached or known (e.g., the signature equals
-the built-in tel-schema signature, or matches an entry of an in-memory library) MAY skip
+the built-in `tels` signature, or matches an entry of an in-memory library) MAY skip
 decoding the embedded body — advancing the cursor by `schema_bytes_len` bytes — and use the
 known schema, provided it has previously verified that schema's signature.
 
@@ -394,13 +394,13 @@ in §18 of the TEL Specification. The decoder dispatches on the leading magic nu
 or §6.2 field 1); in external-schema mode it MUST have access to the resolved composed schema
 before it begins reading the document root (the composed schema is obtained per §8.2 of the TEL
 Specification), while in self-contained mode it obtains the composed schema from the embedded
-schema body inline, using the hardwired `tel-schema` axiom (§20.5 of the TEL Specification) as
+schema body inline, using the hardwired `tels` axiom (§20.5 of the TEL Specification) as
 its bootstrap.
 
 When the composed schema names any encoding, the decoder MUST additionally be configured with
 a codec binding (TEL §21.7); it SHOULD resolve each distinct encoding name once, before or upon
 first use, and reuse the resolved codecs for every value. The pseudocode below treats
-`codec-binding` as ambient configuration. `tel-schema` declares no encodings, so the
+`codec-binding` as ambient configuration. `tels` declares no encodings, so the
 self-contained-mode bootstrap never requires a codec.
 
 The decoding algorithm is recursive. The pseudocode below treats `bytes` as a **stateful byte
@@ -425,7 +425,7 @@ decode-document(bytes, schema_or_resolver):
     read schema-bytes-length = decode-varint(bytes)
     read schema-bytes = next schema-bytes-length bytes
     // The embedded schema body is a bare document-root encoding under
-    // tel-schema; tel-schema's keyword indices and member layout are
+    // TELS; its keyword indices and member layout are
     // axiomatic to any conforming implementation (§20.5 of the TEL spec).
     schema-doc = decode-struct-body(schema-bytes, tel_schema.document.members)
     if schema-doc is malformed: report error (B12)
@@ -490,7 +490,7 @@ is one valid presentation form for a decoded semantic model.
 A schema signature identifies a composed schema as an ordered sequence of components: a base schema
 followed by zero or more layers. Each component is identified by its value hash (§3).
 
-A schema document (a TEL document conforming to the `tel-schema` schema; see §20 of the TEL
+A schema document (a TEL document conforming to the `tels` schema; see §20 of the TEL
 Specification) defines a base schema and zero or more layers. Each component's hash is its value
 hash (§3): the component is encoded as a BinTEL document root (§7) and the 256-bit BLAKE3 digest
 is taken over that root encoding alone, without the magic number or schema signature.
@@ -498,18 +498,18 @@ is taken over that root encoding alone, without the magic number or schema signa
 ### 8.1 Per-Component Encoding
 
 The base schema and each layer are encoded as standalone BinTEL document roots using §7. Both
-cases reuse the entire composed `tel-schema` namespace (every Definition reachable from
+cases reuse the entire composed `tels` namespace (every Definition reachable from
 `Schema.records ∪ Schema.scalars ∪ Schema.selects`); only the root Struct differs:
 
 - **Base-schema component** uses `Schema.document = Document` (the full schema-document root,
-  per the tel-schema `Document` RecordDefinition). The base schema's BinTEL encoding is
+  per the TELS `Document` RecordDefinition). The base schema's BinTEL encoding is
   produced by encoding the schema document **with all `layer` compounds removed**. That is:
   the encoded element list at the root contains the `name`, `sigil`, `record`, `scalar`,
   `select`, and `document` children, but no `layer` children, even when the original schema
   document declared layers. The base schema is the schema-without-layers.
-- **Layer component** uses `Schema.document = Layer` (the tel-schema `Layer` RecordDefinition).
+- **Layer component** uses `Schema.document = Layer` (the TELS `Layer` RecordDefinition).
   The layer's BinTEL encoding treats the `layer` compound's children as the document root of a
-  virtual schema whose `document` Struct is the `Layer` Definition from tel-schema and whose
+  virtual schema whose `document` Struct is the `Layer` Definition from TELS and whose
   Definition namespace is inherited unchanged from the surrounding schema. Concretely: the
   encoded element list at the root contains the layer's `name`, each of its `record` /
   `scalar` / `select` children, and its `overlay` child (if present), in canonical order per
@@ -646,7 +646,7 @@ Specification.
 | B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
 | B10  | A `Reference` type appears in the schema but resolves to no `Definition` (E209 condition at parse time; surfaced by the decoder as a configuration error if the composed schema is malformed). |
 | B11  | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte. |
-| B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tel-schema` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
+| B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tels` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
 | B13  | The composed schema declares an `encoding` for a Scalar but the decoder's codec binding (TEL §21.7) does not resolve that name. |
 | B14  | An encoded Scalar's value bytes are rejected by the bound codec's decoder — the bytes are not the encoding of any accepted text (including corrupt or non-canonical bytes, per law C3 of TEL §21.7). |
 | B15  | An implementation performing the OPTIONAL re-encode verification of TEL §21.7 found `encode(decode(b)) ≠ b` for an encoded Scalar's value bytes — a canonicality violation indicating a non-conforming codec or corrupted input. |

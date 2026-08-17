@@ -213,4 +213,4 @@ whitespace or punctuation, and decodes losslessly via a single modulo operation.
   signatures.
 - [`spec/base256.md`](spec/base256.md) — the BASE-256 textual encoding.
 - [`demo/`](demo/) — worked schemas and documents covering inline/source/literal atoms, layered
-  schemas, struct validators, and the canonical `tel-schema` self-bootstrap.
+  schemas, struct validators, and the canonical `tels` self-bootstrap.

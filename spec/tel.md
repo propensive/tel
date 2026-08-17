@@ -9,7 +9,8 @@ TEL defines a **presentation model**, which preserves the document as written, a
 schema-driven **semantic model**, which ascribes a type to every element of the tree; the two
 are connected by a deterministic type-assignment algorithm (§20.2). A companion specification,
 [BinTEL](bintel.md), defines a compact binary encoding that provides an unambiguous
-serialization of the semantic model.
+serialization of the semantic model; a second companion, [TELP](telp.md), defines a
+textual path language for addressing elements of the semantic model.
 
 The design of TEL is motivated by the following goals:
 
@@ -384,13 +385,13 @@ order:
 
 0. **Embedded-schema lookup.** When the document is a BinTEL byte sequence in self-contained
    mode (§6.2 of the BinTEL Specification), the parser MUST decode the embedded schema body
-   under the built-in `tel-schema` axiom (§20.5), construct the composed `Schema` from it per
+   under the built-in `tels` axiom (§20.5), construct the composed `Schema` from it per
    §20.3, and verify that the composed signature recomputed from the embedded body equals the
    signature carried in the document (B11 of the BinTEL Specification on mismatch). On success
    the parser MUST use that composed `Schema` and skip the remaining steps. Step 0 applies only
    to BinTEL inputs in self-contained mode; for TEL-source inputs and external-mode BinTEL
    inputs, resolution begins at step 1.
-1. **Built-in lookup.** If the document schema's signature equals the built-in `tel-schema`
+1. **Built-in lookup.** If the document schema's signature equals the built-in `tels`
    schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), the parser MUST
    use the built-in `Schema` and skip the remaining steps.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema signature.
@@ -402,7 +403,7 @@ order:
 4. **URL fetch.** If the document schema carries a URL, the parser MAY fetch the body of that URL
    over HTTPS (or HTTP, where the deployment permits non-confidential carriage). HTTPS MUST be
    supported by any conforming network-capable implementation; HTTP support is OPTIONAL. The body
-   MUST be a TEL document conforming to the `tel-schema` schema; on parse failure the resolution
+   MUST be a TEL document conforming to the `tels` schema; on parse failure the resolution
    fails. The parser MAY follow up to a small fixed number of HTTPS redirects (3 is RECOMMENDED);
    it MUST NOT follow HTTPS-to-HTTP redirects.
 5. **Failure.** If none of the above produce a `Schema`, resolution fails and the parse is aborted.
@@ -1317,7 +1318,7 @@ of the document being parsed against it. A schema that triggers any E2xx conditi
 
 #### Validation Error Recovery
 
-All validation errors (E301 through E313) are self-contained: they do not have cascading effects on
+All validation errors (E301 through E314) are self-contained: they do not have cascading effects on
 the remainder of the type assignment or validation process. An implementation MUST record the error
 and continue processing remaining nodes as if the erroneous node were absent or were assigned the
 most plausible available type. Specific recovery notes:
@@ -1482,6 +1483,10 @@ type Polarity = "default" | "loose" | "tight";
 interface Field {
   required: Polarity;
   repeatable: Polarity;
+  // True when this field is the identifying key of its enclosing Struct.
+  // Monotone: a layer may set it, never clear it (§20.3). See E219–E221
+  // and E314.
+  key: boolean;
   keyword: string;
   type: Type;
   default: string | null;
@@ -1541,7 +1546,7 @@ the data model because their bodies differ, but they share a **single namespace*
 Definitions across the three lists may share a name within the composed schema (**E210**).
 
 The Definition mechanism is what makes recursive schemas finitely expressible: the
-schema-of-schemas itself (see the tel-schema subsection below) is necessarily recursive, and so
+schema-of-schemas itself (TELS, §20.5) is necessarily recursive, and so
 is any schema whose data has cyclical structure. The empty list is the normal case for
 non-recursive schemas.
 
@@ -1565,7 +1570,7 @@ of the Definition.
 
 A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) and a non-empty
 list of `validators`; it is a named `Scalar`. A `scalar` declaration MUST carry at least one
-`validate` line (this is enforced structurally by the `tel-schema` schema, whose `Scalar`
+`validate` line (this is enforced structurally by the `tels` schema, whose `Scalar`
 record makes `validate` a required repeatable member; an unconstrained scalar names the
 built-in `String` instead). A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
 kebab-case name of a codec (§21.7) defining the binary representation of the scalar's values in
@@ -1619,12 +1624,12 @@ for the `select` keyword that introduces one in schema source, §20.5), and an *
 Select member** is one whose referenced `SelectDefinition`'s variants all resolve to `Flag`.
 
 TEL schemas are themselves representable as TEL documents. The TEL schema that describes the TEL
-schema language is therefore self-describing; the schema for schemas has `Schema.name = tel-schema`. The serialization of a schema as a TEL document is governed by that schema. Because
+schema language is therefore self-describing; the schema for schemas has `Schema.name = tels`. The serialization of a schema as a TEL document is governed by that schema. Because
 schemas are TEL documents, they have a deterministic BinTEL encoding (see the
 [BinTEL Specification](bintel.md)), which is used for schema hashing and identification (§8.1).
 The concrete TEL representation of the type model defined above — the keyword vocabulary, member
 ordering, and validators used to write a schema as a TEL document — is given in §20.6 and embodied
-in the file [`tel-schema.tel`](tel-schema.tel).
+in the file [`tels.tel`](tels.tel).
 
 A `Struct` has an ordered list of `Member`s. Each member describes one logical child slot of the
 struct and is either a `Field` or a `SelectRef`. Both carry the per-axis polarities
@@ -1709,6 +1714,34 @@ that may be elided from the source but is always present in the semantic model: 
 the value a required-but-elided member takes, whereas a non-required member without a default is
 simply absent.
 
+**Key fields.** `Field.key` is a boolean marking the field as the **key field** — the
+identifying field — of its enclosing `Struct`. The following constraints apply to a key-flagged
+field in the composed schema (§20.1):
+
+- its type MUST resolve to a `Scalar` (**E219**);
+- its effective `required` MUST be `true` and its effective `repeatable` MUST be `false`
+  (**E220**), so that every instance of the enclosing Struct carries exactly one key value
+  (possibly supplied by a `default`);
+- at most one member of any Struct may be key-flagged (**E221**).
+
+The **key value** of an element whose type is a key-carrying Struct is the semantic text of the
+`Value` filling its key field, including a value supplied by `default` (§18.3 step 5). Key
+values identify sibling elements: within one parent, the key values of keyed children filling
+effectively `repeatable` members MUST be pairwise distinct (**E314**, §21.6). The companion
+[TELP Specification](telp.md) uses key values to select occurrences of repeatable members
+by identity rather than by position.
+
+Key values SHOULD be inline-safe (§22.2), non-empty, and not composed solely of ASCII digits
+(an all-digit path component is always an occurrence index in TELP, so an all-digit key
+value cannot be selected by key); identifier-like key values are RECOMMENDED. Combining `key`
+with a non-null `default` SHOULD be avoided: when two or more sibling occurrences elide the key
+field, they share the default as their key value and are invalid (E314).
+
+`key` cannot be declared on a `SelectRef` or a `Variant`: the TELS records for those
+constructs (§20.5) do not admit it. A sum instance is identified by its variant keyword; a
+variant's *type* may itself be a key-carrying Struct, in which case instances of that variant
+are keyed like any other.
+
 A `Struct` type MAY likewise carry a `validators` list. A struct validator inspects the entire
 struct element (its members' values), enabling cross-field constraints such as "postcode is
 required when country is UK". Multiple struct validators apply in AND-conjunction. Struct
@@ -1784,21 +1817,21 @@ host-language mapping and SHOULD be used in their kebab-case form directly.
 
 ### 20.1 Schema Validity Constraints
 
-A schema is itself a TEL document — specifically, a TEL document conforming to the `tel-schema`
+A schema is itself a TEL document — specifically, a TEL document conforming to the `tels`
 schema (§20.5). It is therefore subject to the same two layers of error reporting as any other
 TEL document:
 
-- **Parsing and validation against `tel-schema`.** The E1xx (parsing) and E3xx (validation)
+- **Parsing and validation against `tels`.** The E1xx (parsing) and E3xx (validation)
   taxonomies of §19.3 apply to the schema document directly. Structural malformations — a
   `field` line appearing inside a `scalar`'s body, an atom in a position where the schema
   expects a compound child, a malformed identifier in a `keyword` slot, and similar — are
-  caught here. The error against tel-schema is the only signal a schema author receives for
+  caught here. The error against TELS is the only signal a schema author receives for
   this class of mistake. In particular, an unknown child keyword (such as `field` inside
   `scalar-body`) raises **E306** and a non-Struct compound being given children raises
   **E301**.
-- **Semantic validity of the resulting `Schema` value.** Once `tel-schema` has accepted the
+- **Semantic validity of the resulting `Schema` value.** Once `tels` has accepted the
   document and `construct_schema` (§20.6) has produced a `Schema` value, the constraints below
-  apply. They catch errors that the type assignment against tel-schema cannot see — properties
+  apply. They catch errors that the type assignment against TELS cannot see — properties
   of the assembled `Schema` model itself, such as duplicate Definition names, malformed layer
   merges, or references to undefined types.
 
@@ -1852,6 +1885,11 @@ A schema is invalid if any of the following holds:
   the `ScalarDefinition` being merged already has a *different* non-null `encoding`
   (**E218**). Restating the base's encoding is a benign no-op; declaring an encoding where the
   base has none adds it (§20.3). Removal has no syntax and is structurally impossible.
+- a `Field` has `key = true` but its type, after reference resolution, is not a `Scalar`
+  (**E219**)
+- a `Field` has `key = true` but, on the composed member after polarity merge (§20.3), its
+  effective `required` is `false` or its effective `repeatable` is `true` (**E220**)
+- within a single composed `Struct`, more than one member is key-flagged (**E221**)
 
 #### Schema Errors (E2xx)
 
@@ -1875,6 +1913,9 @@ A schema is invalid if any of the following holds:
 | E216 | `Exclude` appears outside a layer's `SelectDefinition` body — i.e. inside `Schema.document`, a `RecordDefinition`, or a base-side `SelectDefinition` | The offending `exclude` compound |
 | E217 | A `Reference` resolves to a `SelectDefinition`, or a `SelectRef.reference` resolves to a `RecordDefinition` / `ScalarDefinition` (kind mismatch between member shape and resolved Definition) | The offending `TypeName` atom |
 | E218 | A layer's same-name `scalar` declares an `encoding` conflicting with the base ScalarDefinition's non-null `encoding` (an encoding, once declared, cannot be changed or removed by a layer) | The layer's `encoding` field |
+| E219 | A `Field` has `key = true` but its type does not resolve to a `Scalar` | The `key` flag of the field declaration |
+| E220 | A `Field` has `key = true` but its composed effective `required` is `false` or its composed effective `repeatable` is `true` | The `key` flag of the field declaration (the layer's, when layer-introduced) |
+| E221 | More than one member of a composed `Struct` is key-flagged | The `key` flag of the second key-flagged field in member order |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -2047,6 +2088,12 @@ list is organised by the structural duality between records and selects.
 - **Refine a SelectRef in place.** When a layer declares a SelectRef whose `reference` matches
   an existing SelectRef in the same Struct, polarity is merged per `MergePolarity`; the
   `reference` itself does not change.
+- **Mark a field as key.** A layer's same-keyword `field` declaration MAY declare `key` where
+  the merged base does not; this adds the uniqueness constraints (E221 at schema level, E314
+  at instance level) and is subtype-producing (§24.4). Once set, `key` cannot be removed by a
+  later layer (the merge below is a monotone OR). The composed member MUST satisfy E219 and
+  E220 — in particular, a layer keying a base-`optional` field must also (itself, or via an
+  earlier layer) declare `required`.
 - **Refine a RecordDefinition in place** (RecordDefinition merge). When a layer declares a
   `record` whose name matches an existing `RecordDefinition`, the layer's members are merged
   into the existing Definition's members using the same algorithm as Struct merge.
@@ -2095,6 +2142,8 @@ detecting any of them MUST report the corresponding error:
   `"default"` or `"tight"` (**E215**).
 - Remove a validator from a Struct, Scalar, RecordDefinition, or SelectDefinition (validators
   are append-only across layers; a layer's `validate K` adds K, never removes an existing K).
+- Remove `key` from a field (no syntax — structurally prevented; the `key` merge is a
+  monotone OR).
 - Change a `ScalarDefinition`'s non-null `encoding` to a different name (**E218**). (Removal
   has no syntax; addition where the base has none is permitted.)
 - Change a `Field`'s `default`, or a `Field`'s declared `Type` to a structurally different
@@ -2147,6 +2196,7 @@ incorporates the layer's members into the base:
           equal) base type otherwise — a non-`Struct` match is a polarity-only refinement;
         - per-axis polarities computed by `MergePolarity(M.required, L.required)` and
           `MergePolarity(M.repeatable, L.repeatable)`;
+        - `key` = `M.key ∨ L.key` (monotone: a layer may set `key`, never clear it);
         - `default` = base's default (a layer may not change the default; see Forbidden
           Operations).
       - **Not found:** Append L as a new member at the end of the member list. Add W → (new
@@ -2250,7 +2300,9 @@ list T (for `records`), scalar list S, and select list U:
 
 The schema validity constraints, including those checked at layer-composition time (**E204**,
 **E205**, **E206**, and **E210**–**E218**), are catalogued in §20.1; the algorithms above define
-where in composition each is detected.
+where in composition each is detected. The key-field constraints (**E219**–**E221**) are
+checked against each composed Struct after all layers have been applied, since a layer may
+both key a field and tighten its polarity.
 
 ### 20.4 BinTEL
 
@@ -2267,12 +2319,16 @@ text using [BASE-256](base256.md), defined as a companion specification. The BAS
 form is character-for-byte with the BinTEL byte sequence and is recovered losslessly by the BASE-256
 decoder.
 
-### 20.5 The tel-schema Schema
+### 20.5 TELS: the Schema of Schemas
 
-The concrete TEL representation of the schema model defined in §20 is itself a schema, identified
-by `Schema.name = tel-schema`. The full document is supplied as the file
-[`tel-schema.tel`](tel-schema.tel) at the root of this repository; this subsection specifies the
+**TELS** (**TEL Schema**) is the canonical abbreviation for the TEL schema language — the
+concrete TEL representation of the schema model defined in §20. TELS is itself a schema,
+identified by `Schema.name = tels`. The full document is supplied as the file
+[`tels.tel`](tels.tel) at the root of this repository; this subsection specifies the
 keyword vocabulary used by that document and states the self-describing closure property.
+Throughout this specification and its companions, prose references to the schema language use
+**TELS** and code-level references (the schema's `name`, pragma identification, file names)
+use `tels`.
 
 **Vocabulary.** The following keywords are used in a schema TEL document. The keywords are
 themselves kebab-case identifiers (they appear in user-written TEL source); the `name` of each
@@ -2283,7 +2339,7 @@ inline atom of the parent compound (`record Field`, `scalar Email`, `select Stat
 `layer auth`, …) rather than as an explicit `name <value>` child — by the atom/compound
 interchangeability rule of §19.1. The explicit `name <value>` child compound form is also
 accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Definition.
-`tel-schema.tel` uses the implicit form throughout.
+`tels.tel` uses the implicit form throughout.
 
 | TEL keyword     | §20 construct                                  |
 | --------------- | ---------------------------------------------- |
@@ -2300,6 +2356,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `required`      | Tightens to `required: "tight"` (Flag, layer-side override of `optional`). Permitted but redundant in a base, since the default is already tight. |
 | `repeatable`    | Loosens to `repeatable: "loose"` (Flag, base-side). |
 | `irrepeatable`  | Tightens to `repeatable: "tight"` (Flag, layer-side override of `repeatable`). Permitted but redundant in a base, since the default is already tight. |
+| `key`           | `Field.key` — marks the field as the identifying key of its enclosing Struct (Flag; may be declared in a base or added by a layer, never removed). Subject to E219–E221; instance-level uniqueness is E314 (§21.6); used as an occurrence selector by the [TELP Specification](telp.md). |
 | `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). Kebab-case. |
 | `variant`       | A `Variant` of a `SelectDefinition`. First inline atom is the variant's kebab-case `keyword`; second inline atom is the `TypeName` of its `type`. |
 | `type`          | The type-name field of a `Field` or a `Variant`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
@@ -2317,16 +2374,16 @@ validators (§21.5). User schemas MAY NOT declare a Definition with any of these
 (collision is **E210**).
 
 **Reserved keywords.** Only `tel` is universally reserved across all TEL documents (**E208**, §8).
-The other keywords listed above are part of the tel-schema vocabulary and have meaning only when
-a TEL document is being parsed as a *schema document* — i.e. when its schema is the tel-schema.
+The other keywords listed above are part of the TELS vocabulary and have meaning only when
+a TEL document is being parsed as a *schema document* — i.e. when its schema is TELS.
 They do not constrain user-defined schemas: a user schema may freely define `Field.keyword` or
 `Variant.keyword` values such as `name`, `document`, `layer`, `record`, `scalar`, `select`, etc.,
 because the validity check applied to a user document is against the user schema's keyword set,
 not against the schema-language vocabulary.
 
 **Member ordering and inline syntax.** Member order in `Field` is `keyword`, `type` (both
-required Scalars; `type` carries a `TypeName`), then the four loosen/tighten flags (`optional`,
-`required`, `repeatable`, `irrepeatable`), then `default` (optional Scalar), then `description`
+required Scalars; `type` carries a `TypeName`), then the five flags (`optional`, `required`,
+`repeatable`, `irrepeatable`, `key`), then `default` (optional Scalar), then `description`
 (a second optional Scalar which, being a non-first non-required Scalar, is always written as a
 compound child per §20.8). The atom-phase
 rules of §20.2 / §20.8 let a typical field declaration fit a single line: the first atom is the
@@ -2341,7 +2398,18 @@ declares a `country` field of type `String` (the built-in scalar) with default v
 The field remains required on both axes — it may be elided from a document, in which case the
 default supplies its value (a default is only permitted on a required member, per **E203**).
 The convention is **flags before default**: `default` is the last optional Scalar and
-so consumes the first non-flag atom after the type-name. Variants follow the same pattern but
+so consumes the first non-flag atom after the type-name. For `key`, this placement is
+load-bearing rather than stylistic: the atom phase (§20.2 step 3a) skips a non-matching
+optional `Flag` member but never skips an optional `Scalar`, so if `key` followed `default` in
+member order, the trailing atom in
+
+```tel
+field username Identifier key
+```
+
+would be consumed as the field's *default value* rather than setting the flag. With `key`
+among the flags, the line above declares a required `username` field that identifies its
+enclosing record. Variants follow the same pattern but
 carry only `keyword` and `type`, e.g. `variant active Flag`. There are no marker keywords:
 position determines meaning.
 
@@ -2353,7 +2421,7 @@ select Status optional
 
 introduces a non-required SelectRef referencing the `Status` SelectDefinition.
 
-Member order in `Scalar` (the tel-schema record for `scalar` declarations) is `name`,
+Member order in `Scalar` (the TELS record for `scalar` declarations) is `name`,
 `validate` (required, repeatable), `encoding` (optional), `description` (optional). Only `name`
 and `validate` are inline-atom-fillable; `encoding` and `description` are always compound
 children.
@@ -2367,36 +2435,44 @@ resolving to a `SelectDefinition`, or a `SelectRef.reference` resolving to a `Re
 or `ScalarDefinition`). References may form cycles via `record` or `select` definitions in
 their resolved bodies — the natural case for recursive data.
 
-**Self-describing closure and bootstrap.** [`tel-schema.tel`](tel-schema.tel) MUST be a valid TEL
+**Self-describing closure and bootstrap.** [`tels.tel`](tels.tel) MUST be a valid TEL
 document when parsed under the schema it itself defines. To break the regress that would
 otherwise prevent a schema document from being parsed at all, **every conforming TEL parser MUST
-embed the `tel-schema` schema as a built-in**, available before any external schema has been
-resolved. When a TEL document's pragma identifies `tel-schema` as its schema, the parser uses
+embed the `tels` schema as a built-in**, available before any external schema has been
+resolved. When a TEL document's pragma identifies `tels` as its schema, the parser uses
 the built-in form rather than performing schema retrieval. The built-in MUST produce the same
-`Schema` model that would result from parsing the canonical `tel-schema.tel` under itself, and
+`Schema` model that would result from parsing the canonical `tels.tel` under itself, and
 MUST produce a byte-identical BinTEL encoding of that schema and the same 256-bit BLAKE3 value
 hash (§3 of the BinTEL Specification). The hash is normative — two conforming implementations
 MUST agree on it.
 
+> **Draft note (pending re-pin).** The pinned values below predate the addition of the `key`
+> member to the `Field` record and MUST be recomputed (together with
+> [`demo/tels.hash`](demo/tels.hash),
+> [`demo/tels.bintel.hex`](demo/tels.bintel.hex), the byte length cited below, and
+> the copy of this table in §3 of the [BinTEL Specification](bintel.md)) once an updated
+> BinTEL encoder is available. Note that `key` sits at keyword index 6 of `Field`, shifting
+> `default` and `description` to indices 7 and 8 in every schema document's BinTEL encoding.
+
 The pinned value, computed against the canonical
-[`tel-schema.tel`](tel-schema.tel) in this repository, is:
+[`tels.tel`](tels.tel) in this repository, is:
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
 | BLAKE3-256 | `da84d460755492014ab924b056045eb07fa41626d684dd78d388f2ccdbcff300`   |
 | BASE-256   | `ῚẄÔŠuTƒḁJιḤưVĄŞưſƤЖȦӖẄӝxǓẈỲỌӛϏỳḀ`                                  |
 
-The BinTEL document root encoding of `tel-schema.tel` is 1691 bytes; the raw bytes are recorded
-in [`demo/tel-schema.bintel.hex`](demo/tel-schema.bintel.hex) and the hash in
-[`demo/tel-schema.hash`](demo/tel-schema.hash). The same value is pinned in §3 of the BinTEL
+The BinTEL document root encoding of `tels.tel` is 1691 bytes; the raw bytes are recorded
+in [`demo/tels.bintel.hex`](demo/tels.bintel.hex) and the hash in
+[`demo/tels.hash`](demo/tels.hash). The same value is pinned in §3 of the BinTEL
 Specification.
 
-**Verifying the built-in.** An implementation's built-in `tel-schema` Schema value (the
+**Verifying the built-in.** An implementation's built-in `tels` Schema value (the
 "axiom") is a hand-written construction; it is easy to introduce silent drift between the
-axiom and the canonical [`tel-schema.tel`](tel-schema.tel). Conforming implementations
+axiom and the canonical [`tels.tel`](tels.tel). Conforming implementations
 SHOULD therefore include two self-consistency checks:
 
-- **Structural-equality check.** Parse `tel-schema.tel` against the axiom and run
+- **Structural-equality check.** Parse `tels.tel` against the axiom and run
   `construct_schema` (§20.6) on the result; assert that the constructed `Schema` is
   structurally equal to the axiom (modulo the built-in scalars `Identifier`, `TypeName`,
   `Sigil`, `String`, which an implementation may inject into the axiom but which
@@ -2409,7 +2485,7 @@ Pinning both invariants in tandem makes axiom drift very hard to introduce undet
 
 ### 20.6 Schema Construction from the Semantic Model
 
-Type assignment (§20.2) produces a tree of `Element` values typed by the tel-schema schema. To
+Type assignment (§20.2) produces a tree of `Element` values typed by TELS. To
 obtain a `Schema` interface instance, an implementation traverses this tree and populates the
 fields of the `Schema` model:
 
@@ -2425,7 +2501,7 @@ fields of the `Schema` model:
      body), append a `SelectDefinition` to `Schema.selects` constructed per step 2c. The
      resulting list preserves source order.
    - For the `document` child, set `Schema.document` to the `Struct` built from the `document`
-     element's children per step 6. (In `tel-schema.tel` the `document` field is typed by the
+     element's children per step 6. (In `tels.tel` the `document` field is typed by the
      `Body` record — the shared struct shape also used by `overlay`; construction resolves that
      reference into the directly `Struct`-typed `Schema.document` of the data model.)
    - For each `layer` child, append a `Layer` to `Schema.layers` constructed per step 4. The
@@ -2470,6 +2546,8 @@ fields of the `Schema` model:
    Within a `Field`:
    - `keyword` child → `Field.keyword` (kebab-case identifier).
    - The four loosen/tighten Flag children compute `Field.required` and `Field.repeatable`.
+   - The optional `key` Flag child → `Field.key` (`true` iff present; `key` does not
+     participate in the `Polarity` computation above).
    - The `type` Scalar child or atom → `Field.type` as a `Reference(TypeName)` (per step 5).
    - The optional `default` Scalar child or atom → `Field.default` (a string), or `null` if
      absent.
@@ -2608,7 +2686,7 @@ dispatched on the request kind (scalar or struct) at invocation time; a helper t
 support the requested role fails that role (`Invalid` for a validation request; unresolved for
 a codec binding).
 
-This specification mandates only the four built-in validators required by `tel-schema` itself
+This specification mandates only the four built-in validators required by `tels` itself
 (§21.5). Every other validator is application-defined; a parser is configured with a callback
 (§21.4) that resolves each validator name to a concrete check.
 
@@ -2751,7 +2829,7 @@ name-resolution cost.
 
 This specification does not mandate a portable validator library — applications choose which
 validators they implement. However, four validators — `string`, `identifier`, `sigil`, and
-`type-name` — are referenced by the `tel-schema` schema itself, via the built-in `TypeName`s
+`type-name` — are referenced by the `tels` schema itself, via the built-in `TypeName`s
 `String`, `Identifier`, `Sigil`, and `TypeName` (§20.5; the fifth built-in, `Flag`, is a Type
 and carries no validator). These four MUST be implemented by any TEL parser that wishes to
 parse schema documents at all. All are **scalar** validators (kind = `"scalar"`); they return
@@ -2793,7 +2871,7 @@ declare a field whose validator is the unconstrained string type without the app
 needing to define a custom validator.
 
 Implementations MAY provide additional validators beyond these. The four built-in validators
-are the minimum required for `tel-schema` parsing to function. None of the four supports the
+are the minimum required for `tels` parsing to function. None of the four supports the
 `struct` kind;
 invoked on a struct request, they return `Invalid` with
 `Diagnostic::Struct { message: "validator not applicable to struct values", fields: {} }`.
@@ -2828,6 +2906,29 @@ The error code raised for a failing struct or select validator is the same **E31
 scalar validators (one code, three shapes of diagnostic) — the `kind` of the diagnostic and
 the parent type distinguish the cases.
 
+#### Key Uniqueness
+
+A child element E of a `Struct`-typed parent node is **keyed** when E's assigned type, after
+reference resolution, is a `Struct` whose composed members include a key-flagged field (§20).
+The **key value** of E is the semantic text of the `Value` filling that key field — including
+a value supplied by the field's `default` (§18.3 step 5). A keyed child is always realized as
+a compound: a `Struct`-typed element is never atom-realized (§20).
+
+Within one parent element, among all keyed children that fill effectively `repeatable`
+members — across all such members and keywords, in semantic order — the key values MUST be
+pairwise distinct under exact code-point equality of their semantic text (**E314**). Keyed
+children filling non-`repeatable` members do not participate: two distinct members of the same
+parent (say `owner` and `admin`, both typed by a keyed record) MAY share a key value. A
+declared `encoding` (§21.7) plays no part in the comparison, which is over semantic text
+alone.
+
+If a keyed child's key field is absent and has no default (already **E307**), that child is
+excluded from the comparison. E314 is self-contained (§19.5): the implementation records the
+error and continues, treating the duplicate as present.
+
+Key uniqueness is what makes a key value a per-parent identifier, usable as an occurrence
+selector by the [TELP Specification](telp.md).
+
 #### Validation Errors (E3xx)
 
 | Code | Description                                                                                           | Span                                                                                                     |
@@ -2845,6 +2946,7 @@ the parent type distinguish the cases.
 | E311 | `Flag`-typed compound has atoms or compound children                                                  | The first atom or child of the `Flag` compound                                                           |
 | E312 | A scalar value was rejected by the encoder of its declared `encoding` (§21.7; the value has no binary representation) | As resolved by §21.3 from the returned `Diagnostic`                                              |
 | E313 | A scalar's declared `encoding` was not resolved by the configured codec binding (§21.7; the constraint cannot be checked) | The scalar value's text span                                                                 |
+| E314 | Two keyed children of the same parent filling effectively `repeatable` members have equal key values (§21.6, Key Uniqueness) | The key value of the later duplicate in semantic order (or that child's keyword, when its key value is default-supplied) |
 
 ### 21.7 Scalar Encodings (Codecs)
 
@@ -2862,7 +2964,7 @@ exactly two effects:
 
 Codec names are kebab-case identifiers in the shared helper namespace of §21.1. Every codec is
 application-defined; this specification defines only the interface, the laws, and the binding
-mechanism. `tel-schema` itself declares no encodings.
+mechanism. `tels` itself declares no encodings.
 
 #### Codec Interface
 
@@ -3003,6 +3105,12 @@ all retained unless the operation explicitly targets them.
   order (atoms before compound children, per §18.3). It addresses a `Scalar` or `Flag` element
   realized as an inline atom on the owning compound's line. Used by `update-value` when its
   target is atom-realized rather than a compound of its own.
+
+A companion specification, the [TELP Specification](telp.md), defines a schema-aware
+textual path language over the semantic model, addressing elements by keyword and by key value
+(§20) rather than by position. TELP is a query mechanism: it does not extend or alter the
+operation addressing above, and telp.md defines an informative mapping from a
+TELP-resolved element to the compound and atom paths of this section.
 
 `construct` is a constructor rather than a tree-mutation operation: it produces a fresh compound
 from semantic data, with no path argument; the caller subsequently uses `insert`, `insert-before`,
@@ -3519,7 +3627,7 @@ T  ::=  Struct(M*, V*)        — record / product
      |  Flag                  — presence-only
      |  Reference(N)          — named recursive type
 
-M  ::=  Field(K, r, p, T, d?)
+M  ::=  Field(K, r, p, k, T, d?)
      |  Select(r, p, X+)
 
 X  ::=  Variant(K, T)
@@ -3528,7 +3636,7 @@ K, V     ::=  identifier      (per §20.7)
 N        ::=  type-name       (per §20.7)
 d        ::=  text            (default value, optional)
 e        ::=  identifier      (encoding / codec name, optional; §21.7)
-r, p     ::=  true | false    (required, repeatable)
+r, p, k  ::=  true | false    (required, repeatable, key)
 ```
 
 `Select(r, p, X+)` is a Select member (§20) — a `SelectRef` with the variants of its referenced
@@ -3629,8 +3737,9 @@ enough information to satisfy any consumer that expects type T₂.
                       T₁ <: T₂                          (covariant in type)
                       r₂ ⟹ r₁                           (sub at least as required)
                       p₁ ⟹ p₂                           (sub at most as repeatable)
+                      k₂ ⟹ k₁                           (sub at least as keyed)
                       ――――――――――――――――――――――――
-                      Field(K₁, r₁, p₁, T₁, d₁) <:_M Field(K₂, r₂, p₂, T₂, d₂)
+                      Field(K₁, r₁, p₁, k₁, T₁, d₁) <:_M Field(K₂, r₂, p₂, k₂, T₂, d₂)
 
 [Sub-Select]          For every Variant(K, T₁) ∈ X₁, there exists Variant(K, T₂) ∈ X₂
                       such that T₁ <: T₂.            (sub's variants ⊆ super's variants)
@@ -3661,6 +3770,9 @@ enough information to satisfy any consumer that expects type T₂.
 - **`repeatable` is tightenable in the opposite direction.** Going from `repeatable:
   true` to `repeatable: false` is the subtype direction: a non-repeatable cardinality
   (0 or 1) is a special case of a repeatable cardinality (0 or more).
+- **`key` is tightenable.** Going from un-keyed to keyed is the subtype direction: marking
+  a field as key only adds constraints (E221 at schema level, E314 at instance level), so
+  every element valid under the keyed type is valid under the un-keyed one.
 
 On recursive Definitions, [Sub-Ref-L] and [Sub-Ref-R] unfold references without bound; the
 relation is interpreted **coinductively** (equivalently, with an assumption set of pairs of
@@ -3688,7 +3800,7 @@ Let `(D_1, Δ_1)` be the result of applying `L` to `(D_0, Δ_0)` per §20.3. The
 
 That is, **applying a layer always produces a subtype of the base**.
 
-**Proof sketch.** The permitted operations of §20.3 fall into eight subtype-producing
+**Proof sketch.** The permitted operations of §20.3 fall into nine subtype-producing
 categories. (Each of §20.3's permitted operations belongs to at least one category; adding a
 new Definition extends Δ without changing any existing type, and layers only ever *append*
 members, so [Sub-Struct]'s order-preservation premise always holds.) The categories are:
@@ -3713,11 +3825,15 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
    the type is a subtype.
 8. **Add encoding to a ScalarDefinition** — `Scalar(V, ∅) → Scalar(V, e)`. By
    [Sub-Scalar] (premise `e₂ absent`), subtype-producing.
+9. **Mark a field as key** — `D_1` has the same Field with `key: false → true`. Like
+   adding a validator, keying only shrinks the set of valid documents (the E314
+   uniqueness constraint of §21.6); by [Sub-Field] (premise `k₂ ⟹ k₁`), the change is
+   subtype-producing.
 
 §20.3 forbids the supertype-producing operations: removing a Field, adding a variant to
 an existing Select, loosening `required` from true to false (E214), loosening
-`repeatable` from false to true (E215), dropping a validator, changing a non-null
-encoding (E218). By construction, no permitted layer operation moves in the supertype
+`repeatable` from false to true (E215), clearing a Field's `key` flag, dropping a
+validator, changing a non-null encoding (E218). By construction, no permitted layer operation moves in the supertype
 direction.
 
 By transitivity ([Sub-Trans]), the iterative application of layers yields a chain of
@@ -3819,11 +3935,12 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E123** (parsing; E110 is reserved, §19.5), **E201–E218** (schema),
-and **E301–E313** (validation); every code is referenced at the point
+taxonomy comprises **E101–E123** (parsing; E110 is reserved, §19.5), **E201–E221** (schema),
+and **E301–E314** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
 tables of §19.3, §20.1, and §21.6. Worked examples —
 including TEL documents shown with their presentation model, semantic model, and BinTEL byte
 sequence — are recorded in [`demo/`](demo/). Round-trip properties (P1–P4) are stated in §22.4.
 Concurrent-edit composition is stated in §22.5. Schema compatibility is defined by the subtype
-relation of §24 and decided on signatures per §8.2.
+relation of §24 and decided on signatures per §8.2. Addressing elements of the semantic model
+by textual path is defined by the companion [TELP Specification](telp.md).

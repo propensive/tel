@@ -137,6 +137,6 @@ There are two ways to read it:
   `define`s, `Reference` types, and a `select` with all-`flag` variants.
 - [`contact-document.tel`](contact-document.tel) — a document conforming
   to that schema, with hard-space multi-token values.
-- [`tel-schema.bintel.hex`](tel-schema.bintel.hex) — the BinTEL document
-  root encoding of `tel-schema.tel`, whose BLAKE3-256 hash is normatively
+- [`tels.bintel.hex`](tels.bintel.hex) — the BinTEL document
+  root encoding of `tels.tel`, whose BLAKE3-256 hash is normatively
   pinned in §20.5 of the TEL Specification.

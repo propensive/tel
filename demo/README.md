@@ -17,8 +17,8 @@ machine operations.
 | [`atom-forms-schema.tel`](atom-forms-schema.tel) | A schema for a document carrying three Scalar values, one in each atom form (inline, source, literal). |
 | [`atom-forms-document.tel`](atom-forms-document.tel) | A document showing the three atom forms in use, including a literal atom with a `#`-prefixed line and a source atom carrying embedded JSON. |
 | [`encoding-schema.tel`](encoding-schema.tel) | A schema whose scalars declare `encoding` codecs (§21.7), giving hex digests and decimal sizes compact binary representations in BinTEL. |
-| [`tel-schema.bintel.hex`](tel-schema.bintel.hex) | The BinTEL document root encoding of `/tel-schema.tel`, used to recompute the normative value hash pinned in §20.5 of the TEL Specification. |
-| [`tel-schema.hash`](tel-schema.hash) | The BLAKE3-256 and BASE-256 forms of the `tel-schema.tel` value hash. |
+| [`tels.bintel.hex`](tels.bintel.hex) | The BinTEL document root encoding of `/tels.tel`, used to recompute the normative value hash pinned in §20.5 of the TEL Specification. |
+| [`tels.hash`](tels.hash) | The BLAKE3-256 and BASE-256 forms of the `tels.tel` value hash. |
 
 ## Validation
 
@@ -41,9 +41,9 @@ Several examples exercise the validator model defined in §21 of the TEL Specifi
   include a `fields` map keyed by child keyword, recursively descending to point at any
   nested scalar's specific span. See §21.2 of the spec.
 
-Every schema in this directory is itself a TEL document validated against the **tel-schema**
-(the schema-for-schemas, `/tel-schema.tel`). Every schema here parses cleanly, type-checks
-against tel-schema with zero errors, and round-trips through schema construction.
+Every schema in this directory is itself a TEL document validated against the **TELS** schema
+(`/tels.tel`). Every schema here parses cleanly, type-checks
+against TELS with zero errors, and round-trips through schema construction.
 
 Documents reference their schemas by URL in the pragma. In a real deployment the identifier
 would either resolve over the network or be replaced by the BASE-256-encoded BinTEL signature
