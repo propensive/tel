@@ -24,13 +24,20 @@ object settings:
   // `scalaVersion` is the *coordinate* version every artifact is force-versioned to; it must match
   // the version string the jars were built with. From `3.9.0-RC4-p1` on it coincides with the
   // release tag (earlier releases shipped jars built as e.g. `3.9.0-RC1-propensive`).
-  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.0-RC4-p9")
-  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.0-RC4-p9")
+  // These must match the values the Soundness build used, since the fork's TASTy is only readable
+  // by the compiler that wrote it: `scalaVersion` is the coordinate the artifacts were force-versioned
+  // to, `scalaRelease` the release tag whose tarball supplies the jars.
+  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.0-RC5-p11")
+  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.0-RC5-p13")
 
   // Empty by default → download `scalaRelease`.
   val scalaHome = sys.env.getOrElse("SOUNDNESS_SCALA_HOME", "")
 
-  val soundnessVersion = "0.64.0"
+  // Soundness now publishes only *bundles*, under `dev.propensive` (one artifact per themed group of
+  // libraries) rather than one per library under `dev.soundness`. `0.0.1-TEST` is a local
+  // `publishLocal` build of the `stratiform/staged-codecs` branch, resolved from `~/.ivy2/local`;
+  // point this at a released version once that branch ships.
+  val soundnessVersion = sys.env.getOrElse("SOUNDNESS_VERSION", "0.0.1-TEST")
 
   val scalaOptions = Seq(
     "-experimental",
@@ -55,6 +62,9 @@ object settings:
     "-Wconf:origin=.*overwritePreexisting.enabled:s",
     "-Wconf:origin=.*textMetrics.uniform:s",
     "-Wconf:origin=.*charEncoders.ascii:s",
+    // Temporary: the fork compiler crashes in `ImportSuggestions` while computing a "did you
+    // mean?" hint over the bundled classpath, masking the real error. Disable the suggestion pass.
+    "-Ximport-suggestion-timeout", "0",
     "-Xmax-inlines", "48",
     "-Yno-flexible-types",
     "-Yexplicit-nulls",
@@ -76,20 +86,20 @@ object settings:
   // predef), so this standalone build replicates `-Yno-predef -Yimports:…`, exactly as Flame does.
   val predef = Seq("-Yno-predef", "-Yimports:java.lang,scala,proscenium")
 
-  // `soundness-all` (the umbrella) makes `import soundness.*` resolve `Text`, `Optional`, `t"…"` etc.;
-  // `exegesis-core` adds the LSP protocol types and `Lsp.listen`; `stratiform-core` is the Scala TEL
-  // parser (`read[Tel]`, `TelError`) used for diagnostics.
+  // The four bundles this server draws on. They are not published with a Scala suffix (the build
+  // sets an empty `artifactSuffix`), so each is named with a single colon.
+  //
+  //   base — the core vocabulary that makes `import soundness.*` resolve `Text`, `Optional`, `t"…"`,
+  //          plus `Environment`/`Xdg` (ambience) for the registry directory
+  //   data — Stratiform: the Scala TEL parser (`read[Tel]`, `Tel.Error`, `Tels`), its BinTEL schema
+  //          signatures and palimpsests, and BASE-256 tokens
+  //   cli  — filesystem access (galilei), the Ethereal daemon, and table rendering (escritoire)
+  //   tool — Exegesis: the LSP protocol types and `Lsp.listen`
   val deps = Seq(
-    mvn"dev.soundness:soundness-all:$soundnessVersion",
-    mvn"dev.soundness:exegesis-core:$soundnessVersion",
-    mvn"dev.soundness:stratiform-core:$soundnessVersion",
-    // Schema registry: BinTEL schema signatures + palimpsests (binary), BASE-256 tokens (base256),
-    // table rendering (escritoire), the XDG cache dir (ambience), and filesystem access (galilei).
-    mvn"dev.soundness:stratiform-binary:$soundnessVersion",
-    mvn"dev.soundness:stratiform-base256:$soundnessVersion",
-    mvn"dev.soundness:escritoire-core:$soundnessVersion",
-    mvn"dev.soundness:ambience-core:$soundnessVersion",
-    mvn"dev.soundness:galilei-jvm:$soundnessVersion")
+    mvn"dev.propensive:soundness-base:$soundnessVersion",
+    mvn"dev.propensive:soundness-data:$soundnessVersion",
+    mvn"dev.propensive:soundness-cli:$soundnessVersion",
+    mvn"dev.propensive:soundness-tool:$soundnessVersion")
 
 // Exposes the fork compiler's jars (from a local build via `settings.scalaHome`, or downloaded from
 // the `settings.scalaRelease` GitHub release) as a Maven-layout repository, generated on demand: the

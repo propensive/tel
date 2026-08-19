@@ -14,7 +14,7 @@ import interfaces.paths.pathOnLinux
 object Tests extends Suite(m"TEL LSP server tests"):
 
   // A small contact schema, registered under `contact.tel` in the temporary registry.
-  val schemaText: Text = """tel 1.0 https://tel-lang.org/schema/tel-schema
+  val schemaText: Text = """tel 1.0 https://tel-lang.org/schema/tels
 
 name contact
 
@@ -42,6 +42,24 @@ document
   def document(identifier: Text): Text =
     t"tel 1.0 $identifier\n\nname Alice\nemail alice@example.org\ncontact active\n"
 
+  // A schema whose repeatable `pet` member is typed by a record with a `key` field (§20), so that
+  // sibling pets must have distinct names (§21.6, E314).
+  val keyedSchemaText: Text = """tel 1.0 https://tel-lang.org/schema/tels
+
+name keyed
+
+record Pet
+  field name Identifier key
+  field colour String optional
+
+document
+  field pet Pet optional repeatable
+""".tt
+
+  // Two pets, the second named `second`: passing `amy` (the first pet's name) collides.
+  def keyedDocument(identifier: Text, second: Text): Text =
+    t"tel 1.0 $identifier\n\npet amy\npet $second\n"
+
   // A document with source-atom and literal-atom payloads (§14, §15): the payload lines must not
   // be mistaken for compounds by the structure scan.
   val atomForms: Text = """tel 1.0 https://example.org/documents-by-form
@@ -65,10 +83,15 @@ field looks-like-a-compound
     java.nio.file.Files.write
       ( registryDir.resolve("contact.tel").nn, schemaText.s.getBytes("UTF-8").nn )
 
+    java.nio.file.Files.write
+      ( registryDir.resolve("keyed.tel").nn, keyedSchemaText.s.getBytes("UTF-8").nn )
+
     val registry: TelServer.Registry = t"${registryDir.toString}".as[Path on Linux]
     val resolver = TelServer.SchemaResolver(registry)
     val schemaFile = t"${registryDir.toString}/contact.tel".as[Path on Linux]
     val signature: Text = SchemaCache.describe(schemaFile).let(_.id).or(t"")
+    val keyedFile = t"${registryDir.toString}/keyed.tel".as[Path on Linux]
+    val keyedSignature: Text = SchemaCache.describe(keyedFile).let(_.id).or(t"")
 
     suite(m"Schema resolution"):
       test(m"The registered schema's signature resolves"):
@@ -84,7 +107,7 @@ field looks-like-a-compound
           case _                                  => false
 
       test(m"A tel-schema pragma resolves to the meta-schema"):
-        resolver(t"https://tel-lang.org/schema/tel-schema")
+        resolver(t"https://tel-lang.org/schema/tels")
       . assert:
           case TelServer.Resolution.Meta(_, _) => true
           case _                               => false
@@ -113,22 +136,39 @@ field looks-like-a-compound
         . count(_.code == t"schema-unresolved")
       . assert(_ == 0)
 
-      test(m"A spurious E306 on scalar `encoding` is downgraded to a warning"):
+      // Stratiform's schema reconstruction understands scalar `encoding` (§21.7), so a schema
+      // declaring one is simply valid — this used to raise a spurious E306 downgraded to a warning.
+      test(m"A scalar `encoding` declaration is accepted"):
         val encodingSchema = List
-          ( t"tel 1.0 https://tel-lang.org/schema/tel-schema", t"", t"name enc", t"",
+          ( t"tel 1.0 https://tel-lang.org/schema/tels", t"", t"name enc", t"",
             t"scalar Code", t"  validate string", t"  encoding hex-bytes", t"",
             t"document", t"  field code Code" )
         . join(t"\n")
 
-        TelServer.diagnose(encodingSchema, resolver).stdlib.filter(_.code == t"E306")
-      . assert: diagnostics =>
-          diagnostics.nonEmpty && diagnostics.forall: diagnostic =>
-            diagnostic.severity == Lsp.DiagnosticSeverity.Warning
-            && diagnostic.range.start.line == 6
+        TelServer.diagnose(encodingSchema, resolver).stdlib
+        . count(_.severity == Lsp.DiagnosticSeverity.Error)
+      . assert(_ == 0)
+
+      // A `key` field (§20) is likewise part of the schema language now: the declaration is valid,
+      // and duplicate key values among repeatable siblings are E314 (§21.6).
+      test(m"A `key` field declaration is accepted"):
+        TelServer.diagnose(keyedSchemaText, resolver).stdlib
+        . count(_.severity == Lsp.DiagnosticSeverity.Error)
+      . assert(_ == 0)
+
+      test(m"Duplicate key values raise E314"):
+        TelServer.diagnose(keyedDocument(keyedSignature, t"amy"), resolver).stdlib
+        . filter(_.code == t"E314")
+      . assert(_.length == 1)
+
+      test(m"Distinct key values raise no E314"):
+        TelServer.diagnose(keyedDocument(keyedSignature, t"cat"), resolver).stdlib
+        . count(_.code == t"E314")
+      . assert(_ == 0)
 
       test(m"A duplicate definition (E210) is located on the second declaration"):
         val duplicated = List
-          ( t"tel 1.0 https://tel-lang.org/schema/tel-schema", t"", t"name dup", t"",
+          ( t"tel 1.0 https://tel-lang.org/schema/tels", t"", t"name dup", t"",
             t"record Foo", t"  field a String", t"", t"record Foo", t"  field b String", t"",
             t"document", t"  field foo Foo optional" )
         . join(t"\n")
@@ -171,7 +211,7 @@ field looks-like-a-compound
 
       test(m"Hovering a built-in validator name shows its blurb"):
         val schemaDocument =
-          t"tel 1.0 https://tel-lang.org/schema/tel-schema\nname x\nscalar Foo\n  validate identifier\n"
+          t"tel 1.0 https://tel-lang.org/schema/tels\nname x\nscalar Foo\n  validate identifier\n"
 
         TelServer.hoverAt(schemaDocument, Lsp.Position(3, 12), resolver)
       . assert(_.let(_.contents.value.s.contains("built-in validator")).or(false))
@@ -193,7 +233,7 @@ field looks-like-a-compound
 
       test(m"A member declaration in a schema document completes its flags"):
         val schemaDocument =
-          t"tel 1.0 https://tel-lang.org/schema/tel-schema\nname x\nrecord Foo\n  field name Identifier \n"
+          t"tel 1.0 https://tel-lang.org/schema/tels\nname x\nrecord Foo\n  field name Identifier \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 24), resolver)
         . items.stdlib.map(_.label)
@@ -203,7 +243,7 @@ field looks-like-a-compound
 
       test(m"A validate line completes the built-in validators"):
         val schemaDocument =
-          t"tel 1.0 https://tel-lang.org/schema/tel-schema\nname x\nscalar Foo\n  validate \n"
+          t"tel 1.0 https://tel-lang.org/schema/tels\nname x\nscalar Foo\n  validate \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 11), resolver)
         . items.stdlib.map(_.label)
@@ -211,7 +251,7 @@ field looks-like-a-compound
 
       test(m"The type-name slot in a schema document offers definitions and built-ins"):
         val schemaDocument =
-          t"tel 1.0 https://tel-lang.org/schema/tel-schema\nname x\nrecord Foo\ndocument\n  field a \n"
+          t"tel 1.0 https://tel-lang.org/schema/tels\nname x\nrecord Foo\ndocument\n  field a \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(4, 10), resolver)
         . items.stdlib.map(_.label)

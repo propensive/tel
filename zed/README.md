@@ -40,7 +40,7 @@ which tel        # sanity check
 
 ### 4. Verify
 
-Open a `.tel` file (e.g. [`../tel-schema.tel`](../tel-schema.tel) or anything in [`../demo`](../demo)):
+Open a `.tel` file (e.g. [`../tels.tel`](../tels.tel) or anything in [`../demo`](../demo)):
 
 - **Highlighting** — the pragma, atoms, comments etc. should be coloured.
 - **Diagnostics** — change the pragma `tel 1.0` to `tel abc`; a red error (`TEL001`) should appear on that

@@ -3,14 +3,23 @@
 The `tel` executable, built in Scala with the Soundness ecosystem and packaged in the same style as
 [Flame](https://github.com/propensive/flame) (Mill + an Ethereal self-fetching native launcher).
 
-> **Build note:** the LSP depends on the locally-published Soundness **0.64.0**, which is built with
-> the propensive Scala fork (`3.9.0-RC4-p8`). The build (`build.mill`) downloads that fork release
-> from [proscala](https://github.com/propensive/proscala) into a shared cache
+> **Build note:** Soundness now publishes only *bundles*, under the `dev.propensive` group, so this
+> build depends on four of them — `soundness-base`, `soundness-data` (Stratiform), `soundness-cli`
+> and `soundness-tool` (Exegesis) — rather than one artifact per library. The pinned version is
+> **0.0.1-TEST**, a local build of Soundness's `stratiform/staged-codecs` branch (the one carrying
+> TEL `key` fields, TELP paths and scalar codecs), resolved from `~/.ivy2/local`; override with
+> `$SOUNDNESS_VERSION`. Reproduce it with
+> `SOUNDNESS_RELEASE_VERSION=0.0.1-TEST ./mill 'soundness.{base,cli,data,tool}.publishLocal'`
+> in that worktree (the version must be given explicitly; the git-describe fallback picks up a stray
+> tag).
+>
+> Soundness is built with the propensive Scala fork, and its TASTy is only readable by that
+> compiler, so `scalaVersion`/`scalaRelease` here must match the values the Soundness build used —
+> currently the coordinate `3.9.0-RC5-p11` and the release tag `3.9.0-RC5-p13`. The build downloads
+> that release from [proscala](https://github.com/propensive/proscala) into a shared cache
 > (`~/.cache/soundness/proscala/<tag>/lib`) — the same one the Soundness build uses — so no local
 > compiler build is needed; set `$SOUNDNESS_SCALA_HOME` to a `make`-built `release` directory to
-> override. `SOUNDNESS_RELEASE_VERSION=0.64.0 ./mill soundness.all.publishLocal --transitive true`
-> in `~/work/soundness` produces the 0.64.0 artifacts (the version must be given explicitly; the
-> git-describe fallback picks up a stray tag).
+> override.
 
 It is organised around subcommands:
 
@@ -18,14 +27,14 @@ It is organised around subcommands:
   launches).
 - **`tel lsp --log`** — stream, live, the messages a running server sends/receives (a debugging aid).
 - **`tel schema list`** — list registered schemas as a table (name, BASE-256 id, layers).
-- **`tel schema add <file>`** — validate a schema against the tel-schema meta-schema and add it to the
+- **`tel schema add <file>`** — validate a schema against the TELS meta-schema and add it to the
   registry (relative paths resolve against the invoking shell's directory).
 - **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
   with the named layers (in order; none = the base schema).
 
 The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
 CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against
-it to validate ordinary documents (see below). The built-in **tel-schema** meta-schema is always
+it to validate ordinary documents (see below). The built-in **TELS** meta-schema is always
 preloaded, so it appears in `list` (and is resolvable) even on a fresh cache.
 
 Features so far:
@@ -41,7 +50,7 @@ Features so far:
   keyword — rather than a single character or a whole line. A parse error carries its own `span`; a
   schema/validation error's span is filled onto its `Tel.Focus` by `Tel.Type.assign` (via
   `Tel.supplementPositions`), and, failing that, the focus's keyword path is resolved against the
-  position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tel-schema` meta-schema) is
+  position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tels` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
   malformed-schema errors such as `E306` (unrecognised keyword), plus a local `E210` check for
   duplicate (or built-in-colliding) definition names. Diagnostics are cleared when a document
@@ -158,7 +167,7 @@ tel 1.0 ḡǼJûĿΫęôқδfΊzžμȑωûĺǑЬǨỵξϋ4SṽζẄǽOḁ
 
 The LSP matches that signature against each cached schema's base or fully-composed signature
 (memoized per identifier, invalidated when the registry directory changes). Schema *documents*
-(pragma names `tel-schema`) are still validated against the built-in meta-schema. When the pragma
+(pragma names `tels`) are still validated against the built-in meta-schema. When the pragma
 names a schema that matches nothing in the registry, the LSP says so: an `Information` diagnostic
 (`schema-unresolved`) underlines the identifier, and hovering the pragma explains the resolution
 status (resolved schema name, signature and registry path; meta-schema; or the failure). The
@@ -186,10 +195,8 @@ transport is involved; for a live smoke test, drive `tel lsp` over stdio and wat
   source-atom/literal-atom payloads lexically, so payload lines are not mistaken for compounds.
 - **Snippet completions** — Exegesis's `CompletionItem` has `insertText` but no `insertTextFormat`,
   so completions cannot yet carry `$1`-placeholder snippets.
-- **Scalar `encoding` is unsupported upstream.** `stratiform.Tels` has no `encoding` anywhere — not
-  on `ScalarDefinition`, not in `Tels.Axiom`, not in the BinTEL codecs — although the language has
-  it (tel.md §21.7, BinTEL B13–B15) and the in-repo meta-schema
-  ([`tel.MetaSchema`](src/core/tel.MetaSchema.scala)) declares `field encoding Identifier optional`.
-  A schema document using `encoding` therefore reports a spurious `E306`, which the LSP downgrades
-  to a `Warning` with an explanatory note; LSP-computed tel-schema signatures still do not match
-  the pinned normative vector.
+- **TELP paths are not yet used.** Stratiform now implements the TELP path language
+  ([`../spec/telp.md`](../spec/telp.md)) as `stratiform.Telp`, which addresses elements by keyword
+  and by key value rather than positionally. Outline/folding still use the source scan (see above),
+  and nothing yet exposes TELP to the editor — a `key`-aware go-to-definition or a "copy path here"
+  command would be the natural first uses.

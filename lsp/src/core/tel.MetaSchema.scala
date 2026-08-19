@@ -2,9 +2,10 @@ package tel
 
 import soundness.*
 
-// The built-in tel-schema meta-schema document (the schema-for-schemas, matching
-// `Tels.Axiom.tels`), embedded so the registry can always preload it. Kept as a plain triple-quoted
-// String (no interpolation/escapes) and converted to `Text`.
+// The built-in TELS meta-schema document (the schema-for-schemas, matching `Tels.Axiom.tels`),
+// embedded so the registry can always preload it. This is a verbatim copy of `tels.tel` at the root
+// of the TEL repository; keep the two in step. Kept as a plain triple-quoted String (no
+// interpolation/escapes) and converted to `Text`.
 object MetaSchema:
   val source: Text = """tel 1.0
 
@@ -26,15 +27,18 @@ object MetaSchema:
 # composed Definition namespace to a record, scalar, select, or built-in
 # (`Flag`, `String`, `Identifier`, `Sigil`).
 
-name tel-schema
+name tels
 
 # ---------------------------------------------------------------------------
 # Record definitions
 # ---------------------------------------------------------------------------
 
 # A `field` declaration at a member position. The four loosen/tighten flags
-# yield the per-axis Polarity (§20). `default` is permitted only on required
-# Scalar-typed fields (E204).
+# yield the per-axis Polarity (§20). `key` marks the identifying field of the
+# enclosing struct (E219–E221; instance-level uniqueness is E314). It must
+# precede `default` in member order so that a trailing `key` atom is consumed
+# as a flag, not as a default value (§20.5). `default` is permitted only on
+# required Scalar-typed fields (E203).
 
 record Field
   description
@@ -45,6 +49,7 @@ record Field
   field required Flag optional
   field repeatable Flag optional
   field irrepeatable Flag optional
+  field key Flag optional
   field default String optional
   field description String optional
 
@@ -91,7 +96,7 @@ record Scalar
 
 # A top-level `select` declaration. `exclude` children are permitted
 # lexically but only valid inside a layer's select body; appearing in a
-# base-schema select body raises E217 during construction.
+# base-schema select body raises E216 during construction.
 
 record Select
   description
@@ -132,7 +137,7 @@ select Member
   variant select SelectRef
   variant validate Identifier
 
-# Children admissible inside a Select body. `exclude` is layer-only (E217 in
+# Children admissible inside a Select body. `exclude` is layer-only (E216 in
 # a base) but is lexically permitted here.
 
 select SelectChild

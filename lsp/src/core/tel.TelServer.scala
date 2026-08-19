@@ -44,14 +44,14 @@ object TelServer:
   // Parse the document with Stratiform's TEL parser and surface every error it reports as an LSP
   // diagnostic. Parsing runs under a `validate` accrual boundary so that recoverable defects (§19.5)
   // are collected rather than aborting on the first; `read[Tel]` yields the recovered document (which
-  // we discard here — diagnostics only need the errors) while each `TelError` folds into `TelErrors`.
+  // we discard here — diagnostics only need the errors) while each `Tel.Error` folds into `Accrued`.
 
   // Accrual accumulator: each surfaced error with its focus. For schema validation, `Focus.span` is
   // filled by `Tel.Type.assign` (via `Focus.withSpan`) against the position-tracked document
   // (`import parsing.trackPositions`), so the diagnostic can span the offending compound's keyword.
-  private case class Accrued(items: List[(Optional[Tel.Focus], TelError)] = Nil)(using Diagnostics)
+  private case class Accrued(items: List[(Optional[Tel.Focus], Tel.Error)] = Nil)(using Diagnostics)
   extends Error(m"${items.length} TEL errors"):
-    def add(focus: Optional[Tel.Focus], error: TelError): Accrued = Accrued(items :+ (focus, error))
+    def add(focus: Optional[Tel.Focus], error: Tel.Error): Accrued = Accrued(items :+ (focus, error))
 
   // The schema registry directory is resolved once, where the invoker's `Environment` is in scope,
   // and threaded to the handlers that need it: nothing capability-carrying or stateful lives in this
@@ -94,6 +94,17 @@ object TelServer:
 
       case None =>
         Pragma(index, false, Unset, '#')
+
+  // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? An identifier is
+  // either a bare name or a URL, optionally carrying a `#`-separated signature fragment, so the
+  // test is on the final path segment rather than a substring: a schema legitimately named
+  // `hotels` or hosted at `…/schema/models` must not be mistaken for the meta-schema.
+  // `tel-schema` is the pre-rename spelling, still accepted so documents written before TELS was
+  // named continue to validate.
+  private[tel] def namesTels(identifier: Text): Boolean =
+    val withoutFragment = identifier.s.takeWhile(_ != '#')
+    val tail = withoutFragment.substring(withoutFragment.lastIndexOf('/') + 1)
+    tail == "tels" || tail == "tel-schema"
 
   // The outcome of resolving a document's pragma schema identifier. `Unresolved` is distinguished
   // from `NoSchema` so that an identifier which matches nothing in the registry can be reported to
@@ -145,8 +156,8 @@ object TelServer:
 
     private def resolve(identifier: Text): Resolution = registry match
       case directory: (Path on Linux) =>
-        if identifier.s.contains("tel-schema")
-        then Resolution.Meta(Tels.Axiom.tels, SchemaCache.resolveFile(directory, t"tel-schema"))
+        if namesTels(identifier)
+        then Resolution.Meta(Tels.Axiom.tels, SchemaCache.resolveFile(directory, t"tels"))
         else SchemaCache.resolveFile(directory, identifier) match
           case file: (Path on Linux) => SchemaCache.resolve(directory, identifier) match
             case schema: Tels =>
@@ -157,7 +168,7 @@ object TelServer:
           case _ => Resolution.Unresolved(identifier)
 
       case _ =>
-        if identifier.s.contains("tel-schema") then Resolution.Meta(Tels.Axiom.tels, Unset)
+        if namesTels(identifier) then Resolution.Meta(Tels.Axiom.tels, Unset)
         else Resolution.NoSchema
 
   private[tel] def diagnose(text: Text, resolver: SchemaResolver): List[Lsp.Diagnostic] =
@@ -167,7 +178,7 @@ object TelServer:
     val resolution = resolver(pragma)
 
     // When the document parses, validate it against its schema and surface the schema/validation
-    // errors. A schema *document* (its pragma names `tel-schema`) is checked against the built-in
+    // errors. A schema *document* (its pragma names TELS) is checked against the built-in
     // meta-schema; any other pragma schema — a bare name or BASE-256 signature — is resolved against
     // the local registry populated by `tel schema add`.
     // Kept for the diagnostic ranges as well as the schema pass: it is the position-tracked
@@ -233,7 +244,7 @@ object TelServer:
     lines.zipWithIndex.foreach: (line, index) =>
       val lineTokens = tokens(line).stdlib
       if leadingSpaces(line) == 0 && lineTokens.length >= 2
-         && definitionKeywords(lineTokens(0)(0).tt)
+         && definitionKeywords.stdlib.contains(lineTokens(0)(0).tt)
       then
         val name = lineTokens(1)(0).tt
         if builtins.contains(name) then
@@ -244,27 +255,27 @@ object TelServer:
 
     out.to(scala.List).to(List)
 
-  private def parseErrors(text: Text): List[(Optional[Tel.Focus], TelError)] =
+  private def parseErrors(text: Text): List[(Optional[Tel.Focus], Tel.Error)] =
     validate[Tel.Focus](Accrued()):
-      case error: TelError => accrual.add(prior, error)
+      case error: Tel.Error => accrual.add(prior, error)
     . protect(text.read[Tel])
     . items
 
   // Validate a document against a schema (`Tel.Type.assign`), accruing every violation with the focus
   // whose source position `assign` fills in.
-  private def assignErrors(tel: Tel, schema: Tels): List[(Optional[Tel.Focus], TelError)] =
+  private def assignErrors(tel: Tel, schema: Tels): List[(Optional[Tel.Focus], Tel.Error)] =
     validate[Tel.Focus](Accrued()):
-      case error: TelError => accrual.add(prior, error)
+      case error: Tel.Error => accrual.add(prior, error)
     . protect(Tel.Type.assign(tel, schema))
     . items
 
-  // Validate a schema document two ways: (1) conformance to the built-in tel-schema meta-schema
+  // Validate a schema document two ways: (1) conformance to the built-in TELS meta-schema
   // (`assign`), catching malformed schema syntax; (2) constructing the `Tels` from it
   // (`Reconstructor.fromTel`), catching schema-validity errors (E2xx). De-duplicated by code + reason.
-  private def schemaErrors(tel: Tel): List[(Optional[Tel.Focus], TelError)] =
+  private def schemaErrors(tel: Tel): List[(Optional[Tel.Focus], Tel.Error)] =
     val construction =
       validate[Tel.Focus](Accrued()):
-        case error: TelError => accrual.add(prior, error)
+        case error: Tel.Error => accrual.add(prior, error)
       . protect(Tels.Reconstructor.fromTel(tel))
       . items
 
@@ -318,21 +329,30 @@ object TelServer:
 
   private def typeLabel(fieldType: Tels.Type, schema: Tels): Text =
     fieldType match
-      case Tels.Reference(name)    => name
-      case Tels.Flag               => t"Flag"
-      case Tels.Scalar(validators) => if validators.length == 0 then t"scalar" else validators.readable.to(List).join(t"+")
-      case Tels.Struct(_, _)       => t"record"
+      case Tels.Reference(name) => name
+      case Tels.Flag            => t"Flag"
+      case Tels.Struct(_, _)    => t"record"
 
-  private def cardinality(required: Tels.Polarity, repeatable: Tels.Polarity): Text =
+      // A declared `encoding` (§21.7) is part of what the scalar accepts — the codec's encoder is
+      // one further validity constraint — so it belongs in the label beside the validators.
+      case Tels.Scalar(validators, encoding) =>
+        val base = if validators.length == 0 then t"scalar" else validators.readable.to(List).join(t"+")
+        encoding.let(codec => t"$base [$codec]").or(base)
+
+  // The declaration flags shown after a member's type in hover markup. `key` (§20) is not a
+  // polarity — it marks the field as its record's identifier — but it reads naturally in the same
+  // list, and it is the one flag a reader most needs to see.
+  private def cardinality(required: Tels.Polarity, repeatable: Tels.Polarity, key: Boolean): Text =
     val flags: scala.List[Text] =
       (if required == Tels.Polarity.Loose then scala.List(t"optional") else scala.Nil)
       ::: (if repeatable == Tels.Polarity.Loose then scala.List(t"repeatable") else scala.Nil)
+      ::: (if key then scala.List(t"key") else scala.Nil)
 
     if flags.isEmpty then t"" else t" (${flags.to(List).join(t", ")})"
 
   private def fieldMarkdown(field: Tels.Field, schema: Tels): Text =
     val header =
-      t"**${field.keyword}** — ${typeLabel(field.fieldType, schema)}${cardinality(field.required, field.repeatable)}"
+      t"**${field.keyword}** — ${typeLabel(field.fieldType, schema)}${cardinality(field.required, field.repeatable, field.key)}"
 
     val default = field.default.let(value => t"\n\nDefault: `$value`").or(t"")
     val description = field.description.let(value => t"\n\n$value").or(t"")
@@ -381,14 +401,18 @@ object TelServer:
        name:        Optional[Text],
        validators:  List[Text],
        default:     Optional[Text],
-       description: Optional[Text] )
+       description: Optional[Text],
+       encoding:    Optional[Text] )
   :   Text =
 
     val checks =
       if validators.isEmpty then t""
       else t", validated as ${validators.map(validator => t"`$validator`").join(t", ")}"
 
-    val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks"
+    // A declared `encoding` (§21.7) is a further constraint on the value — the codec's encoder
+    // rejects what it cannot represent (E312) — as well as its BinTEL representation.
+    val codec = encoding.let(name => t", encoded as `$name`").or(t"")
+    val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks$codec"
     val fallback = default.let(value => t"\n\nDefault: `$value`").or(t"")
     val about = description.let(value => t"\n\n$value").or(t"")
     t"$header$fallback$about"
@@ -415,19 +439,19 @@ object TelServer:
             case Some(scalar) =>
               scalarValueMarkup
                 ( keyword, name, scalar.validators.readable.to(List), default,
-                  scalar.description )
+                  scalar.description, scalar.encoding )
 
             case None => builtinScalars.stdlib.find(_(0) == name) match
               case Some((_, validator)) =>
-                scalarValueMarkup(keyword, name, List(validator), default, Unset)
+                scalarValueMarkup(keyword, name, List(validator), default, Unset, Unset)
 
               // A record-typed member: an inline atom fills one of the record's atom-assignable
               // members (§21) — a flag field or a flag-typed select variant — so describe that.
               case None => structOf(Tels.Reference(name), schema)
                 . let(fieldMarkup(_, atom, schema))
 
-      case Tels.Scalar(validators) =>
-        scalarValueMarkup(keyword, Unset, validators.readable.to(List), default, Unset)
+      case Tels.Scalar(validators, encoding) =>
+        scalarValueMarkup(keyword, Unset, validators.readable.to(List), default, Unset, encoding)
 
       case struct: Tels.Struct =>
         fieldMarkup(struct, atom, schema)
@@ -450,8 +474,8 @@ object TelServer:
   // separating space; a flag or struct keyword stands alone.
   private def keywordInsertText(keyword: Text, fieldType: Tels.Type): Optional[Text] =
     fieldType match
-      case Tels.Reference(_) | Tels.Scalar(_) => t"$keyword "
-      case _                                  => Unset
+      case Tels.Reference(_) | Tels.Scalar(_, _) => t"$keyword "
+      case _                                     => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
     struct.members.readable.to(List).flatMap:
@@ -486,7 +510,7 @@ object TelServer:
     resolver(pragmaOf(lines)).tels
 
   private def isSchemaDocument(lines: IndexedSeq[String]): Boolean =
-    pragmaOf(lines).identifier.lay(false)(_.name.s.contains("tel-schema"))
+    pragmaOf(lines).identifier.lay(false)(id => namesTels(id.name))
 
   // The line's indentation, its keyword (the first token, if any), and how many whole atoms precede
   // the cursor: 0 = keyword position, 1 = first value/atom, 2 = second atom, and so on.
@@ -649,7 +673,7 @@ object TelServer:
         case _ => Lsp.CompletionList()
 
       // Type-name slot in a schema document — `field <name> <type>`, `variant <name> <type>`.
-      case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant")(kw) =>
+      case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant").stdlib.contains(kw) =>
         Lsp.CompletionList(items = typeNameCompletions(tree))
 
       // Validator slot in a schema document — `validate <name>`.
@@ -670,7 +694,7 @@ object TelServer:
         Lsp.CompletionList()
 
   private def diagnostic
-     ( entry:    (Optional[Tel.Focus], TelError),
+     ( entry:    (Optional[Tel.Focus], Tel.Error),
        lines:    IndexedSeq[String],
        document: Optional[Tel] )
   :   Lsp.Diagnostic =
@@ -678,28 +702,15 @@ object TelServer:
     val (focus, error) = entry
     val range = errorRange(focus, error, lines, document)
 
-    // Every TEL E-code is a hard error, with one exception: `stratiform.Tels` does not yet support
-    // scalar `encoding` (§20), so a schema that uses it triggers a spurious E306 on the `encoding`
-    // compound — reported as a warning with an explanation, rather than an error, until the
-    // validator catches up. (Not dropped: the schema-signature mismatch it implies is real.)
-    val spuriousEncoding =
-      error.reason.number == 306
-      && lines.lift(range.start.line).exists: line =>
-           tokens(line).stdlib.headOption.exists(_(0) == "encoding")
-
-    val severity =
-      if spuriousEncoding then Lsp.DiagnosticSeverity.Warning else Lsp.DiagnosticSeverity.Error
-
-    val suffix =
-      if spuriousEncoding then t" (scalar `encoding` is not yet supported by the validator)"
-      else t""
-
+    // Every TEL E-code is a hard error. (Scalar `encoding` used to be special-cased here as a
+    // warning, because Stratiform's schema reconstruction did not yet understand it and raised a
+    // spurious E306; it now does, so the exception is gone.)
     Lsp.Diagnostic
       ( range    = range,
-        severity = severity,
+        severity = Lsp.DiagnosticSeverity.Error,
         code     = t"E${error.reason.number}",
         source   = t"tel",
-        message  = t"${m"${error.reason}".text}$suffix" )
+        message  = m"${error.reason}".text )
 
   // Every located TEL error carries a `Span` — 0-based, `Line`-mode, and carrying the *extent* of
   // the offending text, not merely its first character — which is exactly the shape of an LSP
@@ -718,7 +729,7 @@ object TelServer:
   // An error with no span at all (nothing in the source to point at) falls back to the first line.
   private def errorRange
      ( focus:    Optional[Tel.Focus],
-       error:    TelError,
+       error:    Tel.Error,
        lines:    IndexedSeq[String],
        document: Optional[Tel] )
   :   Lsp.Range =
@@ -786,7 +797,7 @@ object TelServer:
         + t"`${file.encode}`"
 
       case Resolution.Meta(_, _) =>
-        t"**TEL schema document** — validated against the built-in `tel-schema` meta-schema"
+        t"**TEL schema document** — validated against the built-in `tels` meta-schema"
 
       case Resolution.Unresolved(identifier) =>
         t"**TEL document** — schema `$identifier` is not registered, so the document is parsed "
@@ -1067,7 +1078,7 @@ object TelServer:
   private def definitions(nodes: List[Node]): Map[Text, Node] =
     Map.of:
       flatten(nodes).stdlib.flatMap: node =>
-        if definitionKeywords(node.keyword) then node.atoms.headOption.map(_ -> node) else None
+        if definitionKeywords.stdlib.contains(node.keyword) then node.atoms.headOption.map(_ -> node) else None
       . toMap
 
   // Every whitespace-delimited occurrence of `word` as a whole token, with line and column span.
@@ -1095,7 +1106,7 @@ object TelServer:
   private def topLevelDefinitions(nodes: List[Node]): Map[Text, Node] =
     Map.of:
       nodes.stdlib.flatMap: node =>
-        if definitionKeywords(node.keyword) then node.atoms.headOption.map(_ -> node) else None
+        if definitionKeywords.stdlib.contains(node.keyword) then node.atoms.headOption.map(_ -> node) else None
       . toMap
 
   private def fieldNode(nodes: List[Node], name: Text): Optional[Node] =
@@ -1120,7 +1131,7 @@ object TelServer:
   // The schema-document node that declares `keyword`: a `field`/`variant` in `context` named
   // `keyword`, or a `variant` of a `select` referenced from `context`.
   private def locateMember(schemaTree: List[Node], context: List[Node], keyword: Text): Optional[Node] =
-    context.find(node => memberKeywords(node.keyword) && node.atoms.headOption.contains(keyword))
+    context.find(node => memberKeywords.stdlib.contains(node.keyword) && node.atoms.headOption.contains(keyword))
     . orElse:
         context.stdlib.filter(_.keyword == t"select").flatMap: reference =>
           reference.atoms.headOption.toList

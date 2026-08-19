@@ -10,7 +10,7 @@ import proscenium.{List, Nil, Chain}
 
 import interfaces.paths.pathOnLinux
 import systems.javaSystem
-import filesystemBackends.virtualMachine
+import filesystemBackends.virtualMachineFilesystem
 import filesystemOptions.overwritePreexisting.enabled
 import textSanitizers.skipSanitizer
 import logging.silentLogging
@@ -19,7 +19,7 @@ import charDecoders.utf8Decoder
 
 // A per-user registry of TEL schemas, shared by the `tel schema …` subcommands and the LSP. Schemas
 // live as `<name>.tel` files under `$XDG_CACHE_HOME/tel/schemas` (or `~/.cache/tel/schemas`). A schema
-// is validated against the built-in tel-schema meta-schema before it is cached, so the registry only
+// is validated against the built-in TELS meta-schema before it is cached, so the registry only
 // ever holds well-formed schemas, and the LSP can load them to validate ordinary documents.
 object SchemaCache:
 
@@ -28,24 +28,24 @@ object SchemaCache:
 
   // The cache directory, honouring `$XDG_CACHE_HOME`. Resolved where an invoker `Environment` is in
   // scope (the CLI, and once at LSP start-up).
-  def directory(using Environment, System, Tactic[PathError]): Path on Linux =
+  def directory(using Environment, System, Tactic[Path.Error]): Path on Linux =
     t"${Xdg.cacheHome[Path on Linux].encode}/tel/schemas".as[Path on Linux]
 
   // The BASE-256 palimpsest for a parsed schema composed with the named layers, in order (empty = the
   // base schema alone). Unknown layer names are ignored.
-  def signature(tel: Tel, layers: List[Text])(using Tactic[BintelError], Tactic[TelError]): Text =
+  def signature(tel: Tel, layers: List[Text])(using Tactic[Bintel.Error], Tactic[Tel.Error]): Text =
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
     val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
     val byName = names.zip(layerHashes.stdlib).toMap
     Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
 
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
-  private def entryOf(tel: Tel)(using Tactic[BintelError], Tactic[TelError]): Entry =
+  private def entryOf(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error]): Entry =
     val tels = Tels.Reconstructor.fromTel(tel)
     Entry(tels.name, signature(tel, Nil), tels.layers.readable.to(List).map(_.name).join(t", "))
 
   private def read(file: Path on Linux)
-      (using Tactic[TelError], Tactic[IoError], Tactic[StreamError])
+      (using Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error])
   :   Tel =
     file.read[Text].read[Tel]
 
@@ -61,11 +61,11 @@ object SchemaCache:
   private def markReadOnly(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setReadOnly())
   private def makeWritable(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setWritable(true))
 
-  // Write the built-in tel-schema meta-schema into the cache if it is not already there, so the
+  // Write the built-in TELS meta-schema into the cache if it is not already there, so the
   // registry always contains it. Best-effort (the cache may be unwritable).
   def ensurePreloaded(directory: Path on Linux): Unit =
     safely:
-      val file = t"${directory.encode}/tel-schema.tel".as[Path on Linux]
+      val file = t"${directory.encode}/tels.tel".as[Path on Linux]
       if !file.existent() then
         if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
         file.write(MetaSchema.source)
@@ -81,8 +81,8 @@ object SchemaCache:
   // Add a schema file to the cache: validate it against the meta-schema, then store it under its
   // declared name. Returns the added entry. Raises if the file is missing or is not a valid schema.
   def add(directory: Path on Linux, file: Path on Linux)
-      (using Tactic[BintelError], Tactic[TelError], Tactic[IoError], Tactic[StreamError],
-             Tactic[PathError])
+      (using Tactic[Bintel.Error], Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error],
+             Tactic[Path.Error])
   :   Entry =
     val text = file.read[Text]
     val entry = entryOf(text.read[Tel])   // reconstructs the Tels (raises if malformed) and its id
