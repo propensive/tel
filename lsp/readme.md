@@ -105,8 +105,11 @@ Features so far:
   and yield the *same semantic model* (§18.2). This is what catches §20.8's trap: in the contact
   schema, `contact` / `  active` does NOT offer inlining, because as an atom `active` would re-bind
   to the never-skipped optional Scalar `label`; conversely expanding `contact active` offers
-  `label active`, making the surprising positional binding explicit. Lines with remarks, hard gaps
-  (§10.3) or source/literal payloads are declined rather than risked.
+  `label active`, making the surprising positional binding explicit. Hard-gap lines (§10.3) are
+  handled: the generated text places a hard gap wherever a value must stay one phrase — expanding
+  `recipient  Spice Labs Inc.` yields a `name  Spice Labs Inc.` child, and inlining onto a line
+  already in hard mode separates the new atom with a hard gap rather than merging it into the
+  phrase before it. Lines with remarks or source/literal payloads are declined rather than risked.
 
 The whole tool is a single object, `tel.TelServer`, in
 [`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala). Its `main` dispatches on the

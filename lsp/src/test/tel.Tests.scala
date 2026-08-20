@@ -320,6 +320,36 @@ field looks-like-a-compound
         inlined.s == original.s
       . assert(_ == true)
 
+      // ── Hard gaps (§10.3): a 2+-space run starts an atom and locks the line into hard mode ──
+
+      // `pet  fluffy cat` is ONE atom, `fluffy cat`, binding Pet's required `name`; the generated
+      // child line must also use a hard gap so the value stays a single phrase.
+      test(m"Expanding a hard-gap atom preserves it as one phrase"):
+        val text = t"tel 1.0 $keyedSignature\n\npet  fluffy cat\n"
+        editTexts(TelServer.codeActionsAt(uri, text, at(2), resolver))
+      . assert(_ == scala.List("\n  name  fluffy cat"))
+
+      // Soft atoms before the first hard run keep their positional bindings: `+44` stays inline on
+      // the compound while the hard atom moves to a child.
+      test(m"A mixed soft-then-hard line expands only its hard tail"):
+        val text = t"tel 1.0 $signature\n\nname Alice\nphone +44  020 7946 0958\n"
+        editTexts(TelServer.codeActionsAt(uri, text, at(3), resolver))
+      . assert(_ == scala.List("\n  number  020 7946 0958"))
+
+      test(m"Hard-gap expand and inline round-trip"):
+        val original = t"tel 1.0 $keyedSignature\n\npet  fluffy cat\n"
+        val expanded = applied(original, TelServer.codeActionsAt(uri, original, at(2), resolver))
+        val inlined = applied(expanded, TelServer.codeActionsAt(uri, expanded, at(3), resolver))
+        inlined.s == original.s
+      . assert(_ == true)
+
+      // Appending to a line already in hard mode must use a hard gap, or the new atom would merge
+      // into the phrase before it.
+      test(m"Inlining onto a hard-mode parent uses a hard gap"):
+        val text = t"tel 1.0 $signature\n\nname Alice\nphone  +44\n  number 0207946\n"
+        applied(text, TelServer.codeActionsAt(uri, text, at(4), resolver)).s
+      . assert(_ == s"tel 1.0 $signature\n\nname Alice\nphone  +44  0207946\n")
+
     suite(m"Hover"):
       test(m"Hovering a field keyword shows its schema declaration"):
         TelServer.hoverAt(document(signature), Lsp.Position(3, 2), resolver)

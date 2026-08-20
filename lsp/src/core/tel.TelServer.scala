@@ -718,6 +718,55 @@ object TelServer:
 
       case _ => Nil
 
+  // The inline-atom spans of a compound line after `keywordEnd`, per §10.3 phrase separation:
+  // initially a single space terminates a phrase, but from the start of the first hard-space run
+  // (two or more spaces) onward only hard runs terminate phrases, and single spaces become phrase
+  // content. Returns (text, start, end) column spans. Remarks are NOT recognised here: the code
+  // actions decline any line whose space-split tokens include a bare sigil before tokenising —
+  // conservative, since a sigil can legitimately sit inside a hard-mode phrase, but never wrong.
+  // If this tokenisation ever disagrees with Stratiform's, the generated candidate fails semantic
+  // verification and the action is declined, so correctness does not rest on it.
+  private def inlineAtomSpans(line: String, keywordEnd: Int): scala.List[(String, Int, Int)] =
+    val out = scm.ListBuffer[(String, Int, Int)]()
+    var i = keywordEnd
+    var hard = false
+
+    while i < line.length do
+      val gapStart = i
+      while i < line.length && line.charAt(i) == ' ' do i += 1
+      if i - gapStart >= 2 then hard = true
+
+      if i < line.length then
+        val start = i
+        var end = i
+
+        if !hard then
+          while i < line.length && line.charAt(i) != ' ' do i += 1
+          end = i
+        else
+          // `end` tracks the last non-space seen, so a trailing single space is left out of the
+          // phrase (it would be E108 anyway, and verification catches the invalid document).
+          var scanning = true
+          while scanning && i < line.length do
+            if line.charAt(i) == ' ' then
+              var j = i
+              while j < line.length && line.charAt(j) == ' ' do j += 1
+              if j - i >= 2 || j >= line.length then scanning = false else i = j
+            else
+              i += 1
+              end = i
+
+        out += ((line.substring(start, end).nn, start, end))
+
+    out.to(scala.List)
+
+  // The separator to place before `atom` when writing it after `keyword` (or appending it to a
+  // line): a hard gap whenever the atom contains a space — so §10.3 keeps it one phrase — or when
+  // the line is already in hard mode, where a single space would merge the atom into the phrase
+  // before it.
+  private def gapFor(atom: Text, hardMode: Boolean): Text =
+    if hardMode || atom.s.contains(" ") then t"  " else t" "
+
   // Move the LAST inline atom of the compound at `line` onto a child compound line. Restricted to
   // the last atom so that no other atom's position — and hence its §20.2 positional binding —
   // shifts; the moved atom re-binds to the same member by keyword, and the new child is inserted
@@ -739,42 +788,41 @@ object TelServer:
       val payload = lines.lift(line + 1).exists: next =>
         leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
 
-      val hardGap = lineText.substring(node.keywordEnd).nn.contains("  ")
       val sigil = pragmaOf(lines).sigil.toString
       val remark = tokens(lineText).stdlib.exists(_(0) == sigil)
+      val spans = inlineAtomSpans(lineText, node.keywordEnd)
 
-      if node.atoms.isEmpty || payload || hardGap || remark then Unset
+      // The last phrase must run to the end of the line: with remarks declined, anything after it
+      // would be trailing space (E108), and verification would reject the document anyway.
+      if spans.isEmpty || payload || remark || spans.last(2) != lineText.length then Unset
       else
         val struct = enclosingStruct(tree, node.line, node.indent, schema)
 
         memberStruct(struct, node.keyword, schema).let: owner =>
-          expansionOf(owner, node.atoms, schema).let: childText =>
-            val lineTokens = tokens(lineText).stdlib
-            val atomText = node.atoms.stdlib.last
+          val atoms = spans.map((atom, _, _) => atom.tt).to(List)
 
-            // The last token must be the atom being moved: with remarks and hard gaps already
-            // declined, the only way it is not is a scan/parse disagreement, declined likewise.
-            if lineTokens.length < 2 || lineTokens.last(0).tt != atomText then Unset
-            else
-              val previousEnd = lineTokens(lineTokens.length - 2)(2)
-              val indent = lineText.substring(0, node.indent).nn + "  "
+          expansionOf(owner, atoms, schema).let: childText =>
+            val atomText = spans.last(0).tt
+            val previousEnd =
+              if spans.length >= 2 then spans(spans.length - 2)(2) else node.keywordEnd
+            val indent = lineText.substring(0, node.indent).nn + "  "
 
-              val patched =
-                (lines.take(line)
-                 :+ lineText.substring(0, previousEnd).nn
-                 :+ s"$indent$childText")
-                ++ lines.drop(line + 1)
+            val patched =
+              (lines.take(line)
+               :+ lineText.substring(0, previousEnd).nn
+               :+ s"$indent$childText")
+              ++ lines.drop(line + 1)
 
-              verifiedAction(text, patched.mkString("\n").tt, schema):
-                Lsp.CodeAction
-                  ( title = t"Move `$atomText` to a child compound line",
-                    kind  = t"refactor.rewrite",
-                    edit  = Lsp.WorkspaceEdit(changes = Map.of(scala.Predef.Map(uri -> List(
-                      Lsp.TextEdit
-                        ( Lsp.Range
-                            ( Lsp.Position(line, previousEnd),
-                              Lsp.Position(line, lineText.length) ),
-                          t"\n$indent$childText" ))))) )
+            verifiedAction(text, patched.mkString("\n").tt, schema):
+              Lsp.CodeAction
+                ( title = t"Move `$atomText` to a child compound line",
+                  kind  = t"refactor.rewrite",
+                  edit  = Lsp.WorkspaceEdit(changes = Map.of(scala.Predef.Map(uri -> List(
+                    Lsp.TextEdit
+                      ( Lsp.Range
+                          ( Lsp.Position(line, previousEnd),
+                            Lsp.Position(line, lineText.length) ),
+                        t"\n$indent$childText" ))))) )
     . getOrElse(Unset)
 
   // The inverse of `expandAtomAction`: fold the child compound at `line` back onto its parent's
@@ -801,8 +849,7 @@ object TelServer:
       val payload = lines.lift(node.line + 1).exists: next =>
         leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
 
-      payload || nodeLine.substring(node.keywordEnd).nn.contains("  ")
-      || tokens(nodeLine).stdlib.exists(_(0) == sigil)
+      payload || tokens(nodeLine).stdlib.exists(_(0) == sigil)
 
     nodeChain(tree, line).reverse match
       case child :: parent :: _
@@ -813,20 +860,28 @@ object TelServer:
         val owner = enclosingStruct(tree, parent.line, parent.indent, schema)
 
         memberStruct(owner, parent.keyword, schema).let: parentStruct =>
+          val childLine = lines.lift(child.line).getOrElse("")
+          val childSpans = inlineAtomSpans(childLine, child.keywordEnd)
+
           val atom: Optional[Text] =
             memberType(parentStruct, child.keyword, schema).let(resolvedType(_, schema)).let:
               case _: Tels.Scalar =>
-                val atoms = child.atoms.stdlib
-                if atoms.length == 1 then atoms.head else Unset
+                if childSpans.length == 1 then childSpans.head(0).tt else Unset
 
-              case Tels.Flag => if child.atoms.isEmpty then child.keyword else Unset
+              case Tels.Flag => if childSpans.isEmpty then child.keyword else Unset
               case _         => Unset
 
           atom.let: atom =>
             val parentLine = lines.lift(parent.line).getOrElse("")
 
+            // A hard gap is needed when the parent line is already in hard mode — a single space
+            // would merge the atom into the phrase before it — or when the atom itself contains a
+            // space and must stay one phrase.
+            val parentHard = parentLine.substring(parent.keywordEnd).nn.contains("  ")
+            val gap = gapFor(atom, parentHard)
+
             val patched =
-              (lines.take(parent.line) :+ s"$parentLine $atom") ++ lines.drop(child.line + 1)
+              (lines.take(parent.line) :+ s"$parentLine$gap$atom") ++ lines.drop(child.line + 1)
 
             verifiedAction(text, patched.mkString("\n").tt, schema):
               Lsp.CodeAction
@@ -837,7 +892,7 @@ object TelServer:
                         ( Lsp.Range
                             ( Lsp.Position(parent.line, parentLine.length),
                               Lsp.Position(parent.line, parentLine.length) ),
-                          t" $atom" ),
+                          t"$gap$atom" ),
                       Lsp.TextEdit
                         ( Lsp.Range
                             ( Lsp.Position(child.line, 0),
@@ -973,7 +1028,7 @@ object TelServer:
         else members(pos) match
           case field: Tels.Field => resolved(field.fieldType) match
             case _: Tels.Scalar =>
-              result = t"${field.keyword} $atom"
+              result = t"${field.keyword}${gapFor(atom, false)}$atom"
               if !repeatable(field) then pos += 1
 
             case Tels.Flag =>
