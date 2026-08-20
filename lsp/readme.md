@@ -56,8 +56,7 @@ Features so far:
   malformed-schema errors such as `E306` (unrecognised keyword), plus a local `E210` check for
   duplicate (or built-in-colliding) definition names. Diagnostics are cleared when a document
   closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
-  identifier (the document is valid, just unvalidated); the known-spurious `E306` on scalar
-  `encoding` is downgraded to a `Warning` with an explanation.
+  identifier (the document is valid, just unvalidated).
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
   highlights** — derived from an indentation scan of the source. (Stratiform positions are looked up
   by keyword *path*, which can't disambiguate same-keyword siblings, so the scan stays authoritative
@@ -97,6 +96,17 @@ Features so far:
       slot, the **flags** (`optional`, `required`, `repeatable`, `irrepeatable`, derived from the
       meta-schema) after a member declaration, and the four built-in **validator names** on a
       `validate` line.
+- **Refactoring code actions** — when the schema is known, two inverse rewrites between the
+  presentations of a member (§20.2): **expand** moves a compound's last inline atom onto a child
+  line under the member's keyword (`pet amy` → `pet` / `name amy`), and **inline** folds a
+  first-child compound back onto its parent's line as an atom. Each action is offered **if and only
+  if it is verified meaning-preserving**: the candidate text is generated, and both versions are
+  parsed and type-assigned against the schema — the action appears only when both are error-free
+  and yield the *same semantic model* (§18.2). This is what catches §20.8's trap: in the contact
+  schema, `contact` / `  active` does NOT offer inlining, because as an atom `active` would re-bind
+  to the never-skipped optional Scalar `label`; conversely expanding `contact active` offers
+  `label active`, making the surprising positional binding explicit. Lines with remarks, hard gaps
+  (§10.3) or source/literal payloads are declined rather than risked.
 
 The whole tool is a single object, `tel.TelServer`, in
 [`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala). Its `main` dispatches on the

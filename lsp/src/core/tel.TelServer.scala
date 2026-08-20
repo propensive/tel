@@ -697,6 +697,303 @@ object TelServer:
       case _ =>
         Lsp.CompletionList()
 
+  // ── Code actions (refactoring) ─────────────────────────────────────────────
+  //
+  // Refactorings between the inline-atom and compound-child presentations of a member (§20.2).
+  // Every action is offered if and only if it is verified meaning-preserving: the candidate text is
+  // generated, then both the original and the candidate are parsed and type-assigned against the
+  // resolved schema, and the action is offered only when both assign without error AND yield the
+  // same §18.2 semantic model. Validity is therefore decided by the same machinery as the
+  // diagnostics — the positional walk below chooses the member keyword, but never the verdict.
+
+  private[tel] def codeActionsAt(uri: Text, text: Text, range: Lsp.Range, resolver: SchemaResolver)
+  :   List[Lsp.CodeAction] =
+
+    val (lines, tree) = structure(text)
+
+    documentSchema(lines, resolver) match
+      case schema: Tels =>
+        expandAtomAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
+        ::: inlineChildAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
+
+      case _ => Nil
+
+  // Move the LAST inline atom of the compound at `line` onto a child compound line. Restricted to
+  // the last atom so that no other atom's position — and hence its §20.2 positional binding —
+  // shifts; the moved atom re-binds to the same member by keyword, and the new child is inserted
+  // as the compound's first child, so the semantic model's element order (atoms, then children,
+  // each in source order) is also preserved. Anything more exotic — a remark on the line, a hard
+  // gap (which locks the rest of the line into one atom, §10.3), or a source/literal-atom payload
+  // (which must immediately follow its compound, §14/§15) — is declined rather than handled.
+  private def expandAtomAction
+     ( uri:    Text,
+       text:   Text,
+       lines:  IndexedSeq[String],
+       tree:   List[Node],
+       line:   Int,
+       schema: Tels )
+  :   Optional[Lsp.CodeAction] =
+
+    flatten(tree).stdlib.find(_.line == line).map: node =>
+      val lineText = lines.lift(line).getOrElse("")
+      val payload = lines.lift(line + 1).exists: next =>
+        leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
+
+      val hardGap = lineText.substring(node.keywordEnd).nn.contains("  ")
+      val sigil = pragmaOf(lines).sigil.toString
+      val remark = tokens(lineText).stdlib.exists(_(0) == sigil)
+
+      if node.atoms.isEmpty || payload || hardGap || remark then Unset
+      else
+        val struct = enclosingStruct(tree, node.line, node.indent, schema)
+
+        memberStruct(struct, node.keyword, schema).let: owner =>
+          expansionOf(owner, node.atoms, schema).let: childText =>
+            val lineTokens = tokens(lineText).stdlib
+            val atomText = node.atoms.stdlib.last
+
+            // The last token must be the atom being moved: with remarks and hard gaps already
+            // declined, the only way it is not is a scan/parse disagreement, declined likewise.
+            if lineTokens.length < 2 || lineTokens.last(0).tt != atomText then Unset
+            else
+              val previousEnd = lineTokens(lineTokens.length - 2)(2)
+              val indent = lineText.substring(0, node.indent).nn + "  "
+
+              val patched =
+                (lines.take(line)
+                 :+ lineText.substring(0, previousEnd).nn
+                 :+ s"$indent$childText")
+                ++ lines.drop(line + 1)
+
+              verifiedAction(text, patched.mkString("\n").tt, schema):
+                Lsp.CodeAction
+                  ( title = t"Move `$atomText` to a child compound line",
+                    kind  = t"refactor.rewrite",
+                    edit  = Lsp.WorkspaceEdit(changes = Map.of(scala.Predef.Map(uri -> List(
+                      Lsp.TextEdit
+                        ( Lsp.Range
+                            ( Lsp.Position(line, previousEnd),
+                              Lsp.Position(line, lineText.length) ),
+                          t"\n$indent$childText" ))))) )
+    . getOrElse(Unset)
+
+  // The inverse of `expandAtomAction`: fold the child compound at `line` back onto its parent's
+  // line as an inline atom. The child must be the parent's FIRST child and on the line immediately
+  // below it — appending its atom at the end of the parent's line then preserves the semantic
+  // model's element order exactly as the expansion did, and adjacency means no comment or blank
+  // line is orphaned by deleting the child's line. A Scalar-typed child of one atom inlines as its
+  // value; a Flag-typed field or select variant inlines as its keyword. Everything else — children
+  // of its own, a payload, a remark or hard gap on either line, an empty Scalar (its empty-string
+  // value has no inline spelling, §18.3) — is declined.
+  private def inlineChildAction
+     ( uri:    Text,
+       text:   Text,
+       lines:  IndexedSeq[String],
+       tree:   List[Node],
+       line:   Int,
+       schema: Tels )
+  :   Optional[Lsp.CodeAction] =
+
+    val sigil = pragmaOf(lines).sigil.toString
+
+    def declined(node: Node): Boolean =
+      val nodeLine = lines.lift(node.line).getOrElse("")
+      val payload = lines.lift(node.line + 1).exists: next =>
+        leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
+
+      payload || nodeLine.substring(node.keywordEnd).nn.contains("  ")
+      || tokens(nodeLine).stdlib.exists(_(0) == sigil)
+
+    nodeChain(tree, line).reverse match
+      case child :: parent :: _
+          if child.line == line && child.line == parent.line + 1 && child.children.isEmpty
+             && parent.children.stdlib.headOption.exists(_.line == line)
+             && !declined(child) && !declined(parent) =>
+
+        val owner = enclosingStruct(tree, parent.line, parent.indent, schema)
+
+        memberStruct(owner, parent.keyword, schema).let: parentStruct =>
+          val atom: Optional[Text] =
+            memberType(parentStruct, child.keyword, schema).let(resolvedType(_, schema)).let:
+              case _: Tels.Scalar =>
+                val atoms = child.atoms.stdlib
+                if atoms.length == 1 then atoms.head else Unset
+
+              case Tels.Flag => if child.atoms.isEmpty then child.keyword else Unset
+              case _         => Unset
+
+          atom.let: atom =>
+            val parentLine = lines.lift(parent.line).getOrElse("")
+
+            val patched =
+              (lines.take(parent.line) :+ s"$parentLine $atom") ++ lines.drop(child.line + 1)
+
+            verifiedAction(text, patched.mkString("\n").tt, schema):
+              Lsp.CodeAction
+                ( title = t"Inline `$atom` onto the `${parent.keyword}` line",
+                  kind  = t"refactor.inline",
+                  edit  = Lsp.WorkspaceEdit(changes = Map.of(scala.Predef.Map(uri -> List
+                    ( Lsp.TextEdit
+                        ( Lsp.Range
+                            ( Lsp.Position(parent.line, parentLine.length),
+                              Lsp.Position(parent.line, parentLine.length) ),
+                          t" $atom" ),
+                      Lsp.TextEdit
+                        ( Lsp.Range
+                            ( Lsp.Position(child.line, 0),
+                              Lsp.Position(child.line + 1, 0) ),
+                          t"" ))))) )
+
+      case _ => Unset
+
+  // The action, if and only if `candidate` is verified equivalent to `text`: both must parse and
+  // type-assign against `schema` without a single accrued error, and produce identical semantic
+  // models.
+  private def verifiedAction(text: Text, candidate: Text, schema: Tels)(action: => Lsp.CodeAction)
+  :   Optional[Lsp.CodeAction] =
+
+    assignedModel(text, schema).let: before =>
+      assignedModel(candidate, schema).let: after =>
+        if sameModel(before, after) then action else Unset
+
+  // The §18.2 semantic model of `text` under `schema`, or `Unset` if parsing or type assignment
+  // reports any error at all. The same accrual boundary as `diagnose`, so "no errors" here means
+  // exactly "no diagnostics there".
+  private def assignedModel(text: Text, schema: Tels): Optional[Tel.Element] =
+    var model: Optional[Tel.Element] = Unset
+
+    val accrued =
+      validate[Tel.Focus](Accrued()):
+        case error: Tel.Error => accrual.add(prior, error)
+      . protect:
+          val parsed = venture(text.read[Tel])
+
+          guard:
+            model = Tel.Type.assign(parsed(), schema)
+
+    if accrued.items.isEmpty then model else Unset
+
+  // Structural equality of two semantic models produced against the SAME schema: the flat keyword
+  // index fully identifies the member (and, through the schema, its type), so index, tree shape and
+  // scalar text suffice. Element order is compared too — order is part of the model — which makes
+  // the check conservative: a refactoring that merely reorders equivalent elements is declined.
+  private def sameModel(a: Tel.Element, b: Tel.Element): Boolean = (a, b) match
+    case (Tel.Element.Value(i, _, s), Tel.Element.Value(j, _, t)) => i == j && s == t
+
+    case (Tel.Element.Node(i, _, as), Tel.Element.Node(j, _, bs)) =>
+      i == j && as.length == bs.length
+      && as.readable.to(scala.List).zip(bs.readable.to(scala.List)).forall(sameModel(_, _))
+
+    case _ => false
+
+  // The child-compound line that the LAST atom of `atoms` expands to — `keyword value` for a
+  // Scalar-typed field, the bare atom text for a Flag field or select variant — or `Unset` when
+  // any atom fails to assign. This mirrors the §20.2 atom phase (the skip rule of step 3a, and
+  // step 3d's rule that a repeatable member's position is not advanced), but only to CHOOSE the
+  // keyword: a wrong choice yields a candidate that fails semantic verification, so correctness
+  // never depends on this walk.
+  // A member type with any `Reference` resolved through the schema's records and scalars (which
+  // include the built-ins, prepended at reconstruction). A reference to a select — or to nothing —
+  // resolves to `Unset`: the callers here treat both as "not this shape", and the genuine error is
+  // the validator's to report.
+  private def resolvedType(fieldType: Tels.Type, schema: Tels): Optional[Tels.Type] =
+    fieldType match
+      case Tels.Reference(name) =>
+        schema.records.find(_.name == name)
+        . map(record => Tels.Struct(record.members, record.validators): Tels.Type)
+        . orElse:
+            schema.scalars.find(_.name == name)
+            . map(definition => Tels.Scalar(definition.validators, definition.encoding): Tels.Type)
+        . getOrElse(Unset)
+
+      case other => other
+
+  private def expansionOf(struct: Tels.Struct, atoms: List[Text], schema: Tels): Optional[Text] =
+    val members = struct.members.readable.to(scala.List).toVector
+
+    def resolved(fieldType: Tels.Type): Optional[Tels.Type] = resolvedType(fieldType, schema)
+
+    def required(member: Tels.Member): Boolean = member match
+      case field: Tels.Field    => field.required != Tels.Polarity.Loose
+      case select: Tels.SelectRef => select.required != Tels.Polarity.Loose
+      case _: Tels.Exclude      => false
+
+    def repeatable(member: Tels.Member): Boolean = member match
+      case field: Tels.Field    => field.repeatable == Tels.Polarity.Loose
+      case select: Tels.SelectRef => select.repeatable == Tels.Polarity.Loose
+      case _: Tels.Exclude      => false
+
+    def variantsOf(select: Tels.SelectRef): scala.List[Tels.Variant] =
+      schema.selects.find(_.name == select.reference)
+      . map(_.variants.readable.to(scala.List)).getOrElse(scala.Nil)
+
+    def atomAssignable(member: Tels.Member): Boolean = member match
+      case field: Tels.Field => resolved(field.fieldType) match
+        case _: Tels.Scalar => true
+        case Tels.Flag      => true
+        case _              => false
+
+      case select: Tels.SelectRef =>
+        val variants = variantsOf(select)
+        variants.nonEmpty && variants.forall: variant =>
+          resolved(variant.variantType) match
+            case Tels.Flag => true
+            case _         => false
+
+      case _: Tels.Exclude => false
+
+    def flagShaped(member: Tels.Member): Boolean = member match
+      case field: Tels.Field => resolved(field.fieldType) match
+        case Tels.Flag => true
+        case _         => false
+
+      case select: Tels.SelectRef => atomAssignable(select)
+      case _: Tels.Exclude        => false
+
+    def matches(member: Tels.Member, atom: Text): Boolean = member match
+      case field: Tels.Field      => field.keyword == atom
+      case select: Tels.SelectRef => variantsOf(select).exists(_.keyword == atom)
+      case _: Tels.Exclude        => false
+
+    def skippable(member: Tels.Member, atom: Text): Boolean = member match
+      case _: Tels.Exclude => true
+      case _ =>
+        !required(member)
+        && (!atomAssignable(member) || (flagShaped(member) && !matches(member, atom)))
+
+    var pos = 0
+    var ok = true
+    var result: Optional[Text] = Unset
+
+    atoms.stdlib.foreach: atom =>
+      if ok then
+        while pos < members.length && skippable(members(pos), atom) do pos += 1
+
+        if pos >= members.length then ok = false
+        else members(pos) match
+          case field: Tels.Field => resolved(field.fieldType) match
+            case _: Tels.Scalar =>
+              result = t"${field.keyword} $atom"
+              if !repeatable(field) then pos += 1
+
+            case Tels.Flag =>
+              if atom == field.keyword then
+                result = atom
+                if !repeatable(field) then pos += 1
+              else ok = false
+
+            case _ => ok = false
+
+          case select: Tels.SelectRef =>
+            if matches(select, atom) then
+              result = atom
+              if !repeatable(select) then pos += 1
+            else ok = false
+
+          case _: Tels.Exclude => ok = false
+
+    if ok then result else Unset
+
   private def diagnostic
      ( entry:    (Optional[Tel.Focus], Tel.Error),
        lines:    IndexedSeq[String],
@@ -1285,6 +1582,9 @@ object TelServer:
                   client.publishDiagnostics(document.uri, Nil)
 
                 hover(hoverAt(document.text, position, resolver))
+                // Refactorings between inline-atom and compound-child presentation, offered only
+                // when verified meaning-preserving against the resolved schema.
+                codeActions(codeActionsAt(document.uri, document.text, range, resolver))
                 // A space triggers completion in the slot after a keyword: a `select`-typed field's
                 // variants, a member declaration's flags, or the pragma's schema identifier.
                 complete(t" ")(completions(document.text, position, resolver))

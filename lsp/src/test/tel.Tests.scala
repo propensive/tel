@@ -60,6 +60,20 @@ document
   def keyedDocument(identifier: Text, second: Text): Text =
     t"tel 1.0 $identifier\n\npet amy\npet $second\n"
 
+  // A schema whose record leads with a required Flag, so a flag atom's positional and keyword
+  // bindings coincide — the meaning-preserving case for the inline/expand code actions.
+  val flagsSchemaText: Text = """tel 1.0 https://tel-lang.org/schema/tels
+
+name flags
+
+record Widget
+  field visible Flag
+  field label String optional
+
+document
+  field widget Widget optional repeatable
+""".tt
+
   // A document with source-atom and literal-atom payloads (§14, §15): the payload lines must not
   // be mistaken for compounds by the structure scan.
   val atomForms: Text = """tel 1.0 https://example.org/documents-by-form
@@ -86,12 +100,17 @@ field looks-like-a-compound
     java.nio.file.Files.write
       ( registryDir.resolve("keyed.tel").nn, keyedSchemaText.s.getBytes("UTF-8").nn )
 
+    java.nio.file.Files.write
+      ( registryDir.resolve("flags.tel").nn, flagsSchemaText.s.getBytes("UTF-8").nn )
+
     val registry: TelServer.Registry = t"${registryDir.toString}".as[Path on Linux]
     val resolver = TelServer.SchemaResolver(registry)
     val schemaFile = t"${registryDir.toString}/contact.tel".as[Path on Linux]
     val signature: Text = SchemaCache.describe(schemaFile).let(_.id).or(t"")
     val keyedFile = t"${registryDir.toString}/keyed.tel".as[Path on Linux]
     val keyedSignature: Text = SchemaCache.describe(keyedFile).let(_.id).or(t"")
+    val flagsFile = t"${registryDir.toString}/flags.tel".as[Path on Linux]
+    val flagsSignature: Text = SchemaCache.describe(flagsFile).let(_.id).or(t"")
 
     suite(m"Schema resolution"):
       test(m"The registered schema's signature resolves"):
@@ -191,6 +210,115 @@ field looks-like-a-compound
         TelServer.flatten(TelServer.structure(atomForms)(1)).stdlib
         . find(_.keyword == t"literal-value").map(_.endLine)
       . assert(_ == Some(12))
+
+    suite(m"Code actions"):
+      val uri = t"file:///test.tel"
+      def at(line: Int): Lsp.Range = Lsp.Range(Lsp.Position(line, 0), Lsp.Position(line, 0))
+
+      // The `newText` of every edit an action carries.
+      def editTexts(actions: List[Lsp.CodeAction]): scala.List[String] =
+        actions.stdlib.flatMap: action =>
+          action.edit.let(_.changes).lay(scala.List[Lsp.TextEdit]()): changes =>
+            changes.stdlib.values.to(scala.List).flatMap(_.stdlib)
+        . map(_.newText.s)
+
+      // Apply every edit of the first action, back-to-front so earlier offsets stay valid.
+      def applied(text: Text, actions: List[Lsp.CodeAction]): Text =
+        actions.stdlib.headOption.flatMap(_.edit.let(_.changes).option).fold(text): changes =>
+          val edits = changes.stdlib.values.to(scala.List).flatMap(_.stdlib)
+          val ls = text.s.split("\n", -1).nn.toIndexedSeq.map(_.nn)
+          def offset(p: Lsp.Position): Int = ls.take(p.line).map(_.length + 1).sum + p.character
+          edits.sortBy(edit => offset(edit.range.start)).reverse.foldLeft(text.s): (acc, edit) =>
+            acc.substring(0, offset(edit.range.start)).nn + edit.newText.s
+            + acc.substring(offset(edit.range.end)).nn
+          . tt
+
+      // `pet amy` (line 2): `amy` binds positionally to Pet's required `name` field, so it can move
+      // to an explicit `name amy` child line.
+      test(m"Expanding the last atom of a record-typed compound is offered"):
+        TelServer.codeActionsAt(uri, keyedDocument(keyedSignature, t"cat"), at(2), resolver)
+        . stdlib.map(_.title.s)
+      . assert(_ == scala.List("Move `amy` to a child compound line"))
+
+      test(m"The expansion edit writes the member keyword on a child line"):
+        editTexts(TelServer.codeActionsAt(uri, keyedDocument(keyedSignature, t"cat"), at(2), resolver))
+      . assert(_ == scala.List("\n  name amy"))
+
+      test(m"The applied edit leaves a diagnostic-free document"):
+        val text = keyedDocument(keyedSignature, t"cat")
+        val actions = TelServer.codeActionsAt(uri, text, at(2), resolver)
+        TelServer.diagnose(applied(text, actions), resolver).stdlib
+        . count(_.severity == Lsp.DiagnosticSeverity.Error)
+      . assert(_ == 0)
+
+      // §20.8: in `contact active`, the atom binds to `label` — an optional Scalar member is never
+      // skipped — NOT to the Status select. The expansion makes that binding explicit, which is
+      // half the point of the refactoring.
+      test(m"Expansion names the member the atom actually binds to"):
+        editTexts(TelServer.codeActionsAt(uri, document(signature), at(4), resolver))
+      . assert(_ == scala.List("\n  label active"))
+
+      // `name Alice`: the compound's own type is a Scalar, so its atom is its value, not a member
+      // binding — there is nothing to expand.
+      test(m"A scalar-typed compound's value atom offers no action"):
+        TelServer.codeActionsAt(uri, document(signature), at(2), resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"No actions without a resolved schema"):
+        TelServer.codeActionsAt(uri, document(t"NoSuchSchema"), at(2), resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"A remark on the line declines the action"):
+        val text = t"tel 1.0 $keyedSignature\n\npet amy # first pet\n"
+        TelServer.codeActionsAt(uri, text, at(2), resolver).stdlib.length
+      . assert(_ == 0)
+
+      // ── The opposite direction: inlining a child compound as an atom ──
+
+      // The keyed document with `pet amy` already in expanded form.
+      def expandedKeyed(second: Text): Text =
+        t"tel 1.0 $keyedSignature\n\npet\n  name amy\npet $second\n"
+
+      test(m"Inlining a scalar-typed first child is offered"):
+        TelServer.codeActionsAt(uri, expandedKeyed(t"cat"), at(3), resolver)
+        . stdlib.map(_.title.s)
+      . assert(_ == scala.List("Inline `amy` onto the `pet` line"))
+
+      test(m"Inlining is declined when the child is not on the line below its parent"):
+        val text = t"tel 1.0 $keyedSignature\n\npet\n\n  name amy\npet cat\n"
+        TelServer.codeActionsAt(uri, text, at(4), resolver).stdlib.length
+      . assert(_ == 0)
+
+      // Inlining `active` onto `contact` would produce `contact active`, whose atom binds to
+      // `label` (an optional Scalar member is never skipped, §20.8) — NOT to the Status variant the
+      // child names. The semantic-model comparison catches the re-binding and declines the action.
+      test(m"Inlining is declined when the atom would re-bind to a different member"):
+        val text = t"tel 1.0 $signature\n\nname Alice\ncontact\n  active\n"
+        TelServer.codeActionsAt(uri, text, at(4), resolver).stdlib.length
+      . assert(_ == 0)
+
+      // In the flags schema, Widget's first member is the required Flag itself, so inlining is
+      // meaning-preserving and offered.
+      test(m"Inlining a flag-shaped child uses its keyword"):
+        val text = t"tel 1.0 $flagsSignature\n\nwidget\n  visible\n"
+        TelServer.codeActionsAt(uri, text, at(3), resolver)
+        . stdlib.map(_.title.s)
+      . assert(_ == scala.List("Inline `visible` onto the `widget` line"))
+
+      test(m"Flag expand and inline round-trip"):
+        val original = t"tel 1.0 $flagsSignature\n\nwidget visible\n"
+        val expanded = applied(original, TelServer.codeActionsAt(uri, original, at(2), resolver))
+        val inlined = applied(expanded, TelServer.codeActionsAt(uri, expanded, at(3), resolver))
+        inlined.s == original.s
+      . assert(_ == true)
+
+      // Expansion then inlining must return to the original text: the two actions are inverses.
+      test(m"Expand and inline round-trip"):
+        val original = keyedDocument(keyedSignature, t"cat")
+        val expanded = applied(original, TelServer.codeActionsAt(uri, original, at(2), resolver))
+        val inlined = applied(expanded, TelServer.codeActionsAt(uri, expanded, at(3), resolver))
+        inlined.s == original.s
+      . assert(_ == true)
 
     suite(m"Hover"):
       test(m"Hovering a field keyword shows its schema declaration"):
