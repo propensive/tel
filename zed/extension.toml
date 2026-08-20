@@ -12,5 +12,5 @@ languages = ["TEL"]
 
 [grammars.tel]
 repository = "https://github.com/propensive/tel"
-rev = "a44ddc9b0210cb7541c10995c9bfab4ea1ad0f65"
+rev = "7969f72021265dc80afeea5aa1bfb51caa682629"
 path = "ref/tree-sitter-tel"
