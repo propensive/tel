@@ -13,16 +13,10 @@ Document {
                     remark: None,
                     children: [],
                 },
-                Compound {
-                    keyword: "child",
-                    atoms: [],
-                    remark: None,
-                    children: [],
-                },
             ],
-            trailing_blank_lines: 1,
+            trailing_blank_lines: 2,
         },
     ],
 }
 errors:
-  E107 [7,8): Odd indentation
+  E111 [8,12): Over-indentation

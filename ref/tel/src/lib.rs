@@ -3403,6 +3403,7 @@ impl ParserState {
             schema,
             ancestors: Vec::new(),
             boundary: None,
+            indent_reported: std::collections::HashSet::new(),
         };
         let blocks = bld.parse_blocks(-1); // -1 = accept indent 0
         let boundary = bld.boundary;
@@ -3436,6 +3437,16 @@ struct TreeCtx<'a> {
     /// the current document and begins a new one on the following line. Set
     /// once, when the structural parser first encounters such a line.
     boundary: Option<usize>,
+    /// Raw-line indices whose indentation defect (E106/E107) has already been
+    /// reported. `line_indent` is called more than once for the same line —
+    /// `parse_compound_body` inspects the line to decide whether it opens a
+    /// source atom, a literal atom or a child block, and on declining it
+    /// leaves the line for the enclosing `parse_blocks` loop, which inspects
+    /// it again. The recovered depth is deliberately *not* cached: schema-
+    /// aware E107 recovery (§19.5) resolves against `ancestors`, which differs
+    /// between those two call sites. Only the diagnostic is suppressed, since
+    /// a line has at most one indentation defect however often it is examined.
+    indent_reported: std::collections::HashSet<usize>,
 }
 
 /// What kind of line is this?
@@ -3461,16 +3472,24 @@ impl<'a> TreeCtx<'a> {
 
         // Check margin (E106)
         if chars.len() < margin {
-            self.errors.push(TelError::with_detail(
-                ErrorCode::E106, line.start, line.start + chars.len(), "line shorter than margin",
-            ));
+            let start = line.start;
+            let end = line.start + chars.len();
+            if self.indent_reported.insert(ri) {
+                self.errors.push(TelError::with_detail(
+                    ErrorCode::E106, start, end, "line shorter than margin",
+                ));
+            }
             return Some(0);
         }
         for i in 0..margin {
             if chars[i] != ' ' {
-                self.errors.push(TelError::with_detail(
-                    ErrorCode::E106, line.start, line.start + i + 1, "non-space within margin",
-                ));
+                let start = line.start;
+                let end = line.start + i + 1;
+                if self.indent_reported.insert(ri) {
+                    self.errors.push(TelError::with_detail(
+                        ErrorCode::E106, start, end, "non-space within margin",
+                    ));
+                }
                 return Some(0);
             }
         }
@@ -3484,7 +3503,11 @@ impl<'a> TreeCtx<'a> {
         // E107: odd indentation. §19.5 specifies schema-aware recovery when a
         // schema is available, falling back to the schema-independent
         // shallower-wins rule otherwise.
-        self.errors.push(TelError::new(ErrorCode::E107, line.start, line.start + margin + spaces));
+        let e107_start = line.start;
+        let e107_end = line.start + margin + spaces;
+        if self.indent_reported.insert(ri) {
+            self.errors.push(TelError::new(ErrorCode::E107, e107_start, e107_end));
+        }
         let shallower = spaces / 2;
         let deeper = shallower + 1;
 
@@ -3906,8 +3929,25 @@ impl<'a> TreeCtx<'a> {
         if self.idx >= self.raw.len() { return; }
         let ri = self.idx;
 
-        // If blank, don't consume — let parent handle blank lines and children
-        if self.raw[ri].is_blank() { return; }
+        // A blank line has no structural effect (§9) except for the three
+        // constructs that require the line to follow immediately: source atoms
+        // (§14), literal atoms (§15) and tabulated blocks (§16). So a blank
+        // does not close this compound: a following line one level deeper is
+        // still its child, and §13 resolves parentage against "the most recent
+        // preceding non-blank compound line".
+        //
+        // Only the child case survives the blank. A line at indent+2 or deeper
+        // after a blank is no longer a source or literal atom, so it is simply
+        // over-indented, and is left for the enclosing `parse_blocks` to report
+        // as E111.
+        if self.raw[ri].is_blank() {
+            let mut peek = ri;
+            while peek < self.raw.len() && self.raw[peek].is_blank() { peek += 1; }
+            if peek < self.raw.len() && self.peek_indent(peek) == Some(ci + 1) {
+                compound.children = self.parse_blocks(compound_indent);
+            }
+            return;
+        }
 
         let indent = match self.line_indent(ri) {
             Some(i) => i,
