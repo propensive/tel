@@ -1,6 +1,10 @@
 ; tree-sitter-tel highlights
 
-(pragma) @keyword.directive
+; The pragma is a directive line, not code, so it takes `preproc` rather than a `keyword`
+; sub-scope. Capture names resolve by stripping trailing components, so the previous
+; `keyword.directive` fell back to `keyword` in themes that do not define it — rendering the
+; pragma identically to every compound keyword.
+(pragma) @preproc
 (shebang) @comment.line
 
 ; The keyword that opens a compound is now a named node.
