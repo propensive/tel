@@ -11,6 +11,10 @@ import soundness.*
 import proscenium.{List, Nil, Chain, Map, Set, `::`}
 import proscenium.compat.*
 
+// `Accrued` appends to, and takes the length of, a `List` — both O(n) on a linked structure, and
+// both gated behind this acknowledgement. The lists are the errors in one document, so linear cost
+// is not a concern here.
+import asymptotics.linearSizeComplexity
 import backstops.stackTraceBackstop
 import charEncoders.utf8Encoder
 import errorDiagnostics.emptyDiagnostics
@@ -18,7 +22,6 @@ import executives.completions
 import interpreters.posixInterpreter
 import parsing.trackPositions
 import probates.awaitProbate
-import strategies.throwUnsafely
 import threading.virtualThreading
 import systems.javaSystem
 import interfaces.paths.pathOnLinux
@@ -43,8 +46,9 @@ object TelServer:
   //
   // Parse the document with Stratiform's TEL parser and surface every error it reports as an LSP
   // diagnostic. Parsing runs under a `validate` accrual boundary so that recoverable defects (§19.5)
-  // are collected rather than aborting on the first; `read[Tel]` yields the recovered document (which
-  // we discard here — diagnostics only need the errors) while each `Tel.Error` folds into `Accrued`.
+  // are collected rather than aborting on the first: each `Tel.Error` folds into `Accrued`, while
+  // `read[Tel]` yields the recovered document, which is kept both to locate the diagnostics and to
+  // run the schema passes against.
 
   // Accrual accumulator: each surfaced error with its focus. For schema validation, `Focus.span` is
   // filled by `Tel.Type.assign` (via `Focus.withSpan`) against the position-tracked document
@@ -173,33 +177,61 @@ object TelServer:
 
   private[tel] def diagnose(text: Text, resolver: SchemaResolver): List[Lsp.Diagnostic] =
     val lines = text.s.linesIterator.toIndexedSeq
-    val parse = parseErrors(text)
     val pragma = pragmaOf(lines)
     val resolution = resolver(pragma)
 
-    // When the document parses, validate it against its schema and surface the schema/validation
-    // errors. A schema *document* (its pragma names TELS) is checked against the built-in
-    // meta-schema; any other pragma schema — a bare name or BASE-256 signature — is resolved against
-    // the local registry populated by `tel schema add`.
-    // Kept for the diagnostic ranges as well as the schema pass: it is the position-tracked
-    // document against which a focus's keyword path is located when the focus arrives without a
-    // span of its own.
-    val document: Optional[Tel] = if parse.nonEmpty then Unset else safely(text.read[Tel])
+    // The parsed document, kept for the diagnostic ranges: when a focus arrives without a span of
+    // its own, its keyword path is located against this position-tracked tree. It is assigned
+    // inside the `guard` below, so it stays `Unset` exactly when the parse failed.
+    var document: Optional[Tel] = Unset
 
-    val schema =
-      if parse.nonEmpty then Nil
-      else document.lay(Nil): tel =>
-        resolution match
-          case Resolution.Meta(_, _)             => schemaErrors(tel)
-          case Resolution.Resolved(_, _, schema) => assignErrors(tel, schema)
-          case _                                 => Nil
+    // Parsing and the schema passes that depend on it share ONE accrual boundary, so the document
+    // is parsed once and the dependency between the two is carried by the `Venture` rather than by
+    // re-testing whether the parse produced errors. Forcing a failed venture skips the enclosing
+    // `guard`, which is what keeps the schema passes from running on a half-recovered tree and
+    // reporting cascade errors.
+    val accrued =
+      validate[Tel.Focus](Accrued()):
+        case error: Tel.Error => accrual.add(prior, error)
+      . protect:
+          val parsed = venture(text.read[Tel])
+
+          // When the document parses, validate it against its schema. A schema *document* (its
+          // pragma names TELS) is checked two ways: conformance to the built-in TELS meta-schema
+          // (`assign`), catching malformed schema syntax, and construction of the `Tels` from it
+          // (`Reconstructor.fromTel`), catching schema-validity errors (E2xx). Any other pragma
+          // schema — a bare name or BASE-256 signature — is resolved against the local registry
+          // populated by `tel schema add`. The two meta-schema passes are ventured separately so
+          // that a failure in the first still lets the second contribute its errors.
+          guard:
+            val tel = parsed()
+            document = tel
+
+            resolution match
+              case Resolution.Meta(_, _) =>
+                venture(Tel.Type.assign(tel, Tels.Axiom.tels))
+                venture(Tels.Reconstructor.fromTel(tel))
+
+              case Resolution.Resolved(_, _, schema) =>
+                venture(Tel.Type.assign(tel, schema))
+
+              case _ =>
+                ()
+
+    // The two meta-schema passes often report the same defect, so schema errors are collapsed by
+    // reason. This is deliberately not applied when the parse failed: parse errors legitimately
+    // repeat one reason at several positions, and the `guard` guarantees the two sets are never
+    // both present.
+    val entries =
+      if document.absent then accrued.items
+      else accrued.items.stdlib.distinctBy((_, error) => (error.reason.number, error.reason)).to(List)
 
     // Stratiform's `Reconstructor` leaves §20.1 schema-validity checking out of scope, so the one
     // cheap, high-value case — duplicate or built-in-colliding definition names (E210) — is
     // checked here against the source scan, on the offending name atom.
     val duplicates = resolution match
-      case Resolution.Meta(_, _) if parse.isEmpty => duplicateDefinitions(lines)
-      case _                                      => Nil
+      case Resolution.Meta(_, _) if !document.absent => duplicateDefinitions(lines)
+      case _                                         => Nil
 
     // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
     // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
@@ -219,7 +251,7 @@ object TelServer:
 
       case _ => Nil
 
-    ((parse ::: schema).map(diagnostic(_, lines, document)) ::: duplicates ::: unresolved).stdlib
+    (entries.map(diagnostic(_, lines, document)) ::: duplicates ::: unresolved).stdlib
     . distinctBy(entry => (entry.range, entry.code, entry.message))
     . to(List)
 
@@ -254,34 +286,6 @@ object TelServer:
         else seen += name
 
     out.to(scala.List).to(List)
-
-  private def parseErrors(text: Text): List[(Optional[Tel.Focus], Tel.Error)] =
-    validate[Tel.Focus](Accrued()):
-      case error: Tel.Error => accrual.add(prior, error)
-    . protect(text.read[Tel])
-    . items
-
-  // Validate a document against a schema (`Tel.Type.assign`), accruing every violation with the focus
-  // whose source position `assign` fills in.
-  private def assignErrors(tel: Tel, schema: Tels): List[(Optional[Tel.Focus], Tel.Error)] =
-    validate[Tel.Focus](Accrued()):
-      case error: Tel.Error => accrual.add(prior, error)
-    . protect(Tel.Type.assign(tel, schema))
-    . items
-
-  // Validate a schema document two ways: (1) conformance to the built-in TELS meta-schema
-  // (`assign`), catching malformed schema syntax; (2) constructing the `Tels` from it
-  // (`Reconstructor.fromTel`), catching schema-validity errors (E2xx). De-duplicated by code + reason.
-  private def schemaErrors(tel: Tel): List[(Optional[Tel.Focus], Tel.Error)] =
-    val construction =
-      validate[Tel.Focus](Accrued()):
-        case error: Tel.Error => accrual.add(prior, error)
-      . protect(Tels.Reconstructor.fromTel(tel))
-      . items
-
-    (assignErrors(tel, Tels.Axiom.tels) ::: construction).stdlib
-    . distinctBy((_, error) => (error.reason.number, error.reason))
-    . to(List)
 
   // ── Schema-aware information (hover + completion) ──────────────────────────────────────────────
   //
@@ -673,7 +677,7 @@ object TelServer:
         case _ => Lsp.CompletionList()
 
       // Type-name slot in a schema document — `field <name> <type>`, `variant <name> <type>`.
-      case (kw: Text, 2) if isSchemaDocument(lines) && Set(t"field", t"variant").stdlib.contains(kw) =>
+      case (kw: Text, 2) if isSchemaDocument(lines) && memberKeywords.stdlib.contains(kw) =>
         Lsp.CompletionList(items = typeNameCompletions(tree))
 
       // Validator slot in a schema document — `validate <name>`.
@@ -1218,6 +1222,9 @@ object TelServer:
       Out.println(t"Streaming messages sent/received by the tel language server. Press Ctrl-C to stop.")
       spool.lazyList.iterator.each: message =>
         Out.println(message)
+    // Deliberately a `catch`, not a `recover`: `InterruptedException` is the JVM's thread-interrupt
+    // signal (Ctrl-C, here), not a `Tactic` obligation, so there is nothing for a statically-checked
+    // handler to discharge.
     catch case _: InterruptedException => ()
     finally logSubscribers.synchronized(logSubscribers.remove(spool))
 
@@ -1247,55 +1254,66 @@ object TelServer:
           val registry: Registry = safely(SchemaCache.directory)
           val resolver = SchemaResolver(registry)
 
-          supervise:
-            // Scoped here, not at the object level: `Lsp.arguments` (the `executeCommand` payload)
-            // would otherwise shadow Exoskeleton's CLI `arguments`, which `main` matches on.
-            import Lsp.*
+          // The server loop runs under `supervise`, whose `Async.Error` is the one obligation this
+          // file does not discharge locally. It is handled here rather than by a blanket
+          // `throwUnsafely` so that every other raising call in this file stays statically checked.
+          // The report goes to `Err`: stdout is the LSP transport, and writing to it would corrupt
+          // the message stream.
+          recover:
+            case error: Async.Error =>
+              Err.println(t"tel: the language server terminated abnormally: ${error.message.text}")
+              Exit.Fail(1)
 
-            Lsp.listen(t"tel", t"0.1.0", TrafficLog):
-              opened:
-                client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
+          . protect:
+            supervise:
+              // Scoped here, not at the object level: `Lsp.arguments` (the `executeCommand` payload)
+              // would otherwise shadow Exoskeleton's CLI `arguments`, which `main` matches on.
+              import Lsp.*
 
-              // The document store applies incremental edits upstream, so `document.text` is already
-              // the post-edit text; the change events themselves are not needed.
-              changed:
-                client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
+              Lsp.listen(t"tel", t"0.1.0", TrafficLog):
+                opened:
+                  client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
 
-              // Clear the document's diagnostics when it closes, so they do not linger in the
-              // client's problems panel for a file that is no longer open.
-              closed:
-                client.publishDiagnostics(document.uri, Nil)
+                // The document store applies incremental edits upstream, so `document.text` is already
+                // the post-edit text; the change events themselves are not needed.
+                changed:
+                  client.publishDiagnostics(document.uri, diagnose(document.text, resolver))
 
-              hover(hoverAt(document.text, position, resolver))
-              // A space triggers completion in the slot after a keyword: a `select`-typed field's
-              // variants, a member declaration's flags, or the pragma's schema identifier.
-              complete(t" ")(completions(document.text, position, resolver))
-              definition(definitionAt(document.uri, document.text, position, resolver))
+                // Clear the document's diagnostics when it closes, so they do not linger in the
+                // client's problems panel for a file that is no longer open.
+                closed:
+                  client.publishDiagnostics(document.uri, Nil)
 
-              references:
-                val lines = structure(document.text)._1
+                hover(hoverAt(document.text, position, resolver))
+                // A space triggers completion in the slot after a keyword: a `select`-typed field's
+                // variants, a member declaration's flags, or the pragma's schema identifier.
+                complete(t" ")(completions(document.text, position, resolver))
+                definition(definitionAt(document.uri, document.text, position, resolver))
 
-                wordAt(position, lines) match
-                  case Some((word, _, _)) =>
-                    occurrences(word, lines).map: (line, start, end) =>
-                      location(document.uri, line, start, end)
+                references:
+                  val lines = structure(document.text)._1
 
-                  case None =>
-                    Nil
+                  wordAt(position, lines) match
+                    case Some((word, _, _)) =>
+                      occurrences(word, lines).map: (line, start, end) =>
+                        location(document.uri, line, start, end)
 
-              documentSymbols:
-                val (lines, tree) = structure(document.text)
-                tree.map(symbol(_, lines))
+                    case None =>
+                      Nil
 
-              foldingRanges(structure(document.text)._2.flatMap(folds))
+                documentSymbols:
+                  val (lines, tree) = structure(document.text)
+                  tree.map(symbol(_, lines))
 
-              selectionRanges:
-                val (lines, tree) = structure(document.text)
-                positions.map(selectionRange(_, tree, lines))
+                foldingRanges(structure(document.text)._2.flatMap(folds))
 
-              documentHighlights(highlights(document.text, position))
+                selectionRanges:
+                  val (lines, tree) = structure(document.text)
+                  positions.map(selectionRange(_, tree, lines))
 
-          Exit.Ok
+                documentHighlights(highlights(document.text, position))
+
+            Exit.Ok
 
       case SchemaCommand() :: ListCommand() :: _ =>
         execute(schemaList())
@@ -1318,45 +1336,65 @@ object TelServer:
           Out.println(t"  tel schema signature <name> [layer…] show a schema's palimpsest signature")
           Exit.Fail(1)
 
+  // The `tel schema …` subcommands each end at a `recover` boundary rather than a `catch`: the
+  // handler names the error types the body can actually raise, so the compiler checks that every
+  // obligation is discharged and a new raising call cannot be added without being handled here. A
+  // bare `catch case error: Error` would swallow whatever arrived, including errors these bodies
+  // were never meant to absorb.
   private def schemaList()(using Stdio, Environment, System): Exit =
-    try
-      val entries = SchemaCache.entries(SchemaCache.directory)
-      if entries.isEmpty then Out.println(t"No schemas registered. Add one with `tel schema add`.")
-      else
-        val table = Scaffold[SchemaCache.Entry]
-          ( Column(t"Name")(_.name),
-            Column(t"BASE-256 id")(_.id),
-            Column(t"Layers")(_.layers) )
+    recover:
+      case error: Path.Error =>
+        Out.println(t"tel: could not list schemas: ${error.message.text}")
+        Exit.Fail(1)
 
-        Out.println(table.tabulate(entries).grid(120).render.join(t"\n"))
-      Exit.Ok
-    catch case error: Error =>
-      Out.println(t"tel: could not list schemas: ${error.message.text}")
-      Exit.Fail(1)
+    . protect:
+        val entries = SchemaCache.entries(SchemaCache.directory)
+        if entries.isEmpty then Out.println(t"No schemas registered. Add one with `tel schema add`.")
+        else
+          val table = Scaffold[SchemaCache.Entry]
+            ( Column(t"Name")(_.name),
+              Column(t"BASE-256 id")(_.id),
+              Column(t"Layers")(_.layers) )
+
+          Out.println(table.tabulate(entries).grid(120).render.join(t"\n"))
+        Exit.Ok
 
   // `Pathname` yields a `Path on Local` (the platform the client is running on); the registry — and
   // everything else that touches it — is typed `Path on Linux`, so the resolved path is re-encoded
   // into that world at this one boundary.
   private def schemaAdd(file: Path on Local)(using Stdio, Environment, System): Exit =
-    try
-      val entry = SchemaCache.add(SchemaCache.directory, file.encode.as[Path on Linux])
-      Out.println(t"Added schema `${entry.name}` (id ${entry.id}).")
-      Exit.Ok
-    catch case error: Error =>
+    def failed(error: Error): Exit =
       Out.println(t"tel: could not add schema: ${error.message.text}")
       Exit.Fail(1)
 
+    recover:
+      case error: Bintel.Error     => failed(error)
+      case error: Tel.Error        => failed(error)
+      case error: Io.Error         => failed(error)
+      case error: Truncation.Error => failed(error)
+      case error: Path.Error       => failed(error)
+
+    . protect:
+        val entry = SchemaCache.add(SchemaCache.directory, file.encode.as[Path on Linux])
+        Out.println(t"Added schema `${entry.name}` (id ${entry.id}).")
+        Exit.Ok
+
   private def schemaSignature(name: Text, layers: List[Text])(using Stdio, Environment, System): Exit =
-    try
-      SchemaCache.load(SchemaCache.directory, name) match
-        case tel: Tel =>
-          Out.println(SchemaCache.signature(tel, layers))
-          Exit.Ok
-
-        case _ =>
-          Out.println(t"tel: no schema named `$name` in the registry")
-          Exit.Fail(1)
-
-    catch case error: Error =>
+    def failed(error: Error): Exit =
       Out.println(t"tel: could not compute signature: ${error.message.text}")
       Exit.Fail(1)
+
+    recover:
+      case error: Bintel.Error => failed(error)
+      case error: Tel.Error    => failed(error)
+      case error: Path.Error   => failed(error)
+
+    . protect:
+        SchemaCache.load(SchemaCache.directory, name) match
+          case tel: Tel =>
+            Out.println(SchemaCache.signature(tel, layers))
+            Exit.Ok
+
+          case _ =>
+            Out.println(t"tel: no schema named `$name` in the registry")
+            Exit.Fail(1)

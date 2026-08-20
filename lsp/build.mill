@@ -21,14 +21,13 @@ object settings:
   //   2. Local (fork developers). Point `SOUNDNESS_SCALA_HOME` at a `make`-built `release`
   //      directory to use its `release/lib` jars directly instead of downloading.
   //
-  // `scalaVersion` is the *coordinate* version every artifact is force-versioned to; it must match
-  // the version string the jars were built with. From `3.9.0-RC4-p1` on it coincides with the
-  // release tag (earlier releases shipped jars built as e.g. `3.9.0-RC1-propensive`).
   // These must match the values the Soundness build used, since the fork's TASTy is only readable
-  // by the compiler that wrote it: `scalaVersion` is the coordinate the artifacts were force-versioned
-  // to, `scalaRelease` the release tag whose tarball supplies the jars.
-  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.0-RC5-p11")
-  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.0-RC5-p13")
+  // by the compiler that wrote it: `scalaVersion` is the coordinate every artifact is
+  // force-versioned to, `scalaRelease` the release tag whose tarball supplies the jars. They are
+  // separate concepts — a release may ship jars built as an earlier coordinate — but from
+  // `3.9.0-RC4-p1` on they have generally coincided, as they do here.
+  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.0-RC5-p14")
+  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.0-RC5-p14")
 
   // Empty by default → download `scalaRelease`.
   val scalaHome = sys.env.getOrElse("SOUNDNESS_SCALA_HOME", "")

@@ -6,16 +6,16 @@ The `tel` executable, built in Scala with the Soundness ecosystem and packaged i
 > **Build note:** Soundness now publishes only *bundles*, under the `dev.propensive` group, so this
 > build depends on four of them — `soundness-base`, `soundness-data` (Stratiform), `soundness-cli`
 > and `soundness-tool` (Exegesis) — rather than one artifact per library. The pinned version is
-> **0.0.1-TEST**, a local build of Soundness's `stratiform/staged-codecs` branch (the one carrying
-> TEL `key` fields, TELP paths and scalar codecs), resolved from `~/.ivy2/local`; override with
-> `$SOUNDNESS_VERSION`. Reproduce it with
+> **0.0.1-TEST**, a local build of Soundness's `sibylline` branch — which carries the TEL `key`
+> fields, TELP paths and scalar codecs this server needs — resolved from `~/.ivy2/local`; override
+> with `$SOUNDNESS_VERSION`. Reproduce it with
 > `SOUNDNESS_RELEASE_VERSION=0.0.1-TEST ./mill 'soundness.{base,cli,data,tool}.publishLocal'`
 > in that worktree (the version must be given explicitly; the git-describe fallback picks up a stray
 > tag).
 >
 > Soundness is built with the propensive Scala fork, and its TASTy is only readable by that
 > compiler, so `scalaVersion`/`scalaRelease` here must match the values the Soundness build used —
-> currently the coordinate `3.9.0-RC5-p11` and the release tag `3.9.0-RC5-p13`. The build downloads
+> currently `3.9.0-RC5-p14` for both the coordinate and the release tag. The build downloads
 > that release from [proscala](https://github.com/propensive/proscala) into a shared cache
 > (`~/.cache/soundness/proscala/<tag>/lib`) — the same one the Soundness build uses — so no local
 > compiler build is needed; set `$SOUNDNESS_SCALA_HOME` to a `make`-built `release` directory to
