@@ -350,6 +350,40 @@ field looks-like-a-compound
         applied(text, TelServer.codeActionsAt(uri, text, at(4), resolver)).s
       . assert(_ == s"tel 1.0 $signature\n\nname Alice\nphone  +44  0207946\n")
 
+    suite(m"Validation reports"):
+      // Diagnostics for a document, in report order.
+      def problems(text: Text): scala.List[Lsp.Diagnostic] =
+        TelServer.diagnose(text, resolver).stdlib.sortBy: diagnostic =>
+          (diagnostic.range.start.line, diagnostic.range.start.character)
+
+      test(m"The LLM report is one header plus one line per problem, 1-based, unquoted"):
+        val text = keyedDocument(keyedSignature, t"amy")
+        TelServer.llmReport(t"pets.tel", problems(text)).map(_.s)
+      . assert: report =>
+          report.length == 2
+          && report(0).startsWith("pets.tel: 1 error")
+          && report(1).startsWith("line 3, columns 1-3 [E314] error: ")
+          && !report(1).contains("pet amy")
+
+      test(m"The LLM report on a clean document says so"):
+        TelServer.llmReport(t"pets.tel", problems(keyedDocument(keyedSignature, t"cat"))).map(_.s)
+      . assert(_ == scala.List("pets.tel: no problems"))
+
+      test(m"The human report quotes the offending line with carets beneath the span"):
+        val text = keyedDocument(keyedSignature, t"amy")
+        TelServer.humanReport(t"pets.tel", text.s.linesIterator.toIndexedSeq, problems(text))
+        . map(_.plain.s)
+      . assert: report =>
+          report.exists(_.contains("pet amy"))
+          && report.exists(_.contains("^"))
+          && report.last == "pets.tel: 1 error"
+
+      test(m"The human report on a clean document reports success"):
+        val text = keyedDocument(keyedSignature, t"cat")
+        TelServer.humanReport(t"pets.tel", text.s.linesIterator.toIndexedSeq, problems(text))
+        . map(_.plain.s)
+      . assert(_ == scala.List("✓ pets.tel: no problems found"))
+
     suite(m"Hover"):
       test(m"Hovering a field keyword shows its schema declaration"):
         TelServer.hoverAt(document(signature), Lsp.Position(3, 2), resolver)

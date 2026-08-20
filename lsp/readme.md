@@ -32,6 +32,13 @@ It is organised around subcommands:
   registry (relative paths resolve against the invoking shell's directory).
 - **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
   with the named layers (in order; none = the base schema).
+- **`tel validate <file> [--llm]`** — parse and validate a TEL file, reporting exactly the
+  diagnostics the LSP would publish (the same `diagnose` call, including schema resolution against
+  the registry), and exiting nonzero when any error is found. The default report is for humans:
+  each problem quotes its source line with the offending span coloured and caret-underlined.
+  `--llm` emits a quotation-free report — one line per problem, with 1-based line and column
+  positions, the E-code and the message — the right shape to paste to (or pipe through) an LLM,
+  which has the file and needs addresses, not excerpts.
 
 The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
 CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against

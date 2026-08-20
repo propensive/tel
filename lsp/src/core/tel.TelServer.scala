@@ -1548,6 +1548,128 @@ object TelServer:
 
       case None => schemaDefinition(lines, tree, position, resolver)
 
+  // ── Validation report (`tel validate`) ──────────────────────────────────────────────────────
+  //
+  // A command-line front-end to exactly the diagnostics the LSP publishes: the same `diagnose`
+  // call, so the CLI and the editor can never disagree about a document. Two renderings: a human
+  // one that quotes each offending line with the error span highlighted, and an `--llm` one that
+  // gives one line per problem with 1-based positions and no source quotation — the reader has
+  // the file; what it needs is an unambiguous address and the reason.
+
+  private def severityOf(diagnostic: Lsp.Diagnostic): Lsp.DiagnosticSeverity =
+    diagnostic.severity.or(Lsp.DiagnosticSeverity.Error)
+
+  private def severityWord(severity: Lsp.DiagnosticSeverity): Text = severity match
+    case Lsp.DiagnosticSeverity.Error       => t"error"
+    case Lsp.DiagnosticSeverity.Warning     => t"warning"
+    case Lsp.DiagnosticSeverity.Information => t"note"
+    case Lsp.DiagnosticSeverity.Hint        => t"hint"
+
+  private def tinted(severity: Lsp.DiagnosticSeverity, text: Text): Teletype = severity match
+    case Lsp.DiagnosticSeverity.Error       => e"${WebColors.Tomato}($text)"
+    case Lsp.DiagnosticSeverity.Warning     => e"${WebColors.Gold}($text)"
+    case Lsp.DiagnosticSeverity.Information => e"${WebColors.DeepSkyBlue}($text)"
+    case Lsp.DiagnosticSeverity.Hint        => e"${WebColors.Gray}($text)"
+
+  // `1 error, 2 warnings` — only the categories that occur, in severity order.
+  private def problemCounts(diagnostics: scala.List[Lsp.Diagnostic]): Text =
+    scala.List
+      ( Lsp.DiagnosticSeverity.Error, Lsp.DiagnosticSeverity.Warning,
+        Lsp.DiagnosticSeverity.Information, Lsp.DiagnosticSeverity.Hint )
+    . map(severity => severity -> diagnostics.count(severityOf(_) == severity))
+    . collect { case (severity, n) if n > 0 =>
+        s"$n ${severityWord(severity)}${if n == 1 then "" else "s"}" }
+    . mkString(", ").tt
+
+  // One line per problem, positions 1-based, no source text. Columns are inclusive on both ends,
+  // so `columns 5-7` names three characters; a zero-width range names the single column at which
+  // the problem begins.
+  private[tel] def llmReport(path: Text, diagnostics: scala.List[Lsp.Diagnostic]): scala.List[Text] =
+    if diagnostics.isEmpty then scala.List(t"$path: no problems")
+    else
+      val header = t"$path: ${problemCounts(diagnostics)}"
+
+      header :: diagnostics.map: diagnostic =>
+        val start = diagnostic.range.start
+        val end = diagnostic.range.end
+
+        val where =
+          if start.line != end.line then t"lines ${start.line + 1}-${end.line + 1}"
+          else if end.character > start.character + 1
+          then t"line ${start.line + 1}, columns ${start.character + 1}-${end.character}"
+          else t"line ${start.line + 1}, column ${start.character + 1}"
+
+        val code = diagnostic.code.let(code => t" [$code]").or(t"")
+        t"$where$code ${severityWord(severityOf(diagnostic))}: ${diagnostic.message}"
+
+  // Each problem quotes its source line with the offending span coloured, above a caret line —
+  // colour for terminals that show it, carets for those that do not.
+  private[tel] def humanReport
+     ( path: Text, lines: IndexedSeq[String], diagnostics: scala.List[Lsp.Diagnostic] )
+  :   scala.List[Teletype] =
+
+    if diagnostics.isEmpty then scala.List(e"${WebColors.MediumSeaGreen}(✓) $path: no problems found")
+    else
+      val width = diagnostics.map(_.range.start.line + 1).max.toString.length
+
+      diagnostics.flatMap: diagnostic =>
+        val severity = severityOf(diagnostic)
+        val start = diagnostic.range.start
+        val code = diagnostic.code.let(code => e" $Bold($code)").or(e"")
+        val location = t"$path:${start.line + 1}:${start.character + 1}"
+
+        val header =
+          e"${tinted(severity, severityWord(severity))} $Bold($location)$code: ${diagnostic.message}"
+
+        lines.lift(start.line) match
+          case Some(line) =>
+            // The span to highlight: to the range's end on a single-line range, or to the end of
+            // the line when the range continues past it. A zero-width range still gets one caret.
+            val from = start.character.min(line.length)
+            val to =
+              if diagnostic.range.end.line == start.line
+              then diagnostic.range.end.character.min(line.length).max(from)
+              else line.length
+
+            val number = (start.line + 1).toString
+            val gutter = " ".repeat(width - number.length).nn + number
+            val carets = "^".repeat((to - from).max(1)).nn
+
+            scala.List
+              ( header,
+                e"  $gutter │ ${line.substring(0, from).nn}${tinted(severity, line.substring(from, to).nn.tt)}${line.substring(to).nn}",
+                e"  ${" ".repeat(width).nn} │ ${" ".repeat(from).nn}${tinted(severity, carets.tt)}" )
+
+          case None => scala.List(header)
+      :+ e""
+      :+ e"$path: ${problemCounts(diagnostics)}"
+
+  private def validateFile(file: Path on Local, llm: Boolean)(using Stdio, Environment, System): Exit =
+    recover:
+      case error: Path.Error =>
+        Out.println(t"tel: could not resolve ${file.encode}: ${error.message.text}")
+        Exit.Fail(1)
+
+    . protect:
+        SchemaCache.readText(file.encode.as[Path on Linux]) match
+          case text: Text =>
+            val registry: Registry = safely(SchemaCache.directory)
+            val resolver = SchemaResolver(registry)
+            val lines = text.s.linesIterator.toIndexedSeq
+
+            val diagnostics = diagnose(text, resolver).stdlib.sortBy: diagnostic =>
+              (diagnostic.range.start.line, diagnostic.range.start.character)
+
+            if llm then llmReport(file.encode, diagnostics).foreach(Out.println(_))
+            else humanReport(file.encode, lines, diagnostics).foreach(Out.println(_))
+
+            val errors = diagnostics.count(severityOf(_) == Lsp.DiagnosticSeverity.Error)
+            if errors > 0 then Exit.Fail(1) else Exit.Ok
+
+          case _ =>
+            Out.println(t"tel: could not read ${file.encode}")
+            Exit.Fail(1)
+
   // ── Live message log ────────────────────────────────────────────────────────────────────────
   //
   // The tool runs as an Ethereal daemon: one JVM hosts every `tel` invocation, and `TelServer` is a
@@ -1591,6 +1713,7 @@ object TelServer:
   private val AddCommand       = Subcommand("add", "add a schema file to the registry")
   private val ListCommand      = Subcommand("list", "list registered schemas")
   private val SignatureCommand = Subcommand("signature", "show a schema's palimpsest signature")
+  private val ValidateCommand  = Subcommand("validate", "parse and validate a TEL file, reporting its errors")
 
   def main(args: Array[Text]): Unit = cli:
     arguments match
@@ -1681,6 +1804,10 @@ object TelServer:
       case SchemaCommand() :: SignatureCommand() :: Argument(name) :: layers =>
         execute(schemaSignature(name, layers.map(_())))
 
+      // `--llm` selects the quotation-free, position-only report an LLM can act on directly.
+      case ValidateCommand() :: Pathname(file) :: rest =>
+        execute(validateFile(file, rest.stdlib.exists(_() == t"--llm")))
+
       case _ =>
         execute:
           Out.println(t"Usage:")
@@ -1689,6 +1816,7 @@ object TelServer:
           Out.println(t"  tel schema list                      list registered schemas")
           Out.println(t"  tel schema add <file>                add a schema to the registry")
           Out.println(t"  tel schema signature <name> [layer…] show a schema's palimpsest signature")
+          Out.println(t"  tel validate <file> [--llm]          parse and validate a TEL file")
           Exit.Fail(1)
 
   // The `tel schema …` subcommands each end at a `recover` boundary rather than a `catch`: the
