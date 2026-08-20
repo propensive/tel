@@ -36,7 +36,7 @@ module.exports = grammar({
 
   extras: _ => [],
 
-  conflicts: _ => [],
+  conflicts: $ => [[$.compound]],
 
   rules: {
     document: $ => seq(
@@ -79,7 +79,17 @@ module.exports = grammar({
       optional(field('remark', $.remark)),
       $._newline,
       optional(choice($.source_atom, $.literal_atom)),
-      optional($.children),
+      // Blank lines may separate a compound from its children: a blank has no
+      // structural effect (§9) except for source atoms (§14), literal atoms
+      // (§15) and tabulated blocks (§16), all of which require the line to
+      // follow immediately. So a blank does not close the compound, and §13
+      // resolves parentage against "the most recent preceding non-blank
+      // compound line".
+      //
+      // This is ambiguous with ending the compound and taking the blank as a
+      // sibling line, hence the declared conflict: the two readings are told
+      // apart by whether an `_indent` follows, which only the scanner knows.
+      optional(seq(repeat($.blank_line), $.children)),
     ),
 
     // A visible wrapper around the hidden `_keyword` external token, so a compound's opening keyword

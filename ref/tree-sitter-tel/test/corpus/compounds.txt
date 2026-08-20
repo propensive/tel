@@ -111,3 +111,64 @@ a
             (children
               (compound
                 (keyword)))))))))
+
+==================
+blank line before first child
+==================
+parent
+
+  child
+---
+
+(document
+  (compound
+    (keyword)
+    (blank_line)
+    (children
+      (compound
+        (keyword)))))
+
+==================
+blank line before a deeper comment
+==================
+parent
+
+  # a note
+  child
+---
+
+(document
+  (compound
+    (keyword)
+    (blank_line)
+    (children
+      (comment)
+      (compound
+        (keyword)))))
+
+==================
+blank line does not make a source atom
+==================
+parent
+
+    payload
+---
+
+(document
+  (compound
+    (keyword))
+  (blank_line)
+  (compound
+    (keyword)))
+
+==================
+source atom still needs to follow immediately
+==================
+parent
+    payload
+---
+
+(document
+  (compound
+    (keyword)
+    (source_atom)))

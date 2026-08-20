@@ -66,6 +66,10 @@
       "required": false,
       "types": [
         {
+          "type": "blank_line",
+          "named": true
+        },
+        {
           "type": "children",
           "named": true
         },

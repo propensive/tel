@@ -226,8 +226,20 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "children"
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "blank_line"
+                  }
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "children"
+                }
+              ]
             },
             {
               "type": "BLANK"
@@ -360,7 +372,11 @@
     }
   },
   "extras": [],
-  "conflicts": [],
+  "conflicts": [
+    [
+      "compound"
+    ]
+  ],
   "precedences": [],
   "externals": [
     {
