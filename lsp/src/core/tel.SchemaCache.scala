@@ -151,8 +151,10 @@ object SchemaCache:
       if file.existent() then read(file) else Unset
 
   // As `resolve`, but returns the cache *file* backing the identifier (for cross-file navigation from
-  // a document into its schema). Matches by name first, then by base/fully-composed signature.
-  def resolveFile(directory: Path on Linux, identifier: Text): Optional[Path on Linux] =
+  // a document into its schema). Matches by name first, then by base/selected/fully-composed
+  // signature.
+  def resolveFile(directory: Path on Linux, identifier: Text, selection: List[Text] = Nil)
+  :   Optional[Path on Linux] =
     ensurePreloaded(directory)
     val byName = safely:
       val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
@@ -164,18 +166,28 @@ object SchemaCache:
           val tel = read(file)
           val base = signature(tel, Nil)
           val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
-          identifier == base || identifier == full
+          val selected = if selection.stdlib.isEmpty then Unset else signature(tel, selection)
+          identifier == base || identifier == full || selected.lay(false)(identifier == _)
         . or(false)
       . getOrElse(Unset)
 
-  // Resolve a pragma schema identifier — a bare schema name, or a bare BASE-256 signature — to a
-  // `Tels`, or `Unset` if it is neither cached nor resolvable. A name resolves to the base schema; a
-  // signature resolves to whichever cached schema's base or fully-composed signature it matches.
-  def resolve(directory: Path on Linux, identifier: Text): Optional[Tels] =
+  // Resolve a pragma schema identifier — a schema name (a LIRA reference's module-name tail), or a
+  // bare BASE-256 signature — to a `Tels`, or `Unset` if it is neither cached nor resolvable. A
+  // name resolves to the base schema composed with exactly the selected layers (§8.1; none = the
+  // base alone); a signature resolves to whichever cached schema's base, selected, or
+  // fully-composed signature it matches, composed accordingly.
+  def resolve(directory: Path on Linux, identifier: Text, selection: List[Text] = Nil)
+  :   Optional[Tels] =
     ensurePreloaded(directory)
+
+    def compose(tel: Tel): Optional[Tels] =
+      safely:
+        val base = Tels.Reconstructor.fromTel(tel)
+        if selection.stdlib.isEmpty then base else Tels.Layers.compose(base, selection)
+
     val byName = safely:
       val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
-      if file.existent() then Tels.Reconstructor.fromTel(read(file)) else Unset
+      if file.existent() then compose(read(file)) else Unset
 
     byName.or:
       safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).map: file =>
@@ -183,7 +195,9 @@ object SchemaCache:
           val tel = read(file)
           val base = signature(tel, Nil)
           val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
-          if identifier == base then Tels.Reconstructor.fromTel(tel)
+          val selected = if selection.stdlib.isEmpty then Unset else signature(tel, selection)
+          if selected.lay(false)(identifier == _) then compose(tel)
+          else if identifier == base then Tels.Reconstructor.fromTel(tel)
           else if identifier == full then Tels.Layers.compose(Tels.Reconstructor.fromTel(tel))
           else Unset
         . or(Unset)

@@ -33,10 +33,11 @@ object settings:
   val scalaHome = sys.env.getOrElse("SOUNDNESS_SCALA_HOME", "")
 
   // Soundness now publishes only *bundles*, under `dev.propensive` (one artifact per themed group of
-  // libraries) rather than one per library under `dev.soundness`. `0.0.1-TEST` is a local
-  // `publishLocal` build of the `stratiform/staged-codecs` branch, resolved from `~/.ivy2/local`;
-  // point this at a released version once that branch ships.
-  val soundnessVersion = sys.env.getOrElse("SOUNDNESS_VERSION", "0.0.1-TEST")
+  // libraries) rather than one per library under `dev.soundness`. `0.0.2-TEST` is a local
+  // `publishLocal` build of Soundness `main` carrying the LIRA schema-reference pragma grammar and
+  // Stratiform's schema-resolution engine (soundness#1841), resolved from `~/.ivy2/local`; point
+  // this at a released version once those changes ship.
+  val soundnessVersion = sys.env.getOrElse("SOUNDNESS_VERSION", "0.0.2-TEST")
 
   val scalaOptions = Seq(
     "-experimental",

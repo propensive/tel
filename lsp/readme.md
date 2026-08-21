@@ -6,10 +6,11 @@ The `tel` executable, built in Scala with the Soundness ecosystem and packaged i
 > **Build note:** Soundness now publishes only *bundles*, under the `dev.propensive` group, so this
 > build depends on four of them — `soundness-base`, `soundness-data` (Stratiform), `soundness-cli`
 > and `soundness-tool` (Exegesis) — rather than one artifact per library. The pinned version is
-> **0.0.1-TEST**, a local build of Soundness `main` — which carries the TEL `key` fields, TELP
-> paths and scalar codecs this server needs — resolved from `~/.ivy2/local`; override with
-> `$SOUNDNESS_VERSION`. Reproduce it with
-> `SOUNDNESS_RELEASE_VERSION=0.0.1-TEST ./mill 'soundness.{base,cli,data,sci,test,tool,web}.publishLocal'`
+> **0.0.2-TEST**, a local build of Soundness `main` — which carries the LIRA schema-reference
+> pragma grammar, Stratiform's schema-resolution engine (soundness#1841), and the TEL `key`
+> fields, TELP paths and scalar codecs this server needs — resolved from `~/.ivy2/local`; override
+> with `$SOUNDNESS_VERSION`. Reproduce it with
+> `SOUNDNESS_RELEASE_VERSION=0.0.2-TEST ./mill 'soundness.{base,cli,data,sci,test,tool,web}.publishLocal'`
 > in that worktree (the version must be given explicitly; the git-describe fallback picks up a stray
 > tag). Only four bundles are depended on directly, but the bundle dependency graph pulls in `sci`,
 > `test` and `web`, so all seven must be published or resolution fails.
@@ -185,22 +186,33 @@ testing instructions.
 ## Schema resolution (how the LSP validates ordinary documents)
 
 The LSP resolves a document's pragma schema against the registry and validates the document with
-`Tel.Type.assign`. Note that TEL's pragma grammar admits a schema identifier that is a **URL** or a
-**bare BASE-256 signature** — not a kebab-case name (a hyphenated name is a parse error, `E122`). So a
-document references a *registered* schema by its **signature** (from `tel schema signature`):
+`Tel.Type.assign`. TEL's pragma grammar (§8) identifies a schema by a **LIRA reference**
+(`domain/name`, optionally with a `:version` or `:tag` selector), optional **`+layer`
+selections**, and/or a **bare BASE-256 signature**:
 
 ```tel
-tel 1.0 ḡǼJûĿΫęôқδfΊzžμȑωûĺǑЬǨỵξϋ4SṽζẄǽOḁ
+tel 1.0 propensive.dev/contact +postal ḡǼJûĿΫęôқδfΊzžμȑωûĺǑЬǨỵξϋ4SṽζẄǽOḁ
 …
 ```
 
-The LSP matches that signature against each cached schema's base or fully-composed signature
-(memoized per identifier, invalidated when the registry directory changes). Schema *documents*
-(pragma names `tels`) are still validated against the built-in meta-schema. When the pragma
-names a schema that matches nothing in the registry, the LSP says so: an `Information` diagnostic
-(`schema-unresolved`) underlines the identifier, and hovering the pragma explains the resolution
-status (resolved schema name, signature and registry path; meta-schema; or the failure). The
-pragma's identifier slot also tab-completes to the registered schemas, inserting the signature.
+A reference resolves by its module-name tail against the registry's `<name>.tel` working copies —
+the local-development behaviour of §8.2, where a bare reference is deliberately local-only — and a
+signature is matched against each cached schema's base, selected, or fully-composed signature
+(memoized per identification, invalidated when the registry directory changes). `+layer`
+selections compose exactly the named layers, in the schema's declaration order; an unknown or
+out-of-order selection is reported as `E124`. Schema *documents* (pragma references the pinned
+meta-schema coordinate, `specification.tel/tels:1.0.0`) are validated against the built-in
+meta-schema. When the pragma names a schema that matches nothing in the registry, the LSP says so:
+an `Information` diagnostic (`schema-unresolved`) underlines the identifier, and hovering the
+pragma explains the resolution status (resolved schema name, signature and registry path;
+meta-schema; or the failure). The pragma's identifier slot also tab-completes to the registered
+schemas, inserting the signature.
+
+The **document outline** follows the compound structure of the document, classified by the
+resolved schema where one is available (records as objects, scalars as strings, flags as
+booleans, select variants as enum members; a schema document's declarations get their natural
+kinds), and **hover** surfaces the schema's `description` text for the member or value under the
+cursor.
 
 ## Testing
 
@@ -215,8 +227,10 @@ transport is involved; for a live smoke test, drive `tel lsp` over stdio and wat
 - **Deeper schema validity** — `assign`/`fromTel` catch malformed schema *syntax*, and the LSP
   checks duplicate/built-in-colliding definition names itself (E210), but the remaining semantic
   E2xx (layer-merge errors, empty selects) need Stratiform's §20.1 schema-validity pass.
-- **Resolution by name / URL** — only signature (and all-alphanumeric name) lookups work; mapping a
-  URL or kebab-case name to a cached schema would need a stored URL↔schema/name index.
+- **LIRA network resolution** — references resolve locally only (the registry stands in for the
+  developer's working copies). Fetching a `:version`/`:tag` release through LIRA (reliquary's
+  resolution delegate) and the pragma "rubber-stamp" code action — appending the resolved
+  signature to make a bare-reference document portable — are the next round.
 - **Formatting** (`tel.show`) and **rename**. Formatting is now within reach: Stratiform's §22.2
   machine-operation set is exposed through `open[Tel]`, including §22.3 canonical presentation.
 - **Per-node structure ranges from positions** — outline/folding use a source scan because

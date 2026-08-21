@@ -65,59 +65,88 @@ object TelServer:
 
   // ── Pragma and schema resolution ────────────────────────────────────────────────────────────
   //
-  // The pragma line — `tel <major>.<minor> [schema] [sigil]`, on line 0 or on line 1 after a `#!`
-  // interpreter directive — is parsed once into a `Pragma`, shared by diagnostics, hover,
-  // completion and the structure scan.
+  // The pragma line — `tel <major>.<minor> [<lira-ref>] [+<layer>…] [<signature>] [<sigil>]` (§8),
+  // on line 0 or on line 1 after a `#!` interpreter directive — is parsed once into a `Pragma`,
+  // shared by diagnostics, hover, completion and the structure scan. Phrases after the version
+  // are classified by form, exactly as the specification's parser does: a `+`-prefixed phrase is
+  // a layer selection, a phrase containing `/` is a LIRA schema reference, a well-formed BASE-256
+  // string of signature length is a schema signature, and a final single sigil character is the
+  // sigil.
 
   private[tel] case class PragmaId(name: Text, start: Int, end: Int)
 
-  private[tel] case class Pragma(line: Int, wellFormed: Boolean, identifier: Optional[PragmaId], sigil: Char)
+  private[tel] case class Pragma
+     ( line:       Int,
+       wellFormed: Boolean,
+       reference:  Optional[PragmaId],
+       layers:     List[PragmaId],
+       signature:  Optional[PragmaId],
+       sigil:      Char ):
 
-  // A well-formed pragma: `tel <major>.<minor>` optionally followed by a schema and/or sigil.
+    // The phrase resolution keys on: the signature when present (it is authoritative, §8.1),
+    // else the reference. Also the span diagnostics and hover anchor to.
+    def identifier: Optional[PragmaId] = signature.or(reference)
+    def layerNames: List[Text] = layers.map(_.name)
+
+  // A well-formed pragma: `tel <major>.<minor>` optionally followed by schema phrases.
   private val pragmaPattern = "tel [0-9]+\\.[0-9]+( .*)?"
+
+  // A well-formed BASE-256 schema signature phrase (§8.1): 33 characters for one component,
+  // `37 + 2·(n − 2)` for `n ≥ 2`, every character a Unicode letter or ASCII digit.
+  private def isSignatureToken(token: String): Boolean =
+    val length = token.codePointCount(0, token.length)
+    (length == 33 || (length >= 37 && (length - 37) % 2 == 0))
+    && token.codePoints.nn.allMatch(Character.isLetterOrDigit(_))
 
   private[tel] def pragmaOf(lines: IndexedSeq[String]): Pragma =
     val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
 
     lines.lift(index) match
       case Some(line) =>
-        def isSigil(token: String): Boolean =
-          token.length == 1 && !Character.isLetterOrDigit(token.charAt(0))
-
-        // The schema identifier is the first token after `tel <version>` that is not a single
-        // symbolic sigil character; the sigil is the first token that is.
         val rest = tokens(line).stdlib.drop(2)
-        val sigil = rest.collectFirst { case (token, _, _) if isSigil(token) => token.charAt(0) }
 
-        val identifier = rest.collectFirst:
-          case (token, start, end) if !isSigil(token) => PragmaId(token.tt, start, end)
+        var reference: Optional[PragmaId] = Unset
+        var signature: Optional[PragmaId] = Unset
+        var sigil: Optional[Char] = Unset
+        val layers = scm.ListBuffer[PragmaId]()
+        val count = rest.length
+
+        rest.zipWithIndex.foreach: (entry, position) =>
+          val (token, start, end) = entry
+
+          if token.startsWith("+") && token.length > 1 then
+            layers += PragmaId(token.substring(1).nn.tt, start, end)
+          else if token.contains("/") && token.length > 1 then
+            if reference.absent then reference = PragmaId(token.tt, start, end)
+          else if isSignatureToken(token) then
+            if signature.absent then signature = PragmaId(token.tt, start, end)
+          else if token.length == 1 && !Character.isLetterOrDigit(token.charAt(0))
+                  && token.charAt(0) != '+' && position == count - 1
+          then sigil = token.charAt(0)
 
         Pragma
-          ( index, line.matches(pragmaPattern), identifier.getOrElse(Unset),
-            sigil.getOrElse('#') )
+          ( index, line.matches(pragmaPattern), reference, layers.to(scala.List).to(List),
+            signature, sigil.or('#') )
 
       case None =>
-        Pragma(index, false, Unset, '#')
+        Pragma(index, false, Unset, Nil, Unset, '#')
 
-  // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? An identifier is
-  // either a bare name or a URL, optionally carrying a `#`-separated signature fragment, so the
-  // test is on the final path segment rather than a substring: a schema legitimately named
-  // `hotels` or hosted at `…/schema/models` must not be mistaken for the meta-schema.
-  // `tel-schema` is the pre-rename spelling, still accepted so documents written before TELS was
-  // named continue to validate.
+  // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? The meta-schema's
+  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:1.0.0`;
+  // Stratiform's `Reference.isTels` accepts the coordinate with or without its version pin.
   private[tel] def namesTels(identifier: Text): Boolean =
-    val withoutFragment = identifier.s.takeWhile(_ != '#')
-    val tail = withoutFragment.substring(withoutFragment.lastIndexOf('/') + 1)
-    tail == "tels" || tail == "tel-schema"
+    Tel.Pragma.Reference.parse(identifier).lay(false)(_.isTels)
 
-  // The outcome of resolving a document's pragma schema identifier. `Unresolved` is distinguished
-  // from `NoSchema` so that an identifier which matches nothing in the registry can be reported to
-  // the user, rather than validation being skipped invisibly.
+  // The outcome of resolving a document's pragma schema identification. `Unresolved` is
+  // distinguished from `NoSchema` so that an identifier which matches nothing in the registry can
+  // be reported to the user, rather than validation being skipped invisibly; `BadLayers` reports
+  // a resolved schema whose `+layer` selection does not match its declared layers (§8.1).
   private[tel] enum Resolution:
     case NoSchema
     case Meta(meta: Tels, file: Optional[Path on Linux])
     case Resolved(entry: SchemaCache.Entry, file: Path on Linux, schema: Tels)
     case Unresolved(identifier: Text)
+    case BadLayers(identifier: Text, detail: Text)
 
     // The schema to validate and navigate with, if resolution succeeded.
     def tels: Optional[Tels] = this match
@@ -131,11 +160,21 @@ object TelServer:
       case Resolved(_, file, _) => file
       case _                    => Unset
 
-  // Resolves pragma schema identifiers against the registry, memoized per identifier: matching a
-  // BASE-256 signature re-reads and re-hashes every cached schema, which is too slow to repeat on
-  // every keystroke. The memo is dropped whenever the registry directory's modification time
-  // changes (i.e. `tel schema add` ran).
-  private[tel] class SchemaResolver(registry: Registry):
+  // The registry lookup name for a pragma schema identifier: a LIRA reference resolves by its
+  // module-name tail (the local tel cache stores schemas as `<name>.tel`, and §2.7 of the design
+  // binds the published name to the declared name), with any `:version`/`:tag` selector stripped;
+  // a signature (or a bare name, for direct calls) is used verbatim.
+  private def lookupName(identifier: Text): Text =
+    if identifier.s.contains("/") then
+      val coordinate = identifier.s.takeWhile(_ != ':')
+      coordinate.substring(coordinate.lastIndexOf('/') + 1).nn.tt
+    else identifier
+
+  // Resolves pragma schema identifications against the registry, memoized per identification:
+  // matching a BASE-256 signature re-reads and re-hashes every cached schema, which is too slow
+  // to repeat on every keystroke. The memo is dropped whenever the registry directory's
+  // modification time changes (i.e. `tel schema add` ran).
+  private[tel] class PragmaResolver(registry: Registry):
     private val cache = scm.HashMap[Text, Resolution]()
     private var stamp: Long = 0L
 
@@ -144,38 +183,52 @@ object TelServer:
       case _                          => 0L
 
     def apply(pragma: Pragma): Resolution =
-      pragma.identifier.lay(Resolution.NoSchema)(id => apply(id.name))
+      pragma.identifier.lay(Resolution.NoSchema)(id => apply(id.name, pragma.layerNames))
 
-    def apply(identifier: Text): Resolution = synchronized:
+    def apply(identifier: Text): Resolution = apply(identifier, Nil)
+
+    def apply(identifier: Text, layers: List[Text]): Resolution = synchronized:
       val now = registryStamp
       if now != stamp then
         cache.clear()
         stamp = now
 
-      cache.getOrElseUpdate(identifier, resolve(identifier))
+      val key = (identifier :: layers).join(t" +")
+      cache.getOrElseUpdate(key, resolve(identifier, layers))
 
     def entries: List[SchemaCache.Entry] = registry match
       case directory: (Path on Linux) => SchemaCache.entries(directory)
       case _                          => Nil
 
-    private def resolve(identifier: Text): Resolution = registry match
+    private def resolve(identifier: Text, layers: List[Text]): Resolution = registry match
       case directory: (Path on Linux) =>
         if namesTels(identifier)
         then Resolution.Meta(Tels.Axiom.tels, SchemaCache.resolveFile(directory, t"tels"))
-        else SchemaCache.resolveFile(directory, identifier) match
-          case file: (Path on Linux) => SchemaCache.resolve(directory, identifier) match
-            case schema: Tels =>
-              val entry = SchemaCache.describe(file).or(SchemaCache.Entry(identifier, identifier, t""))
-              Resolution.Resolved(entry, file, schema)
+        else
+          val name = lookupName(identifier)
+          SchemaCache.resolveFile(directory, name, layers) match
+            case file: (Path on Linux) => SchemaCache.resolve(directory, name, layers) match
+              case schema: Tels =>
+                val entry =
+                  SchemaCache.describe(file).or(SchemaCache.Entry(identifier, identifier, t""))
+                Resolution.Resolved(entry, file, schema)
 
+              case _ =>
+                // The schema itself is present — only the layer selection can have failed. An
+                // empty selection failing means the file no longer parses, which `describe`
+                // above would also have caught; report the layers, the actionable case.
+                if layers.isEmpty then Resolution.Unresolved(identifier)
+                else Resolution.BadLayers
+                  ( identifier,
+                    t"the `+` layer selection does not match the schema's declared layers "
+                    + t"(unknown name, or not in declaration order)" )
             case _ => Resolution.Unresolved(identifier)
-          case _ => Resolution.Unresolved(identifier)
 
       case _ =>
         if namesTels(identifier) then Resolution.Meta(Tels.Axiom.tels, Unset)
         else Resolution.NoSchema
 
-  private[tel] def diagnose(text: Text, resolver: SchemaResolver): List[Lsp.Diagnostic] =
+  private[tel] def diagnose(text: Text, resolver: PragmaResolver): List[Lsp.Diagnostic] =
     val lines = text.s.linesIterator.toIndexedSeq
     val pragma = pragmaOf(lines)
     val resolution = resolver(pragma)
@@ -204,7 +257,7 @@ object TelServer:
           // pragma names TELS) is checked two ways: conformance to the built-in TELS meta-schema
           // (`assign`), catching malformed schema syntax, and construction of the `Tels` from it
           // (`Reconstructor.fromTel`), catching schema-validity errors (E2xx). Any other pragma
-          // schema — a bare name or BASE-256 signature — is resolved against the local registry
+          // schema — a LIRA reference or BASE-256 signature — is resolved against the local registry
           // populated by `tel schema add`. The two meta-schema passes are ventured separately so
           // that a failure in the first still lets the second contribute its errors.
           guard:
@@ -232,9 +285,26 @@ object TelServer:
     // reason. This is deliberately not applied when the parse failed: parse errors legitimately
     // repeat one reason at several positions, and the `guard` guarantees the two sets are never
     // both present.
-    val entries =
+    val collapsed =
       if document.absent then accrued.items
       else accrued.items.stdlib.distinctBy((_, error) => (error.reason.number, error.reason)).to(List)
+
+    // Stratiform's validity battery now checks reference coherence itself (E209/E217), but it
+    // aborts at the first defect without a source span. Those entries are dropped for a schema
+    // document and re-located precisely by the incoherences pass below, against the composed
+    // schema — recovered here, since the failed battery never assigned it.
+    val coherenceReasons = scala.List(Tel.Error.Reason.UnresolvedReference,
+        Tel.Error.Reason.ReferenceKindMismatch)
+
+    val entries = resolution match
+      case Resolution.Meta(_, _) if !document.absent =>
+        if composed.absent then composed = document.let: tel =>
+          safely(Tels.Layers.compose(Tels.Reconstructor.fromTel(tel)))
+
+        collapsed.filter((_, error) => !coherenceReasons.contains(error.reason))
+
+      case _ =>
+        collapsed
 
     // Stratiform's `Reconstructor` leaves §20.1 schema-validity checking out of scope, so the one
     // cheap, high-value case — duplicate or built-in-colliding definition names (E210) — is
@@ -252,6 +322,8 @@ object TelServer:
 
     // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
     // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
+    // A bad `+` layer selection against a resolved schema is an error (§8.1: unknown layer names,
+    // and selections out of declaration order — E124 — fail resolution).
     val unresolved = resolution match
       case Resolution.Unresolved(identifier) =>
         val range = pragma.identifier
@@ -265,6 +337,19 @@ object TelServer:
             source   = t"tel",
             message  = t"Schema `$identifier` is not registered, so this document is parsed but "
                        + t"not validated. Register the schema with `tel schema add <file>`." ))
+
+      case Resolution.BadLayers(identifier, detail) =>
+        val start = pragma.layers.headOption.map(_.start)
+          . getOrElse(pragma.identifier.let(_.start).or(0))
+        val end = pragma.layers.lastOption.map(_.end)
+          . getOrElse(pragma.identifier.let(_.end).or(1))
+
+        List(Lsp.Diagnostic
+          ( range    = Lsp.Range(Lsp.Position(pragma.line, start), Lsp.Position(pragma.line, end)),
+            severity = Lsp.DiagnosticSeverity.Error,
+            code     = t"E124",
+            source   = t"tel",
+            message  = t"Schema `$identifier` resolves, but $detail." ))
 
       case _ => Nil
 
@@ -560,7 +645,7 @@ object TelServer:
 
   // The schema a document is checked against: the built-in meta-schema for a schema document,
   // otherwise the registered schema its pragma resolves to.
-  private def documentSchema(lines: IndexedSeq[String], resolver: SchemaResolver): Optional[Tels] =
+  private def documentSchema(lines: IndexedSeq[String], resolver: PragmaResolver): Optional[Tels] =
     resolver(pragmaOf(lines)).tels
 
   private def isSchemaDocument(lines: IndexedSeq[String]): Boolean =
@@ -638,7 +723,7 @@ object TelServer:
        line:     Int,
        indent:   Int,
        keyword:  Text,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   Lsp.CompletionList =
 
     documentSchema(lines, resolver) match
@@ -660,7 +745,7 @@ object TelServer:
        indent:   Int,
        keyword:  Text,
        content:  String,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   List[Lsp.CompletionItem] =
 
     documentSchema(lines, resolver) match
@@ -686,7 +771,7 @@ object TelServer:
   // Pragma schema-identifier completions: each registered schema, inserted as its BASE-256
   // signature — the only bare identifier form the pragma grammar admits (§8) that the registry
   // can resolve.
-  private def pragmaCompletions(resolver: SchemaResolver): List[Lsp.CompletionItem] =
+  private def pragmaCompletions(resolver: PragmaResolver): List[Lsp.CompletionItem] =
     resolver.entries.map: (entry: SchemaCache.Entry) =>
       Lsp.CompletionItem
         ( label      = entry.name,
@@ -704,7 +789,7 @@ object TelServer:
           kind          = Lsp.CompletionItemKind.Function,
           documentation = Lsp.MarkupContent(value = blurb) )
 
-  private[tel] def completions(text: Text, position: Lsp.Position, resolver: SchemaResolver)
+  private[tel] def completions(text: Text, position: Lsp.Position, resolver: PragmaResolver)
   :   Lsp.CompletionList =
 
     val (lines, tree) = structure(text)
@@ -756,7 +841,7 @@ object TelServer:
   // same §18.2 semantic model. Validity is therefore decided by the same machinery as the
   // diagnostics — the positional walk below chooses the member keyword, but never the verdict.
 
-  private[tel] def codeActionsAt(uri: Text, text: Text, range: Lsp.Range, resolver: SchemaResolver)
+  private[tel] def codeActionsAt(uri: Text, text: Text, range: Lsp.Range, resolver: PragmaResolver)
   :   List[Lsp.CodeAction] =
 
     val (lines, tree) = structure(text)
@@ -1171,7 +1256,7 @@ object TelServer:
 
       Lsp.Range(Lsp.Position(range.start.line, from), Lsp.Position(range.start.line, to))
 
-  private[tel] def hoverAt(text: Text, position: Lsp.Position, resolver: SchemaResolver)
+  private[tel] def hoverAt(text: Text, position: Lsp.Position, resolver: PragmaResolver)
   :   Optional[Lsp.Hover] =
 
     val (lines, tree) = structure(text)
@@ -1190,7 +1275,7 @@ object TelServer:
       case None => Unset
 
   // Hover on the pragma line reports the schema-resolution status.
-  private def pragmaHover(pragma: Pragma, lines: IndexedSeq[String], resolver: SchemaResolver)
+  private def pragmaHover(pragma: Pragma, lines: IndexedSeq[String], resolver: PragmaResolver)
   :   Lsp.Hover =
 
     val range = pragma.identifier.let: id =>
@@ -1209,6 +1294,9 @@ object TelServer:
         t"**TEL document** — schema `$identifier` is not registered, so the document is parsed "
         + t"but not validated. Register it with `tel schema add <file>`."
 
+      case Resolution.BadLayers(identifier, detail) =>
+        t"**TEL document** — schema `$identifier` resolves, but $detail."
+
       case Resolution.NoSchema =>
         t"**TEL document** — pragma `${lines.lift(pragma.line).getOrElse("").tt}`"
 
@@ -1223,7 +1311,7 @@ object TelServer:
        position: Lsp.Position,
        index:    Int,
        word:     Text,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   Optional[Text] =
 
     if index == 0 then
@@ -1237,7 +1325,7 @@ object TelServer:
 
   private def keywordMarkup
      ( lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   Optional[Text] =
 
     documentSchema(lines, resolver) match
@@ -1248,7 +1336,7 @@ object TelServer:
 
   private def valueSlotMarkup
      ( lines: IndexedSeq[String], tree: List[Node], position: Lsp.Position, atom: Text,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   Optional[Text] =
 
     documentSchema(lines, resolver) match
@@ -1402,18 +1490,82 @@ object TelServer:
 
   // ── Structure features ────────────────────────────────────────────────────────────────────────
 
-  private def symbol(node: Node, lines: IndexedSeq[String]): Lsp.DocumentSymbol =
+  // The outline follows the compound structure of the document. When the document resolves to a
+  // schema, each entry is classified by what the schema says its keyword denotes — a record-typed
+  // member is an Object, a scalar-typed member a String, a Flag a Boolean, a select variant an
+  // EnumMember; a schema document's own declaration keywords get their natural kinds. Without a
+  // schema every entry is a plain Field, as before.
+  private[tel] def outline(text: Text, resolver: PragmaResolver): List[Lsp.DocumentSymbol] =
+    val (lines, tree) = structure(text)
+    val schema = documentSchema(lines, resolver)
+    val schemaDoc = isSchemaDocument(lines)
+    tree.map(symbol(_, lines, schema, schemaDoc, Nil))
+
+  // Declaration-keyword kinds for a schema document's outline.
+  private val schemaDocumentKinds: Map[Text, Lsp.SymbolKind] =
+    Map.of:
+      scala.Predef.Map
+        ( t"record"   -> Lsp.SymbolKind.Struct,
+          t"scalar"   -> Lsp.SymbolKind.Class,
+          t"select"   -> Lsp.SymbolKind.Enum,
+          t"variant"  -> Lsp.SymbolKind.EnumMember,
+          t"field"    -> Lsp.SymbolKind.Field,
+          t"document" -> Lsp.SymbolKind.Module,
+          t"layer"    -> Lsp.SymbolKind.Package,
+          t"overlay"  -> Lsp.SymbolKind.Namespace,
+          t"name"     -> Lsp.SymbolKind.Property )
+
+  // The symbol kind the resolved schema assigns to `keyword` within the struct reached along
+  // `path`: select variants are EnumMembers, flags Booleans, scalar-typed members Strings,
+  // record-typed members Objects.
+  private def schemaKind(schema: Tels, path: List[Text], keyword: Text): Lsp.SymbolKind =
+    structAt(schema, path) match
+      case struct: Tels.Struct =>
+        val isVariant = struct.members.readable.to(scala.List).exists:
+          case reference: Tels.SelectRef =>
+            schema.selects.find(_.name == reference.reference)
+            . exists(_.variants.readable.exists(_.keyword == keyword))
+          case _ => false
+
+        if isVariant then Lsp.SymbolKind.EnumMember
+        else memberType(struct, keyword, schema) match
+          case Tels.Flag            => Lsp.SymbolKind.Boolean
+          case Tels.Scalar(_, _)    => Lsp.SymbolKind.String
+          case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
+          case Tels.Reference(name) =>
+            if schema.records.readable.exists(_.name == name) then Lsp.SymbolKind.Object
+            else if schema.selects.readable.exists(_.name == name) then Lsp.SymbolKind.Enum
+            else Lsp.SymbolKind.String
+
+          case _ => Lsp.SymbolKind.Field
+
+      case _ => Lsp.SymbolKind.Field
+
+  private def symbol
+     ( node:      Node,
+       lines:     IndexedSeq[String],
+       schema:    Optional[Tels],
+       schemaDoc: Boolean,
+       path:      List[Text] )
+  :   Lsp.DocumentSymbol =
+
+    val kind =
+      if schemaDoc then schemaDocumentKinds.get(node.keyword).getOrElse(Lsp.SymbolKind.Field)
+      else schema.lay(Lsp.SymbolKind.Field)(schemaKind(_, path, node.keyword))
+
     Lsp.DocumentSymbol
       ( name           = node.keyword,
         detail         = if node.detail.s.isEmpty then Unset else node.detail,
-        kind           = Lsp.SymbolKind.Field,
+        kind           = kind,
         range          = Lsp.Range
                            ( Lsp.Position(node.line, node.indent),
                              Lsp.Position(node.endLine, lineLength(lines, node.endLine)) ),
         selectionRange = Lsp.Range
                            ( Lsp.Position(node.line, node.indent),
                              Lsp.Position(node.line, node.keywordEnd) ),
-        children       = if node.children.isEmpty then Unset else node.children.map(symbol(_, lines)) )
+        children       =
+          if node.children.isEmpty then Unset
+          else node.children.map(symbol(_, lines, schema, schemaDoc, path :+ node.keyword)) )
 
   private[tel] def folds(node: Node): List[Lsp.FoldingRange] =
     val self =
@@ -1551,7 +1703,7 @@ object TelServer:
      ( lines:    IndexedSeq[String],
        tree:     List[Node],
        position: Lsp.Position,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   List[Lsp.Location] =
 
     val pragma = pragmaOf(lines)
@@ -1581,7 +1733,7 @@ object TelServer:
      ( uri:      Text,
        text:     Text,
        position: Lsp.Position,
-       resolver: SchemaResolver )
+       resolver: PragmaResolver )
   :   List[Lsp.Location] =
 
     val (lines, tree) = structure(text)
@@ -1704,7 +1856,7 @@ object TelServer:
         SchemaCache.readText(file.encode.as[Path on Linux]) match
           case text: Text =>
             val registry: Registry = safely(SchemaCache.directory)
-            val resolver = SchemaResolver(registry)
+            val resolver = PragmaResolver(registry)
             val lines = text.s.linesIterator.toIndexedSeq
 
             val diagnostics = diagnose(text, resolver).stdlib.sortBy: diagnostic =>
@@ -1777,7 +1929,7 @@ object TelServer:
           // Resolved here, where the invoker's `Environment` is in scope, and closed over by the
           // handlers: `listen` keeps everything stateful within its own frame.
           val registry: Registry = safely(SchemaCache.directory)
-          val resolver = SchemaResolver(registry)
+          val resolver = PragmaResolver(registry)
 
           // The server loop runs under `supervise`, whose `Async.Error` is the one obligation this
           // file does not discharge locally. It is handled here rather than by a blanket
@@ -1829,9 +1981,7 @@ object TelServer:
                     case None =>
                       Nil
 
-                documentSymbols:
-                  val (lines, tree) = structure(document.text)
-                  tree.map(symbol(_, lines))
+                documentSymbols(outline(document.text, resolver))
 
                 foldingRanges(structure(document.text)._2.flatMap(folds))
 
