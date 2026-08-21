@@ -561,8 +561,8 @@ For `n ≥ 2` the signature is `36 + 2·(n − 2) + 1 = 37 + 2·(n − 2)` bytes
 - `n = 3`: body is the XOR of three padded hashes at offsets `0, 4, 6`, length
   `32 + 4 + 2 = 38` bytes; total signature length is 39 bytes.
 
-**Textual form.** When a schema signature appears in textual contexts — most notably the schema
-identifier of a TEL pragma (see §8.1 of the TEL Specification) — it is encoded with
+**Textual form.** When a schema signature appears in textual contexts — most notably the
+signature phrase of a TEL pragma (see §8.1 of the TEL Specification) — it is encoded with
 [BASE-256](base256.md), producing one Unicode character per signature byte. BASE-256 is chosen
 over BASE64-URL or hex because (a) it is the most compact character-per-byte encoding
 available — half the length of hex; (b) every character is a Unicode letter or digit, so the

@@ -1,4 +1,4 @@
-tel 1.0 https://tel-lang.org/schema/tel-schema
+tel 1.0 specification.tel/tels:1.0.0
 
 # This file shows the *composed* schema that results from applying every
 # layer in `contact-layered-schema.tel`, in the declared layer order, per

@@ -168,7 +168,6 @@ type Sigil =
   | "&"
   | "'"
   | "*"
-  | "+"
   | ","
   | "-"
   | "."
@@ -186,10 +185,11 @@ type Sigil =
   | "~";
 ```
 
-A character is **sigil-valid** if it is one of the twenty-four characters enumerated by `Sigil`
+A character is **sigil-valid** if it is one of the twenty-three characters enumerated by `Sigil`
 above — equivalently, if it is a single ASCII character that is not `U+0020` SPACE, `U+000A`
-LINE FEED, `U+000D` CARRIAGE RETURN, a letter, a digit, a control character, or a parenthetical
-symbol (§5). Every constraint on sigil characters in this specification (§8, §20.1, §21.5) is
+LINE FEED, `U+000D` CARRIAGE RETURN, `U+002B` PLUS SIGN, a letter, a digit, a control character,
+or a parenthetical symbol (§5). (`+` is excluded so that it can unambiguously introduce a layer
+selection on the pragma line, §8.1.) Every constraint on sigil characters in this specification (§8, §20.1, §21.5) is
 stated in terms of this definition.
 
 ### 6.1 Document Streams
@@ -256,22 +256,26 @@ The first phrase on the pragma line (its keyword, as defined in §10) MUST be `t
 `tel` is reserved: it MUST NOT appear as a `Field.keyword` in any `Struct`, or as a
 `Variant.keyword` in any `SelectDefinition`, within a schema (**E208**).
 
-The pragma line MUST contain at most three phrases after `tel` (version, schema identifier, and
-sigil). Any additional phrases are invalid (**E122**). Remarks (§11.2) are not recognised on the
-pragma line: a `<sigil> <text>` pattern there is simply a sequence of extra phrases, and is
-invalid for the same reason (**E122**).
+The keyword `tel` is followed by the following parameters, each OPTIONAL except the version,
+in this order:
+
+1. TEL version (REQUIRED)
+2. schema reference (§8.1)
+3. zero or more layer selections (§8.1)
+4. schema signature (§8.1)
+5. sigil
 
 The positional form of the pragma is:
 
 ```text
-tel 1.0 schema-id #
+tel 1.0 propensive.dev/build +publishing +maven ‹base256-signature› #
 ```
 
-The parameters are interpreted in order as follows:
-
-1. TEL version
-2. schema identifier
-3. sigil
+A sequence of phrases that violates this order or multiplicity — for example, a signature
+before a layer selection, two schema references, or two signatures — is invalid (**E122**).
+Remarks (§11.2) are not recognised on the pragma line: a `<sigil> <text>` pattern there is
+simply a sequence of phrases — a non-final sigil character and words — matching no pragma
+form, and is invalid as such (**E121**).
 
 The version parameter is REQUIRED: a pragma consisting of the keyword `tel` alone is invalid
 (**E104**). When present, it MUST have the form `x.y`, where `x` and `y` are non-negative
@@ -292,34 +296,93 @@ implementation MUST parse the document using the most recent minor version it kn
 major version; if the major version itself is unknown, it MUST use the latest version it knows
 overall.
 
-The schema identifier parameter is optional.
+The phrases after the version are classified by form, then checked against the positional
+order above:
 
-The sigil parameter is optional. It MUST be a single sigil-valid character (§6) (**E105**).
+- A phrase beginning with `+` is a **layer selection** (§8.1); the remainder of the phrase is
+  a layer name.
+- A phrase containing `/` and longer than one character is a **schema reference** (§8.1).
+- A phrase that is a valid BASE-256 string of length 33, or `37 + 2·(n − 2)` for some `n ≥ 2`,
+  is a **schema signature** (§8.1).
+- A final phrase consisting of a single character matching none of the above forms is the
+  **sigil** parameter; it MUST be a sigil-valid character (§6) (**E105**).
 
-The parameters are strictly positional: they are not distinguished by form. The sigil can
-therefore be specified only when a schema identifier is also given. In `tel 1.0 %`, the `%`
-occupies the schema-identifier position and is invalid there (**E121**); it is not read as a
-sigil. Consequently, a document whose pragma carries no schema identifier can depart from the
-default sigil `#` only through a schema supplied by invocation (§8.2, §8.3).
+Any other phrase matches no pragma form and is invalid (**E121**).
+
+The classification is unambiguous. The BASE-256 alphabet consists entirely of Unicode letters
+and ASCII digits (see the [BASE-256 Specification](base256.md) §4), so a signature can never
+contain `+`, `/`, `:`, or `.`; a schema reference always contains `/` and never begins with
+`+`; `+` is not sigil-valid (§6); and a lone `/` or `:` is too short to be a reference.
+Because classification is by form, a sigil may be given without any schema parameters:
+in `tel 1.0 %`, the `%` is read as the sigil.
 
 The default sigil is `#`, used unless the pragma or the document schema specifies a different one.
 
-### 8.1 Schema Identifier
+### 8.1 Schema Identification
 
-The schema identifier, if present, MUST be one of:
+A document's schema is identified in the pragma by up to three kinds of parameter — a schema
+reference, layer selections, and a schema signature — which together read as a single claim:
+*this document uses the referenced schema, with these layers, as attested by this signature.*
 
-- an HTTP or HTTPS URL, optionally with a fragment (the `#` separator and everything after it)
-  that is the **BASE-256-encoded schema signature** of the schema (as defined in §8 of the
-  [BinTEL Specification](bintel.md))
-- a bare BASE-256-encoded schema signature of the schema
+#### Schema Reference
 
-A schema identifier that does not match either of these forms is invalid (**E121**).
+A **schema reference** is a LIRA coordinate, optionally followed by a release selector:
 
-The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §3.5). A bare
-signature is distinguished from a URL by the absence of a `://` substring. The BASE-256 alphabet
-(see the [BASE-256 Specification](base256.md) §4) consists entirely of Unicode letters and
-ASCII digits — no whitespace or punctuation — so a schema identifier always occupies a single
-phrase.
+```text
+reference  = domain "/" module-name [":" selector]
+selector   = version | tag
+```
+
+- `domain` is a DNS domain name: the LIRA namespace, proven by a `_lira.<domain>` TXT record
+  and re-verified at every publish (LIRA Specification §2 of the distribution design).
+- `module-name` is LIRA's `module-name` scalar: kebab-case segments joined by `/` or `.`
+  (LIRA Specification §14).
+- `version` is LIRA's `semver` scalar: exactly `x.y.z`, each a decimal natural with no
+  superfluous leading zero. LIRA versions are derived from the release's compatibility grade,
+  not chosen (LIRA Specification §12.5); prerelease and build suffixes do not exist.
+- `tag` is LIRA's `tag-name` scalar: a letter followed by letters, digits, `-`, and `.`.
+  A version begins with a digit and a tag with a letter, so the two selector forms are
+  syntactically disjoint.
+
+A reference with a selector (`propensive.dev/build:2.1.0`, `specification.tel/jdk:jdk-19`)
+names exactly one published LIRA release and is globally resolvable (§8.2). A reference
+without a selector is a **development reference**: it resolves only against local state and
+is not portable (§8.2).
+
+`:` appears in neither the BASE-256 alphabet nor the coordinate grammar, and the coordinate
+grammar contains no whitespace, so a reference always occupies a single phrase.
+
+A schema is published under the module name it declares: a schema whose source contains
+`name foo` MUST be published as `‹domain›/foo`, and its declared layer names are the names
+addressable by layer selections. These bindings are enforced at publish time by the LIRA
+`tels` discipline, guaranteeing that the names in a pragma are exactly the names in the
+schema source a reader will find.
+
+The built-in `tels` meta-schema (§20.5) has the canonical, version-pinned coordinate
+`specification.tel/tels:1.0.0`. The pin is fixed until this specification is next revised; a
+later revision publishes a new LIRA release of `tels` and advances the pinned version.
+
+#### Layer Selections
+
+A schema may declare OPTIONAL layers. A document selects layers by listing them as
+`+`-prefixed phrases between the reference and the signature:
+
+```text
+tel 1.0 propensive.dev/build +publishing +maven ‹signature› #
+```
+
+Each selected layer name MUST match a layer declared by the referenced schema; an unknown
+name is a runtime resolution error (§8.2). Composition follows the schema's **declaration
+order**, and the pragma MUST list the selected layers in declaration order (**E124**). Each
+selected layer set therefore has exactly one canonical pragma spelling and exactly one
+composed signature; two documents selecting the same layers can never disagree on order and
+spuriously fail the compatibility check of §8.2.
+
+Layer selections without a schema reference are permitted only alongside a signature, where
+they serve as decomposition hints for library lookup (§8.2, resolution step 3): the names
+guide the match against declared layer names.
+
+#### Schema Signature
 
 A **schema signature** is a deterministic byte string derived from the 256-bit BLAKE3 value
 hashes of the schema's components (base schema and any layers, in order), constructed as a
@@ -332,12 +395,17 @@ composition (§20.3), and a producer extends a schema by appending each new laye
 palimpsest body. A one-component signature is 33 bytes (33 BASE-256 characters); a signature
 with `n ≥ 2` components is `37 + 2·(n − 2)` bytes (37, 39, 41, … for `n = 2, 3, 4, …`).
 
+When a signature follows layer selections, it is authoritative and MUST include them: the
+signature MUST decompose into exactly `1 + n` components — the referenced schema's base hash
+followed by the hashes of the `n` selected layers, in order. Any mismatch (wrong component
+count, wrong hashes, wrong order) is a runtime resolution error (§8.2).
+
 ### 8.2 Schema Resolution
 
 A schema may be supplied in two independent ways when parsing a TEL document:
 
 - an **invocation schema**, supplied directly to the parser by the calling application
-- a **document schema**, identified by the schema identifier in the pragma
+- a **document schema**, identified by the schema identification in the pragma (§8.1)
 
 The following table defines the outcome for each combination:
 
@@ -355,14 +423,11 @@ host language, enabling type-safe access through generated types, type providers
 mechanisms. When types are not statically known, the semantic model is still available but must be
 accessed through a dynamic or generic interface.
 
-Two schema identifiers **match** if:
-
-- both carry a signature, and the signatures are identical; or
-- neither carries a signature, and the URLs are identical
-
-A schema identifier that carries a signature takes precedence for matching purposes: a URL-only
-identifier and a URL-with-signature identifier for the same URL do not automatically match (the
-signature is authoritative).
+Two schema identifications **match** iff both carry a signature and the signatures are
+identical. A document whose pragma carries only a development reference (no selector, no
+signature) has no global identity and never matches an invocation schema by name; the
+"matching" and "compatible" rows of the table above apply only once a signature is in play —
+carried directly, or computed from a resolved release.
 
 A document carrying signature `S_doc` is **compatible** with a consumer carrying signature
 `S_cons` iff `S_doc <: S_cons` under §24 (the formal subtype relation). The signature-subsequence
@@ -392,52 +457,72 @@ order:
    to BinTEL inputs in self-contained mode; for TEL-source inputs and external-mode BinTEL
    inputs, resolution begins at step 1.
 1. **Built-in lookup.** If the document schema's signature equals the built-in `tels`
-   schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), the parser MUST
-   use the built-in `Schema` and skip the remaining steps.
+   schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), or its
+   reference is the pinned coordinate `specification.tel/tels:1.0.0` (§8.1), the parser MUST
+   use the built-in `Schema` and skip the remaining steps. Neither form requires network
+   access.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema signature.
    If the cache contains a `Schema` whose composed signature equals the document schema's
-   signature, the parser MUST use that cached `Schema`.
+   signature, the parser MUST use that cached `Schema`. Any content-addressed store may serve
+   this step — in particular, an implementation MAY consult both a tel schema cache and a
+   local LIRA store, in either order: a hash lookup is order-independent, because any store's
+   answer for a given signature is the right answer. No precedence rule is needed or
+   specified.
 3. **Library lookup.** If the document schema's signature decodes (per §8 of the BinTEL
    Specification) against the parser's library of known schemas and layers, the parser MUST use the
-   composition described by the decoded hash sequence.
-4. **URL fetch.** If the document schema carries a URL, the parser MAY fetch the body of that URL
-   over HTTPS (or HTTP, where the deployment permits non-confidential carriage). HTTPS MUST be
-   supported by any conforming network-capable implementation; HTTP support is OPTIONAL. The body
-   MUST be a TEL document conforming to the `tels` schema; on parse failure the resolution
-   fails. The parser MAY follow up to a small fixed number of HTTPS redirects (3 is RECOMMENDED);
-   it MUST NOT follow HTTPS-to-HTTP redirects.
+   composition described by the decoded hash sequence. Layer selections in the pragma (§8.1)
+   MAY guide the decomposition by matching declared layer names.
+4. **LIRA resolution.** A network-capable parser MAY resolve the schema through the LIRA
+   distribution system, according to the identification's form:
+   - **Signature present** (with or without a reference): resolve the signature's components
+     by exact identity through LIRA (local store first, then network), and verify the result
+     as described under Signature Verification below. If a reference is also present and the
+     resolved lineage does not serve the signature, resolution fails: the signature is
+     authoritative, and the reference must agree with it.
+   - **Reference with a `:version` or `:tag` selector**: globally resolvable and unambiguous.
+     A version exists only on a published, signed release — unpublished LIRA releases are
+     normatively versionless (LIRA Specification §12.5, L117) — and a tag is signed, unique,
+     and immutable within its module (LIRA Specification §12.6, L142). Resolution consults
+     the local LIRA store, then LIRA network resolution. The resolved body MUST be a TEL
+     document conforming to the `tels` schema; on parse failure the resolution fails. Its
+     computed signature becomes the identity under which it is cached and matched. A
+     resolver MUST verify the release's manifest signature — it MUST NOT trust a local store
+     index alone.
+   - **Bare reference** (no selector, no signature): **local-only by design.** The reference
+     resolves against the local tel schema cache — the developer's working copy — and MUST
+     NOT trigger network resolution. A document carrying only a bare reference is
+     deliberately not portable; portability is always explicit, via a selector or a
+     signature.
 5. **Failure.** If none of the above produce a `Schema`, resolution fails and the parse is aborted.
    The implementation MUST report a runtime resolution error identifying which step failed.
 
 A non-network-capable parser (for example, one embedded in a build tool with no outbound
-connectivity) MAY omit step 4; in that case it MUST treat any document schema not satisfied by
-steps 1–3 as a resolution failure.
+connectivity) MAY omit the network half of step 4; in that case it MUST treat any document
+schema not satisfied by local state as a resolution failure. A bare reference needs no network
+in any case, and a selector-form reference fails resolution only if absent from every local
+store.
 
 #### Signature Verification
 
-When a document schema's identifier carries a signature (either as a URL fragment or as a bare
-signature) and a `Schema` is obtained by URL fetch, the parser MUST verify integrity by:
+When a document schema's identification carries a signature and a `Schema` is obtained through
+LIRA resolution, the parser MUST verify integrity by:
 
-1. Computing the value hash (§3 of the BinTEL Specification) of the fetched schema document's
+1. Computing the value hash (§3 of the BinTEL Specification) of the resolved schema document's
    BinTEL encoding.
 2. Composing the value hashes of any layers identified by the signature into a candidate signature
    per §8 of the BinTEL Specification.
 3. Comparing the candidate signature, byte-for-byte, with the signature carried by the document
    schema.
+4. When the pragma also carries layer selections (§8.1), checking that the signature
+   decomposes into exactly the base hash followed by the selected layers' hashes, in order.
 
-If the comparison fails, the fetched schema MUST be discarded and resolution fails. A parser MAY
-cache only verified schemas.
-
-When the document schema carries a URL with no fragment (no signature), no verification is
-possible; the parser MUST treat the fetched body as authoritative, with the understanding that the
-binding is then by URL alone.
+If any comparison fails, the resolved schema MUST be discarded and resolution fails. A parser
+MUST cache only verified schemas.
 
 #### Caching
 
 Schema bodies MAY be cached indefinitely after successful resolution and verification, keyed by
-signature. URL-only resolutions (no signature) SHOULD honour standard HTTP cache headers; an
-implementation that does not support HTTP caching MUST treat URL-only schemas as freshly
-resolvable on every parse.
+signature. Every cached schema is signature-verified; there is no unverified resolution path.
 
 #### Layered-Signature Decomposition
 
@@ -447,8 +532,7 @@ it against its library of known hashes before parsing the document body. Decompo
 `h₀, h₁, …, h_{n-1}` of component value hashes; the parser MUST construct the composed `Schema` by
 applying the layers identified by `h₁ … h_{n-1}` to the base schema identified by `h₀`, in that
 order, using the merge algorithm of §20.3. If any component hash is unknown to the parser's
-library and cannot be retrieved by URL (the signature alone does not encode a URL for any
-component), resolution fails.
+library and cannot be resolved through LIRA (step 4), resolution fails.
 
 #### Runtime Resolution Error
 
@@ -1246,9 +1330,10 @@ specified in the tables below.
 | E118 | §16      | Column value exceeds the maximum width for that column                                                 | The overflowing column value                                                                                                     |
 | E119 | §16.1    | Malformed tabulation line heading                                                                      | The malformed heading region (from the marker to the next marker or end of line)                                                 |
 | E120 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                               | The `CR` character (or `CR LF` pair that violates the established mode)                                                          |
-| E121 | §8.1     | Schema identifier is not a valid URL or bare BASE-256-encoded schema signature                         | The entire pragma line                                                                                                           |
-| E122 | §8       | Pragma line has more than three phrases after the `tel` keyword                                        | The entire pragma line                                                                                                           |
+| E121 | §8, §8.1 | Pragma phrase matches no pragma form (schema reference, layer selection, signature, or sigil)          | The entire pragma line                                                                                                           |
+| E122 | §8       | Pragma phrases violate the positional order or multiplicity (version, reference, layers, signature, sigil) | The entire pragma line                                                                                                       |
 | E123 | §4       | Document is not a well-formed UTF-8 byte sequence (one error per maximal ill-formed subsequence)       | The replacement `U+FFFD` code point in the decoded text                                                                          |
+| E124 | §8.1     | Layer selections are not listed in the schema's declaration order                                      | The entire pragma line                                                                                                           |
 
 A document separator (§6.1) is always well-formed and carries no error code; it simply ends the
 current document and begins the next.
@@ -1287,7 +1372,7 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | Code | Recovery strategy                                                                                                                                                                                                                                                                                                                   |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | E101 | Ignore the BOM and continue parsing from the next byte.                                                                                                                                                                                                                                                                             |
-| E102 | Restart parsing the entire document using the version, schema identifier, and sigil extracted from the misplaced pragma.                                                                                                                                                                                                            |
+| E102 | Restart parsing the entire document using the version, schema identification, and sigil extracted from the misplaced pragma.                                                                                                                                                                                                          |
 | E103 | Allow the pragma line to exceed the 4096-byte limit and continue parsing its content normally.                                                                                                                                                                                                                                      |
 | E104 | Parse with the latest version known to the implementation. (A well-formed version naming an *unknown* version is not E104; see §8 for the version-selection rule that applies in that case.)                                                                                                                                       |
 | E105 | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                   |
@@ -1306,9 +1391,10 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E118 | Same as E117.                                                                                                                                                                                                                                                                                                                       |
 | E119 | Record the malformed heading as the empty string and continue parsing the tabulation line and its block normally; the column-alignment checks (E117, E118) still apply to the block's rows.                                                                                                                                         |
 | E120 | Record the error and continue: lines are delimited by `LF` alone, a `CR` immediately preceding an `LF` is part of that line's terminator, and any other `CR` remains in the line's content as an ordinary character.                                                                                                                |
-| E121 | Ignore the invalid schema identifier and continue parsing as if no schema identifier were specified. The document is treated as untyped.                                                                                                                                                                                            |
-| E122 | Ignore the extra phrases; parse the pragma using only the first three (version, schema identifier, sigil).                                                                                                                                                                                                                          |
+| E121 | Ignore the unclassifiable phrase and continue parsing the pragma from the next phrase. If no schema identification survives, the document is treated as untyped.                                                                                                                                                                     |
+| E122 | Ignore each phrase that violates the positional order or multiplicity; parse the pragma using the earliest well-ordered subsequence of phrases.                                                                                                                                                                                     |
 | E123 | Replace each maximal ill-formed byte subsequence with a single `U+FFFD` REPLACEMENT CHARACTER (per Unicode §3.9, "maximal subpart" practice) and continue parsing the resulting code-point sequence.                                                                                                                                 |
+| E124 | Reorder the layer selections into the schema's declaration order and continue; resolution proceeds with the reordered composition.                                                                                                                                                                                                  |
 
 #### Schema Errors
 
@@ -1518,8 +1604,10 @@ type TypeName = string;
 ```
 
 `Schema.name` is a kebab-case identifier (§20.7) for the schema. It is a human-readable label used
-to identify the schema in source form; it is **not** the same as the schema identifier carried in
-a document's pragma (§8.1), which is either a URL or a BLAKE3-256 content hash of the schema's BinTEL.
+to identify the schema in source form; it is **not** the same as the schema identification carried in
+a document's pragma (§8.1), which is a LIRA reference and/or a BLAKE3-256-derived schema
+signature — although the LIRA module name a schema is published under MUST equal its declared
+`name` (§8.1).
 
 `Schema.document` is the root `Struct` that defines the type of the document root compound. It
 is `Struct`-typed directly (not `Type`-typed) by analogy with `Layer.overlay`: every schema must
@@ -3352,16 +3440,16 @@ Canonical serialization is defined by the following rules:
 - The document margin is zero.
 - No interpreter directive is included.
 - A pragma line is included, carrying the document's pragma version (`1.0` when the document has
-  no pragma) and the schema identifier. The sigil is not specified in the pragma (the default
+  no pragma) and the schema signature. The sigil is not specified in the pragma (the default
   `#` is used).
-- When the schema is identified by both a URL and a signature (as a URL with a fragment, per §8.1),
-  canonical serialization emits the **bare BASE-256-encoded signature** alone — the URL component is
-  omitted. The signature is content-addressed and stable across resolver changes; a URL is a
-  presentation-layer convenience that does not affect the semantic model. When the schema is
-  identified only by URL (no signature was available at serialization time), the URL is emitted
-  verbatim. When the schema was supplied only by invocation (§8.2) and carries neither URL nor
-  signature, the serializer MUST compute the schema's signature (§8.1) and emit it as a bare
-  BASE-256 signature; the canonical form always carries a schema identifier.
+- Canonical serialization emits the **bare BASE-256-encoded signature** alone — any schema
+  reference and layer selections (§8.1) are omitted. The signature is content-addressed and
+  stable across resolver changes; a reference is a presentation-layer convenience that does
+  not affect the semantic model. When the schema was resolved from a reference, or supplied
+  only by invocation (§8.2), and no signature was carried, the serializer MUST compute the
+  schema's composed signature (§8.1) and emit it as a bare BASE-256 signature; the canonical
+  form always carries a schema signature. (A document identified only by an unresolvable
+  development reference is untyped for this purpose and has no canonical form.)
 - No comments or remarks are included anywhere in the document.
 - No tabulation lines are included; all compounds are serialized as ordinary (non-tabulated) lines.
 - No blank lines appear between children at any level.

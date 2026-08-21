@@ -6,9 +6,9 @@ Document {
                 1,
                 0,
             ),
-            schema: Some(
-                "#",
-            ),
+            reference: None,
+            layers: [],
+            signature: None,
             sigil: None,
         },
     ),
@@ -30,6 +30,4 @@ Document {
     ],
 }
 errors:
-  E122 [0,26): Pragma has extra atoms
-  E121 [0,26): Invalid schema identifier
-  E105 [0,26): Invalid sigil character
+  E121 [0,26): Pragma phrase matches no pragma form

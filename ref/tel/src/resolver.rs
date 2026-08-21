@@ -1,10 +1,12 @@
 //! Schema resolution, per §8.2 of the TEL Specification.
 //!
 //! The resolver follows the five-step protocol: built-in lookup → cache
-//! lookup → library lookup → URL fetch → failure. The network step is
-//! pluggable via the `SchemaFetcher` trait so the crate carries no
-//! mandatory HTTP dependency; an application that needs network resolution
-//! supplies a fetcher backed by its own HTTP client.
+//! lookup → library lookup → LIRA resolution → failure. The network step
+//! is pluggable via the `SchemaFetcher` trait so the crate carries no
+//! mandatory network dependency; an application that needs network
+//! resolution supplies a fetcher backed by its own LIRA client. Bare
+//! (selector-less) references are local-only by design and never reach
+//! the fetcher.
 //!
 //! The library is indexed **per component** (BinTEL §8.1): the base
 //! schema (the schema document with all `layer` compounds stripped) is
@@ -35,90 +37,119 @@ fn builtin_tels_signature() -> Vec<u8> {
     }).clone()
 }
 
-/// A signature identifies a composed schema as carried by the pragma:
-/// either a URL (with or without a BASE-256 fragment) or a bare BASE-256
-/// signature.
+/// The canonical, version-pinned LIRA coordinate of the built-in `tels`
+/// meta-schema (§8.1). The pin advances only when the TEL specification
+/// is revised.
+pub const BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:1.0.0";
+
+/// The schema identification carried by a pragma (§8.1): a LIRA
+/// reference, layer selections, and/or a schema signature, which
+/// together read as a single claim — *this document uses the referenced
+/// schema, with these layers, as attested by this signature.*
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaIdentifier {
-    /// The URL, if the identifier carries one. May or may not include the
-    /// fragment (`#…`) — the fragment is the BASE-256-encoded signature.
-    pub url: Option<String>,
-    /// The decoded signature bytes, if the identifier carries one.
+    /// The LIRA reference (`domain/name`, optionally with a `:version` or
+    /// `:tag` selector), verbatim, if the pragma carries one.
+    pub reference: Option<String>,
+    /// Selected layer names, in pragma order, without their `+` prefixes.
+    pub layers: Vec<String>,
+    /// The decoded signature bytes, if the pragma carries a signature.
     pub signature: Option<Vec<u8>>,
 }
 
 impl SchemaIdentifier {
-    /// Parse a pragma identifier string. Recognises:
+    /// Build a `SchemaIdentifier` from a parsed pragma. Returns `None`
+    /// when the pragma carries no schema identification at all.
+    pub fn from_pragma(pragma: &crate::Pragma) -> Option<Self> {
+        if pragma.reference.is_none() && pragma.signature.is_none() {
+            return None;
+        }
+        Some(Self {
+            reference: pragma.reference.clone(),
+            layers: pragma.layers.clone(),
+            signature: pragma.signature.as_deref().map(base256::decode),
+        })
+    }
+
+    /// Parse a single identification phrase. Recognises:
     ///
-    /// - `http(s)://…` — URL without signature.
-    /// - `http(s)://…#<BASE-256>` — URL with BASE-256 fragment signature.
+    /// - `<domain>/<name>[:<version>|:<tag>]` — LIRA reference.
     /// - `<BASE-256>` — bare signature.
     ///
-    /// Returns `None` for inputs that match none of these forms (E121 at
-    /// parse time).
+    /// Returns `None` for inputs that match neither form (E121 at parse
+    /// time).
     pub fn parse(s: &str) -> Option<Self> {
-        if s.contains("://") {
-            if let Some(idx) = s.find('#') {
-                let url = &s[..idx];
-                let frag = &s[idx + 1..];
-                let sig = base256::decode(frag);
-                Some(Self { url: Some(url.to_string()), signature: Some(sig) })
+        if s.contains('/') && s.chars().count() > 1 {
+            if crate::is_valid_reference(s) {
+                Some(Self { reference: Some(s.to_string()), layers: Vec::new(), signature: None })
             } else {
-                Some(Self { url: Some(s.to_string()), signature: None })
+                None
             }
-        } else if !s.is_empty() && s.chars().all(|c| {
-            c.is_ascii_digit() || c.is_ascii_alphabetic() || (c as u32) >= 0xA0
-        }) {
-            Some(Self { url: None, signature: Some(base256::decode(s)) })
+        } else if crate::is_valid_signature(s) {
+            Some(Self { reference: None, layers: Vec::new(), signature: Some(base256::decode(s)) })
         } else {
             None
         }
     }
 
-    /// True when this identifier carries a signature (either as a fragment
-    /// or as a bare signature).
+    /// True when this identification carries a signature.
     pub fn has_signature(&self) -> bool { self.signature.is_some() }
+
+    /// True when this identification's reference carries a `:version` or
+    /// `:tag` selector. A selector-form reference is globally resolvable;
+    /// a bare reference is local-only by design (§8.2).
+    pub fn has_selector(&self) -> bool {
+        self.reference.as_deref().is_some_and(|r| r.contains(':'))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolutionError {
     /// Built-in lookup failed and no other source had the schema.
     NotFound,
-    /// The fetched body did not parse as a TEL document.
+    /// The resolved body did not parse as a TEL document.
     MalformedSchemaBody { detail: String },
-    /// Signature verification failed: the fetched body's value hash does
-    /// not match the signature carried by the identifier.
+    /// Signature verification failed: the resolved body's composed
+    /// signature does not match the signature carried by the
+    /// identification.
     SignatureMismatch { expected: Vec<u8>, actual: Vec<u8> },
     /// The fetcher reported a network or transport error.
     FetchError { detail: String },
-    /// The identifier could not be parsed (would be E121 at TEL parse
-    /// time, surfaced here for completeness).
+    /// A selected layer name matches no layer declared by the resolved
+    /// schema (§8.1).
+    UnknownLayer { name: String },
+    /// The identification could not be parsed (would be E121 at TEL
+    /// parse time, surfaced here for completeness).
     BadIdentifier,
 }
 
-/// Fetcher trait. Implementations may use any HTTP client (reqwest,
-/// ureq, surf, etc.); a `Box<dyn SchemaFetcher>` is sufficient for most
-/// uses.
+/// Fetcher trait: resolves a selector-form LIRA reference
+/// (`domain/name:version` or `domain/name:tag`) to the released
+/// `tels`-conforming TEL body. Implementations wrap a LIRA client (local
+/// store first, then network resolution) and MUST verify the release's
+/// manifest signature — a local store index alone is not authoritative
+/// (§8.2). A `Box<dyn SchemaFetcher>` is sufficient for most uses.
 pub trait SchemaFetcher {
-    fn fetch(&self, url: &str) -> Result<String, String>;
+    fn fetch(&self, reference: &str) -> Result<String, String>;
 }
 
-/// A `SchemaFetcher` backed by an in-memory map. Useful in tests and for
-/// applications that pre-load known schemas.
+/// A `SchemaFetcher` backed by an in-memory map keyed by reference.
+/// Useful in tests and for applications that pre-load known schemas.
 pub struct InMemoryFetcher {
-    pub by_url: HashMap<String, String>,
+    pub by_reference: HashMap<String, String>,
 }
 
 impl InMemoryFetcher {
-    pub fn new() -> Self { Self { by_url: HashMap::new() } }
-    pub fn add(&mut self, url: &str, body: &str) {
-        self.by_url.insert(url.to_string(), body.to_string());
+    pub fn new() -> Self { Self { by_reference: HashMap::new() } }
+    pub fn add(&mut self, reference: &str, body: &str) {
+        self.by_reference.insert(reference.to_string(), body.to_string());
     }
 }
 
 impl SchemaFetcher for InMemoryFetcher {
-    fn fetch(&self, url: &str) -> Result<String, String> {
-        self.by_url.get(url).cloned().ok_or_else(|| format!("no schema at {}", url))
+    fn fetch(&self, reference: &str) -> Result<String, String> {
+        self.by_reference.get(reference).cloned()
+            .ok_or_else(|| format!("no schema at {}", reference))
     }
 }
 
@@ -264,12 +295,16 @@ impl<F: SchemaFetcher> Resolver<F> {
         all
     }
 
-    /// Resolve an identifier to a `Schema`, applying §8.2's five-step
-    /// protocol.
+    /// Resolve a schema identification to a `Schema`, applying §8.2's
+    /// five-step protocol.
     pub fn resolve(&mut self, identifier: &SchemaIdentifier) -> Result<Schema, ResolutionError> {
         // Step 1: built-in lookup. The tels built-in is identified by
         // its single-component signature (33 bytes: 32-byte BLAKE3-256 hash
-        // of the canonical tels.tel + cadence trailer).
+        // of the canonical tels.tel + cadence trailer), or by its pinned
+        // LIRA coordinate (§8.1). Neither form requires network access.
+        if identifier.reference.as_deref() == Some(BUILTIN_TELS_REFERENCE) {
+            return Ok(builtin_tels());
+        }
         if let Some(sig) = &identifier.signature {
             if sig.len() == 33 && sig == &builtin_tels_signature() {
                 return Ok(builtin_tels());
@@ -310,30 +345,35 @@ impl<F: SchemaFetcher> Resolver<F> {
             }
         }
 
-        // Step 4: URL fetch.
-        if let Some(url) = &identifier.url {
-            let fetcher = self.fetcher.as_ref().ok_or(ResolutionError::NotFound)?;
-            let body = fetcher.fetch(url)
-                .map_err(|detail| ResolutionError::FetchError { detail })?;
-            let schema = parse_schema_body(&body)?;
-            if let Some(expected_sig) = &identifier.signature {
-                // Compute the actual signature by composing per-component
-                // hashes from the fetched body. For a no-layer schema this
-                // is a 33-byte single-component signature; for layered
-                // schemas it is a `37 + 2·(n − 2)`-byte palimpsest at the
-                // BinTEL-pinned parameters (k_i = 4, k_r = 2) (BinTEL §8).
+        // Step 4: LIRA resolution. Only a selector-form reference
+        // (`:version` or `:tag`) reaches the fetcher: a bare reference is
+        // local-only by design and MUST NOT trigger network resolution
+        // (§8.2), and a signature alone encodes no coordinate to fetch by.
+        if identifier.has_selector() {
+            if let (Some(reference), Some(fetcher)) =
+                (&identifier.reference, self.fetcher.as_ref())
+            {
+                let body = fetcher.fetch(reference)
+                    .map_err(|detail| ResolutionError::FetchError { detail })?;
+                validate_schema_body(&body)?;
                 let parsed = parse(&body);
-                let actual_sig = bintel::schema_full_signature(&parsed.document);
-                if expected_sig.as_slice() == actual_sig.as_slice() {
-                    self.cache.insert(expected_sig.clone(), schema.clone());
-                    return Ok(schema);
+                let (composed, actual_sig) =
+                    compose_with_selected_layers(&parsed.document, &identifier.layers)?;
+                if let Some(expected_sig) = &identifier.signature {
+                    // The signature is authoritative and MUST include the
+                    // selected layers: the composed signature over the base
+                    // plus the selected layers' hashes, in declaration
+                    // order, must match byte-for-byte (§8.1, §8.2).
+                    if expected_sig.as_slice() != actual_sig.as_slice() {
+                        return Err(ResolutionError::SignatureMismatch {
+                            expected: expected_sig.clone(),
+                            actual: actual_sig,
+                        });
+                    }
                 }
-                return Err(ResolutionError::SignatureMismatch {
-                    expected: expected_sig.clone(),
-                    actual: actual_sig,
-                });
+                self.cache.insert(actual_sig, composed.clone());
+                return Ok(composed);
             }
-            return Ok(schema);
         }
 
         // Step 5: failure.
@@ -381,7 +421,7 @@ impl<F: SchemaFetcher> Resolver<F> {
 }
 
 
-fn parse_schema_body(body: &str) -> Result<Schema, ResolutionError> {
+fn validate_schema_body(body: &str) -> Result<(), ResolutionError> {
     let parsed = parse(body);
     if !parsed.errors.is_empty() {
         return Err(ResolutionError::MalformedSchemaBody {
@@ -394,7 +434,83 @@ fn parse_schema_body(body: &str) -> Result<Schema, ResolutionError> {
             detail: format!("{} type-assignment errors", ta.errors.len()),
         });
     }
-    Ok(construct_schema(&parsed.document))
+    Ok(())
+}
+
+/// True when the selected layer names appear in the schema's declaration
+/// order (§8.1). A selection out of declaration order is **E124** at
+/// parse time; its recovery is to reorder and continue, which
+/// `compose_with_selected_layers` performs unconditionally.
+pub fn layers_in_declaration_order(doc: &Document, selected: &[String]) -> bool {
+    let declared = declared_layer_names(doc);
+    let mut last = 0usize;
+    for name in selected {
+        match declared.iter().position(|d| d == name) {
+            Some(pos) if pos + 1 > last => last = pos + 1,
+            Some(_) => return false,
+            None => return false,
+        }
+    }
+    true
+}
+
+fn declared_layer_names(doc: &Document) -> Vec<String> {
+    construct_schema(doc).layers.iter().map(|l| l.name.clone()).collect()
+}
+
+/// Compose a validated schema document with only the selected layers
+/// (§8.1). Layer names are matched against the declared layer names;
+/// composition follows the schema's declaration order regardless of
+/// selection order (E124 recovery). An empty selection composes the base
+/// schema alone: layers are OPTIONAL, and a document opts into exactly
+/// the layers it names. Returns the composed `Schema` together with its
+/// composed signature (the palimpsest of the base hash plus the selected
+/// layers' hashes, in declaration order).
+pub fn compose_with_selected_layers(
+    doc: &Document,
+    selected: &[String],
+) -> Result<(Schema, Vec<u8>), ResolutionError> {
+    let schema = construct_schema(doc);
+
+    // Declared layers in declaration order, each with its value hash,
+    // walking layer compounds and `schema.layers` in lockstep (both
+    // preserve source order).
+    let mut declared: Vec<(String, [u8; 32], Layer)> = Vec::new();
+    let mut layer_iter = schema.layers.iter();
+    for block in &doc.children {
+        for c in &block.compounds {
+            if c.keyword == "layer" {
+                let layer = layer_iter.next()
+                    .expect("layer count matches layer-compound count");
+                declared.push((layer.name.clone(), bintel::schema_layer_hash(c), layer.clone()));
+            }
+        }
+    }
+
+    for name in selected {
+        if !declared.iter().any(|(n, _, _)| n == name) {
+            return Err(ResolutionError::UnknownLayer { name: name.clone() });
+        }
+    }
+
+    let mut component_hashes: Vec<[u8; 32]> = vec![bintel::schema_base_hash(doc)];
+    let mut layers: Vec<Layer> = Vec::new();
+    for (name, hash, layer) in &declared {
+        if selected.iter().any(|s| s == name) {
+            component_hashes.push(*hash);
+            layers.push(layer.clone());
+        }
+    }
+
+    let mut staged = schema;
+    staged.layers = layers;
+    let (composed, errors) = compose_schema(&staged);
+    if !errors.is_empty() {
+        return Err(ResolutionError::MalformedSchemaBody {
+            detail: format!("{} layer-composition errors", errors.len()),
+        });
+    }
+    Ok((composed, bintel::schema_signature_from_hashes(&component_hashes)))
 }
 
 #[cfg(test)]
@@ -403,30 +519,41 @@ mod tests {
     use crate::Member;
 
     #[test]
-    fn identifier_parses_url_without_signature() {
-        let id = SchemaIdentifier::parse("https://example.org/x").unwrap();
-        assert_eq!(id.url.as_deref(), Some("https://example.org/x"));
+    fn identifier_parses_bare_reference() {
+        let id = SchemaIdentifier::parse("example.org/x").unwrap();
+        assert_eq!(id.reference.as_deref(), Some("example.org/x"));
         assert!(id.signature.is_none());
+        assert!(!id.has_selector());
     }
 
     #[test]
-    fn identifier_parses_url_with_signature_fragment() {
-        let id = SchemaIdentifier::parse("https://example.org/x#abcd").unwrap();
-        assert_eq!(id.url.as_deref(), Some("https://example.org/x"));
-        assert!(id.signature.is_some());
+    fn identifier_parses_selector_references() {
+        let id = SchemaIdentifier::parse("example.org/x:1.2.0").unwrap();
+        assert_eq!(id.reference.as_deref(), Some("example.org/x:1.2.0"));
+        assert!(id.has_selector());
+        let id = SchemaIdentifier::parse("specification.tel/jdk:jdk-19").unwrap();
+        assert!(id.has_selector());
     }
 
     #[test]
     fn identifier_parses_bare_signature() {
-        let id = SchemaIdentifier::parse("ḀḁЂЃĄąĆćȈȉ").unwrap();
-        assert!(id.url.is_none());
+        let sig33: String = "Ḁ".repeat(33);
+        let id = SchemaIdentifier::parse(&sig33).unwrap();
+        assert!(id.reference.is_none());
         assert!(id.signature.is_some());
     }
 
     #[test]
     fn identifier_rejects_garbage() {
         assert!(SchemaIdentifier::parse("").is_none());
-        assert!(SchemaIdentifier::parse("not a url and not a signature !").is_none());
+        assert!(SchemaIdentifier::parse("not a reference and not a signature !").is_none());
+        // URLs are no longer a schema-identification form.
+        assert!(SchemaIdentifier::parse("https://example.org/x").is_none());
+        // A short BASE-256 string is not a well-formed signature.
+        assert!(SchemaIdentifier::parse("ḀḁЂЃĄąĆćȈȉ").is_none());
+        // Selector must be a version or a tag.
+        assert!(SchemaIdentifier::parse("example.org/x:01.2.3").is_none());
+        assert!(SchemaIdentifier::parse("example.org/x:1.2").is_none());
     }
 
     #[test]
@@ -437,7 +564,7 @@ mod tests {
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(src).expect("add_to_library should succeed");
         assert_eq!(sig.len(), 33, "no-layer signature is 33 bytes");
-        let id = SchemaIdentifier { url: None, signature: Some(sig) };
+        let id = SchemaIdentifier { reference: None, layers: vec![], signature: Some(sig) };
         let s = r.resolve(&id).expect("library lookup should succeed");
         assert_eq!(s.name, "my-schema");
     }
@@ -449,26 +576,49 @@ mod tests {
         // copy it into a const).
         let sig = super::builtin_tels_signature();
         assert_eq!(sig.len(), 33);
-        let id = SchemaIdentifier { url: None, signature: Some(sig) };
+        let id = SchemaIdentifier { reference: None, layers: vec![], signature: Some(sig) };
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let s = r.resolve(&id).unwrap();
         assert_eq!(s.name, "tels");
     }
 
     #[test]
-    fn resolver_fetches_url_when_signature_absent() {
+    fn resolver_returns_builtin_for_pinned_coordinate() {
+        // §8.2 step 1: the pinned coordinate resolves to the built-in
+        // without network access (no fetcher configured).
+        let id = SchemaIdentifier::parse(BUILTIN_TELS_REFERENCE).unwrap();
+        let mut r: Resolver<InMemoryFetcher> = Resolver::new();
+        let s = r.resolve(&id).unwrap();
+        assert_eq!(s.name, "tels");
+    }
+
+    #[test]
+    fn resolver_fetches_selector_reference_when_signature_absent() {
         let body = "name greeting\n\ndocument\n  field x String\n";
         let mut fetcher = InMemoryFetcher::new();
-        fetcher.add("https://example.org/x", body);
+        fetcher.add("example.org/greeting:1.0.0", body);
         let mut r = Resolver::with_fetcher(fetcher);
-        let id = SchemaIdentifier::parse("https://example.org/x").unwrap();
+        let id = SchemaIdentifier::parse("example.org/greeting:1.0.0").unwrap();
         let s = r.resolve(&id).unwrap();
         assert_eq!(s.name, "greeting");
     }
 
     #[test]
+    fn resolver_never_fetches_bare_reference() {
+        // A bare (selector-less) reference is local-only by design (§8.2):
+        // even with a fetcher that could serve it, resolution must not
+        // reach the network.
+        let body = "name greeting\n\ndocument\n  field x String\n";
+        let mut fetcher = InMemoryFetcher::new();
+        fetcher.add("example.org/greeting", body);
+        let mut r = Resolver::with_fetcher(fetcher);
+        let id = SchemaIdentifier::parse("example.org/greeting").unwrap();
+        assert!(matches!(r.resolve(&id), Err(ResolutionError::NotFound)));
+    }
+
+    #[test]
     fn resolver_reports_not_found_with_no_signature_or_fetcher() {
-        let id = SchemaIdentifier::parse("https://example.org/x").unwrap();
+        let id = SchemaIdentifier::parse("example.org/x:1.0.0").unwrap();
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         assert!(matches!(r.resolve(&id), Err(ResolutionError::NotFound)));
     }
@@ -476,7 +626,7 @@ mod tests {
     #[test]
     fn resolver_fetch_failure_propagates() {
         let mut r = Resolver::with_fetcher(InMemoryFetcher::new());
-        let id = SchemaIdentifier::parse("https://example.org/x").unwrap();
+        let id = SchemaIdentifier::parse("example.org/x:1.0.0").unwrap();
         let err = r.resolve(&id).unwrap_err();
         assert!(matches!(err, ResolutionError::FetchError { .. }));
     }
@@ -485,12 +635,13 @@ mod tests {
     fn resolver_signature_mismatch_is_reported() {
         let body = "name greeting\n\ndocument\n  field x String\n";
         let mut fetcher = InMemoryFetcher::new();
-        fetcher.add("https://example.org/x", body);
+        fetcher.add("example.org/greeting:1.0.0", body);
         let mut r = Resolver::with_fetcher(fetcher);
         // 33-byte all-zero signature: well-formed length but unlikely to
         // match any real BLAKE3 hash.
         let id = SchemaIdentifier {
-            url: Some("https://example.org/x".to_string()),
+            reference: Some("example.org/greeting:1.0.0".to_string()),
+            layers: vec![],
             signature: Some(vec![0u8; 33]),
         };
         let err = r.resolve(&id).unwrap_err();
@@ -518,7 +669,7 @@ layer
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let sig = r.add_to_library(layered_src).expect("add_to_library succeeds");
         assert_eq!(sig.len(), 37, "two-component signature is 37 bytes (32 + 4 + 1)");
-        let id = SchemaIdentifier { url: None, signature: Some(sig) };
+        let id = SchemaIdentifier { reference: None, layers: vec![], signature: Some(sig) };
         let s = r.resolve(&id).expect("layered signature resolves");
         // compose_schema flattens layers into the document; no residual layers.
         assert!(s.layers.is_empty(), "composed schema has no residual layers");
@@ -531,11 +682,13 @@ layer
     }
 
     #[test]
-    fn resolver_url_fetch_verifies_multi_component_signature() {
-        // A layered schema is served by URL with its full palimpsest
-        // signature carried in the fragment. The resolver fetches the
-        // body, computes the full signature from base + each layer's
-        // BinTEL hash, and accepts on a byte-for-byte match.
+    fn resolver_lira_fetch_verifies_signature_with_selected_layers() {
+        // A layered schema is served by a selector-form reference with the
+        // full palimpsest signature carried in the pragma. The resolver
+        // fetches the body, composes the selected layers, computes the
+        // composed signature from base + each selected layer's BinTEL
+        // hash, and accepts on a byte-for-byte match (§8.1: the signature
+        // MUST include the selected layers).
         let layered_src = "\
 tel 1.0
 
@@ -557,14 +710,106 @@ layer
         assert_eq!(expected_sig.len(), 37, "two-component signature is 37 bytes");
 
         let mut fetcher = InMemoryFetcher::new();
-        fetcher.add("https://example.org/layered", layered_src);
+        fetcher.add("example.org/url-layered:1.0.0", layered_src);
         let mut r = Resolver::with_fetcher(fetcher);
         let id = SchemaIdentifier {
-            url: Some("https://example.org/layered".to_string()),
+            reference: Some("example.org/url-layered:1.0.0".to_string()),
+            layers: vec!["extra".to_string()],
             signature: Some(expected_sig),
         };
-        let s = r.resolve(&id).expect("multi-component URL fetch should verify");
+        let s = r.resolve(&id).expect("LIRA fetch with selected layers should verify");
         assert_eq!(s.name, "url-layered");
+        // compose_schema flattens layers into the document.
+        let names: Vec<&str> = s.document.members.iter().filter_map(|m| match m {
+            Member::Field(f) => Some(f.keyword.as_str()),
+            _ => None,
+        }).collect();
+        assert!(names.contains(&"y"), "selected layer field y present: {:?}", names);
+    }
+
+    #[test]
+    fn resolver_empty_selection_composes_base_alone() {
+        // Layers are OPTIONAL: a pragma naming no layers gets the base
+        // schema only (§8.1), whose signature is single-component.
+        let layered_src = "\
+tel 1.0
+
+name url-layered
+
+document
+  field x String
+
+layer
+  name extra
+  overlay
+    field y String optional
+";
+        let mut fetcher = InMemoryFetcher::new();
+        fetcher.add("example.org/url-layered:1.0.0", layered_src);
+        let mut r = Resolver::with_fetcher(fetcher);
+        let id = SchemaIdentifier::parse("example.org/url-layered:1.0.0").unwrap();
+        let s = r.resolve(&id).unwrap();
+        let names: Vec<&str> = s.document.members.iter().filter_map(|m| match m {
+            Member::Field(f) => Some(f.keyword.as_str()),
+            _ => None,
+        }).collect();
+        assert!(names.contains(&"x"), "base field x present: {:?}", names);
+        assert!(!names.contains(&"y"), "unselected layer field y absent: {:?}", names);
+    }
+
+    #[test]
+    fn resolver_unknown_layer_is_reported() {
+        let layered_src = "\
+tel 1.0
+
+name url-layered
+
+document
+  field x String
+
+layer
+  name extra
+  overlay
+    field y String optional
+";
+        let mut fetcher = InMemoryFetcher::new();
+        fetcher.add("example.org/url-layered:1.0.0", layered_src);
+        let mut r = Resolver::with_fetcher(fetcher);
+        let id = SchemaIdentifier {
+            reference: Some("example.org/url-layered:1.0.0".to_string()),
+            layers: vec!["nonexistent".to_string()],
+            signature: None,
+        };
+        let err = r.resolve(&id).unwrap_err();
+        assert!(matches!(err, ResolutionError::UnknownLayer { .. }));
+    }
+
+    #[test]
+    fn layer_order_check_follows_declaration_order() {
+        let two_layer_src = "\
+tel 1.0
+
+name two-layers
+
+document
+  field x String
+
+layer
+  name aa
+  overlay
+    field y String optional
+
+layer
+  name bb
+  overlay
+    field z String optional
+";
+        let parsed = parse(two_layer_src);
+        let a = "aa".to_string();
+        let b = "bb".to_string();
+        assert!(layers_in_declaration_order(&parsed.document, &[a.clone(), b.clone()]));
+        assert!(layers_in_declaration_order(&parsed.document, &[b.clone()]));
+        assert!(!layers_in_declaration_order(&parsed.document, &[b, a]));
     }
 
     #[test]
@@ -611,7 +856,7 @@ layer
         assert_eq!(sig_src, sig_bintel);
 
         // The loaded schema is now resolvable by its signature.
-        let id = SchemaIdentifier { url: None, signature: Some(sig_bintel) };
+        let id = SchemaIdentifier { reference: None, layers: vec![], signature: Some(sig_bintel) };
         let s = from_bintel.resolve(&id).expect("layered schema resolves from BinTEL load");
         assert_eq!(s.name, "url-layered");
     }
@@ -662,7 +907,7 @@ layer
         // Now drop the layer from the library and re-attempt resolution.
         let layer_keys: Vec<[u8; 32]> = r.layer_library.keys().copied().collect();
         for k in &layer_keys { r.layer_library.remove(k); }
-        let id = SchemaIdentifier { url: None, signature: Some(sig) };
+        let id = SchemaIdentifier { reference: None, layers: vec![], signature: Some(sig) };
         let err = r.resolve(&id).unwrap_err();
         assert!(matches!(err, ResolutionError::NotFound));
     }

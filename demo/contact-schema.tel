@@ -1,4 +1,4 @@
-tel 1.0 https://tel-lang.org/schema/tel-schema
+tel 1.0 specification.tel/tels:1.0.0
 
 # A worked example of a TEL schema: a "contact" record type.
 #

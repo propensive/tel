@@ -1,4 +1,4 @@
-tel 1.0 https://tel-lang.org/schema/tel-schema
+tel 1.0 specification.tel/tels:1.0.0
 
 # A small schema demonstrating struct validators (§21.6 of the TEL
 # Specification). The `Event` record carries a struct-level validator

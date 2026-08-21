@@ -10,7 +10,7 @@
 # (double) space after the keyword puts the line into hard-space mode, so
 # subsequent soft spaces become part of the value.
 
-tel 1.0 https://example.org/contact
+tel 1.0 example.org/contact
 
 name  Alice Anderson
 email alice@example.org

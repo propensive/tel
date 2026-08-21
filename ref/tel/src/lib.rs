@@ -62,7 +62,7 @@ pub struct TelError {
 pub enum ErrorCode {
     E101, E102, E103, E104, E105,
     E106, E107, E108, E109, E111, E112, E113, E114, E115,
-    E116, E117, E118, E119, E120, E121, E122, E123,
+    E116, E117, E118, E119, E120, E121, E122, E123, E124,
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
     E211, E212, E213, E214, E215, E216, E217, E218, E219, E220, E221,
@@ -93,9 +93,10 @@ impl ErrorCode {
             Self::E118 => "Column value exceeds maximum width",
             Self::E119 => "Malformed tabulation heading",
             Self::E120 => "Line-ending inconsistency",
-            Self::E121 => "Invalid schema identifier",
-            Self::E122 => "Pragma has extra atoms",
+            Self::E121 => "Pragma phrase matches no pragma form",
+            Self::E122 => "Pragma phrases violate the positional order or multiplicity",
             Self::E123 => "Document is not well-formed UTF-8",
+            Self::E124 => "Layer selections are not in the schema's declaration order",
             Self::E201 => "Duplicate keyword within a Struct",
             Self::E202 => "Select member has empty variants list",
             Self::E203 => "Scalar has non-null default but member is not required",
@@ -173,7 +174,14 @@ pub enum LineEndings { LF, CRLF }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pragma {
     pub version: (u32, u32),
-    pub schema: Option<String>,
+    /// LIRA schema reference (`domain/name`, optionally `:version` or
+    /// `:tag`), verbatim (§8.1).
+    pub reference: Option<String>,
+    /// Selected layer names, in pragma order, without their `+` prefixes
+    /// (§8.1).
+    pub layers: Vec<String>,
+    /// BASE-256-encoded schema signature, verbatim (§8.1).
+    pub signature: Option<String>,
     pub sigil: Option<char>,
 }
 
@@ -702,7 +710,100 @@ pub fn validate_sigil(value: &str) -> ValidationResponse {
     if matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}') {
         return mk("sigil must not be a parenthetical symbol");
     }
+    if ch == '+' {
+        return mk("sigil must not be `+` (reserved for layer selections, §8.1)");
+    }
     ValidationResponse::Valid
+}
+
+/// True when `ch` is sigil-valid (§6): one of the twenty-three enumerated
+/// ASCII punctuation characters — not whitespace, a letter, a digit, a
+/// control character, a parenthetical symbol, or `+` (reserved for layer
+/// selections on the pragma line, §8.1).
+pub fn is_sigil_valid(ch: char) -> bool {
+    ch.is_ascii()
+        && ch != ' ' && ch != '\n' && ch != '\r'
+        && !ch.is_ascii_alphanumeric()
+        && !ch.is_ascii_control()
+        && !matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}')
+        && ch != '+'
+}
+
+/// True when `s` is a valid BASE-256-encoded schema signature phrase
+/// (§8.1): one Unicode character per signature byte. Under the
+/// BinTEL-pinned palimpsest parameters (k_i = 4, k_r = 2, 32-byte BLAKE3
+/// hashes), a single-component (no-layer) signature is 33 bytes → 33
+/// characters; with n ≥ 2 components, `37 + 2·(n − 2)` bytes → same
+/// character count. Length is therefore either 33, or ≥ 37 with
+/// `(length − 37)` an even non-negative number. Every character MUST be a
+/// member of the BASE-256 alphabet (validated by base256::decode_strict).
+pub fn is_valid_signature(s: &str) -> bool {
+    let char_count = s.chars().count();
+    let length_ok = char_count == 33
+        || (char_count >= 37 && (char_count - 37) % 2 == 0);
+    if !length_ok { return false; }
+    crate::base256::decode_strict(s).is_ok()
+}
+
+/// True when `name` is a valid layer-selection name (§8.1): a non-empty
+/// kebab-case identifier.
+pub fn is_valid_layer_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-') && !name.ends_with('-')
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// True when `s` is a valid LIRA schema reference (§8.1):
+/// `domain/module-name`, optionally followed by `:version` or `:tag`.
+/// A version is `x.y.z` (decimal naturals, no superfluous leading zeros)
+/// and begins with a digit; a tag begins with a letter — the two selector
+/// forms are syntactically disjoint.
+pub fn is_valid_reference(s: &str) -> bool {
+    let (coordinate, selector) = match s.split_once(':') {
+        Some((c, sel)) => (c, Some(sel)),
+        None => (s, None),
+    };
+    let mut segments = coordinate.split('/');
+    let domain = match segments.next() { Some(d) => d, None => return false };
+    if !is_valid_domain(domain) { return false; }
+    let mut any = false;
+    for segment in segments {
+        any = true;
+        // Module-name segments are kebab-case, optionally dotted
+        // (LIRA Specification §14).
+        if !segment.split('.').all(is_valid_layer_name) { return false; }
+    }
+    if !any { return false; }
+    match selector {
+        None => true,
+        Some(sel) => is_valid_version_selector(sel) || is_valid_tag(sel),
+    }
+}
+
+fn is_valid_domain(domain: &str) -> bool {
+    !domain.is_empty() && domain.split('.').all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-') && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+fn is_valid_version_selector(sel: &str) -> bool {
+    let parts: Vec<&str> = sel.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| {
+        !p.is_empty()
+            && p.chars().all(|c| c.is_ascii_digit())
+            && (p.len() == 1 || !p.starts_with('0'))
+    })
+}
+
+fn is_valid_tag(sel: &str) -> bool {
+    let mut chars = sel.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
 }
 
 /// Built-in validator: `string`. Accepts any input; always returns `Valid`.
@@ -3314,11 +3415,6 @@ impl ParserState {
             after.split_whitespace().collect()
         };
 
-        // E122: extra atoms or remark
-        if atoms.len() > 3 {
-            self.errors.push(TelError::new(ErrorCode::E122, line_start, line_start + trimmed.len()));
-        }
-
         let version = if !atoms.is_empty() {
             self.parse_version(atoms[0], line_start + 4)
         } else {
@@ -3326,33 +3422,76 @@ impl ParserState {
             (1, 0)
         };
 
-        let schema = if atoms.len() >= 2 {
-            let s = atoms[1];
-            if !self.is_valid_schema_id(s) {
-                self.errors.push(TelError::new(ErrorCode::E121, line_start, line_start + trimmed.len()));
-            }
-            Some(s.to_string())
-        } else {
-            None
-        };
-
-        let sigil = if atoms.len() >= 3 {
-            let s = atoms[2];
-            let ch = s.chars().next().unwrap_or(' ');
-            if s.len() != 1 || ch.is_ascii_alphanumeric() || ch.is_ascii_control()
-                || ch == ' ' || ch == '\n' || ch == '\r'
-                || matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}')
-            {
-                self.errors.push(TelError::new(ErrorCode::E105, line_start, line_start + trimmed.len()));
-                None
+        // Phrases after the version are classified by form, then checked
+        // against the positional order (§8): reference, layer selections,
+        // signature, sigil. `position` tracks the highest position consumed
+        // so far (1 = reference, 2 = layers, 3 = signature, 4 = sigil).
+        // A phrase that violates the order or multiplicity is dropped
+        // (E122 recovery: keep the earliest well-ordered subsequence); an
+        // unclassifiable phrase is skipped (E121 recovery).
+        let mut reference: Option<String> = None;
+        let mut layers: Vec<String> = Vec::new();
+        let mut signature: Option<String> = None;
+        let mut sigil: Option<char> = None;
+        let mut position = 0u8;
+        let mut order_violation = false;
+        let mut unclassifiable = false;
+        let mut bad_sigil = false;
+        let n = atoms.len();
+        for (i, &s) in atoms.iter().enumerate().skip(1) {
+            let char_count = s.chars().count();
+            if let Some(name) = s.strip_prefix('+') {
+                // Layer selection (§8.1). A bare `+`, or an invalid layer
+                // name, matches no pragma form.
+                if !is_valid_layer_name(name) {
+                    unclassifiable = true;
+                } else if position > 2 {
+                    order_violation = true;
+                } else {
+                    position = 2;
+                    layers.push(name.to_string());
+                }
+            } else if s.contains('/') && char_count > 1 {
+                // Schema reference (§8.1).
+                if !is_valid_reference(s) {
+                    unclassifiable = true;
+                } else if position >= 1 {
+                    order_violation = true;
+                } else {
+                    position = 1;
+                    reference = Some(s.to_string());
+                }
+            } else if is_valid_signature(s) {
+                if position >= 3 {
+                    order_violation = true;
+                } else {
+                    position = 3;
+                    signature = Some(s.to_string());
+                }
+            } else if char_count == 1 && i == n - 1 {
+                // Final single-character phrase matching no other form: the
+                // sigil parameter, which MUST be sigil-valid (E105).
+                let ch = s.chars().next().unwrap();
+                if is_sigil_valid(ch) {
+                    sigil = Some(ch);
+                } else {
+                    bad_sigil = true;
+                }
             } else {
-                Some(ch)
+                unclassifiable = true;
             }
-        } else {
-            None
-        };
+        }
+        if order_violation {
+            self.errors.push(TelError::new(ErrorCode::E122, line_start, line_start + trimmed.len()));
+        }
+        if unclassifiable {
+            self.errors.push(TelError::new(ErrorCode::E121, line_start, line_start + trimmed.len()));
+        }
+        if bad_sigil {
+            self.errors.push(TelError::new(ErrorCode::E105, line_start, line_start + trimmed.len()));
+        }
 
-        Pragma { version, schema, sigil }
+        Pragma { version, reference, layers, signature, sigil }
     }
 
     fn parse_version(&mut self, s: &str, offset: usize) -> (u32, u32) {
@@ -3366,23 +3505,6 @@ impl ParserState {
         }
         self.errors.push(TelError::with_detail(ErrorCode::E104, offset, offset + s.len(), s));
         (1, 0)
-    }
-
-    fn is_valid_schema_id(&self, s: &str) -> bool {
-        if s.contains("://") { return true; }
-        // Bare BASE-256-encoded schema signature: one Unicode character per
-        // signature byte. Under the BinTEL-pinned palimpsest parameters
-        // (k_i = 4, k_r = 2, 32-byte BLAKE3 hashes), a single-component
-        // (no-layer) signature is 33 bytes → 33 characters; with n ≥ 2
-        // components, `37 + 2·(n − 2)` bytes → same character count.
-        // Length is therefore either 33, or ≥ 37 with `(length − 37)` an
-        // even non-negative number. Every character MUST be a member of the
-        // BASE-256 alphabet (validated by base256::decode_strict).
-        let char_count = s.chars().count();
-        let length_ok = char_count == 33
-            || (char_count >= 37 && (char_count - 37) % 2 == 0);
-        if !length_ok { return false; }
-        crate::base256::decode_strict(s).is_ok()
     }
 
     // ── Tree builder ────────────────────────────────────────────────────────
@@ -4377,16 +4499,14 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    /// Given a URL like `https://example.org/contact-schema`, return
-    /// `Some("contact-schema")` if the tail is a kebab-case identifier.
-    /// Returns `None` for URLs that don't end in a usable name component.
-    fn extract_url_tail(url: &str) -> Option<String> {
-        if !url.contains("://") { return None; }
-        // Strip any fragment
-        let url = url.split('#').next().unwrap_or(url);
-        // Strip any query string
-        let url = url.split('?').next().unwrap_or(url);
-        let tail = url.rsplit('/').next()?;
+    /// Given a LIRA reference like `example.org/contact-schema` (or
+    /// `example.org/contact-schema:1.0.0`), return `Some("contact-schema")`
+    /// if the module-name tail is a kebab-case identifier. Returns `None`
+    /// for references that don't end in a usable name component.
+    fn extract_reference_name(reference: &str) -> Option<String> {
+        // Strip any `:version`/`:tag` selector.
+        let coordinate = reference.split(':').next().unwrap_or(reference);
+        let tail = coordinate.rsplit('/').next()?;
         if tail.is_empty() { return None; }
         if !tail.chars().next()?.is_ascii_lowercase() { return None; }
         let ok = tail.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
@@ -4401,19 +4521,22 @@ mod tests {
     /// document, returning its parse errors plus any schema/type errors.
     /// Two test conventions:
     ///
-    /// (1) Pragma names tels (via its placeholder URL): type-assign
-    ///     against the built-in tels, and if that passes, construct a
-    ///     Schema and validate it.
+    /// (1) Pragma names tels (via its pinned LIRA coordinate,
+    ///     `specification.tel/tels:1.0.0`): type-assign against the
+    ///     built-in tels, and if that passes, construct a Schema and
+    ///     validate it.
     ///
-    /// (2) Pragma URL ends with `/<NAME>` where <NAME> matches a sibling
-    ///     `<NAME>.tel` file in `test_dir`: parse that file as a schema
-    ///     document (type-checked against tels), construct the user
-    ///     schema, and type-check this document against it.
+    /// (2) Pragma carries a LIRA reference whose module-name tail `<NAME>`
+    ///     matches a sibling `<NAME>.tel` file in `test_dir`: parse that
+    ///     file as a schema document (type-checked against tels),
+    ///     construct the user schema, and type-check this document against
+    ///     it. This stands in for the local tel schema cache that serves
+    ///     bare (development) references (§8.2).
     fn document_all_errors(result: &ParseResult, test_dir: &std::path::Path) -> Vec<TelError> {
         let mut all_errors: Vec<TelError> = result.errors.clone();
         if let Some(ref pr) = result.document.pragma {
-            if let Some(schema_url) = pr.schema.as_deref() {
-                if schema_url == "https://tel-lang.org/schema/tels" {
+            if let Some(schema_ref) = pr.reference.as_deref() {
+                if schema_ref == crate::resolver::BUILTIN_TELS_REFERENCE {
                     let builtin = builtin_tels();
                     let ta = type_assign(&result.document, &builtin, None);
                     let had_ta_errors = !ta.errors.is_empty();
@@ -4426,7 +4549,7 @@ mod tests {
                             ));
                         }
                     }
-                } else if let Some(name) = extract_url_tail(schema_url) {
+                } else if let Some(name) = extract_reference_name(schema_ref) {
                     // Look for a sibling `<name>.tel` first, then `_<name>.tel`
                     // (the underscore convention for auxiliary fixtures that
                     // aren't tests themselves).
@@ -4733,7 +4856,7 @@ mod tests {
 
     #[test]
     fn validate_sigil_accepts_valid_chars() {
-        for s in &["#", "!", "@", "$", "%", "&", "*", "+", ".", "/", ":", ";", "?", "^", "_", "|", "~"] {
+        for s in &["#", "!", "@", "$", "%", "&", "*", ".", "/", ":", ";", "?", "^", "_", "|", "~"] {
             assert_eq!(validate_sigil(s), ValidationResponse::Valid, "sigil `{}` rejected", s);
         }
     }

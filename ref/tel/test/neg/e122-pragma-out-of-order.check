@@ -6,11 +6,11 @@ Document {
                 1,
                 0,
             ),
-            reference: Some(
-                "example.com/schema",
-            ),
+            reference: None,
             layers: [],
-            signature: None,
+            signature: Some(
+                "deadbeefcafebabe0123456789abcdeff",
+            ),
             sigil: None,
         },
     ),
@@ -31,3 +31,5 @@ Document {
         },
     ],
 }
+errors:
+  E122 [0,60): Pragma phrases violate the positional order or multiplicity

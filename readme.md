@@ -47,12 +47,13 @@ sigil:
 
 ```tel
 tel 1.0
-tel 1.0 https://example.org/schema/contact#sigḅHrïЖqẍḱăL
-tel 1.0 contact %
+tel 1.0 example.org/contact:1.2.0 %
+tel 1.0 example.org/contact +postal ḅHrïЖqẍḱăLḅHrïЖqẍḱăLḅHrïЖqẍḱăLḅHrïЖqẍ
 ```
 
-The schema identifier is either a URL, a URL with a BASE-256 signature fragment, or a bare
-signature. The sigil overrides the default `#`.
+The schema is identified by a LIRA reference (`domain/name`, optionally with a `:version` or
+`:tag` selector), optional `+layer` selections, and/or a bare BASE-256 schema signature. The
+sigil overrides the default `#`.
 
 ### Compounds and atoms
 

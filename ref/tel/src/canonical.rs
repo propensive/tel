@@ -40,19 +40,15 @@ fn emit_pragma(doc: &Document, out: &mut String) {
         .unwrap_or((1, 0));
     out.push_str(&format!("{}.{}", major, minor));
     if let Some(p) = &doc.pragma {
-        if let Some(sid) = &p.schema {
+        // §22.3: canonical serialization carries the bare BASE-256 schema
+        // signature alone; any schema reference and layer selections are
+        // presentation-layer conveniences and are omitted. (When no
+        // signature was carried, computing the composed signature requires
+        // the schema *document*, which this function does not receive; a
+        // reference-only pragma is emitted without a schema identification.)
+        if let Some(sig) = &p.signature {
             out.push(' ');
-            // §22.3: if the identifier carries a URL fragment (signature
-            // separated by `#`), emit the bare signature alone.
-            if sid.contains("://") {
-                if let Some(idx) = sid.find('#') {
-                    out.push_str(&sid[idx + 1..]);
-                } else {
-                    out.push_str(sid);
-                }
-            } else {
-                out.push_str(sid);
-            }
+            out.push_str(sig);
         }
     }
     out.push('\n');
@@ -317,7 +313,10 @@ mod tests {
         let schema = schema_string_field("note", true);
         let doc = Document {
             interpreter_directive: None,
-            pragma: Some(crate::Pragma { version: (1, 0), schema: None, sigil: None }),
+            pragma: Some(crate::Pragma {
+                version: (1, 0), reference: None, layers: Vec::new(),
+                signature: None, sigil: None,
+            }),
             line_endings: crate::LineEndings::LF,
             children: vec![Block {
                 comments: vec![], tabulation: None, trailing_blank_lines: 0,

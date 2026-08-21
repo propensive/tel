@@ -1,4 +1,4 @@
-tel 1.0 https://example.org/contact-layered
+tel 1.0 example.org/contact-layered
 
 # A document conforming to the composed schema defined in
 # `contact-layered-schema.tel` (or equivalently `contact-layered-composed.tel`).

@@ -1,4 +1,4 @@
-tel 1.0 https://example.org/documents-by-form
+tel 1.0 example.org/documents-by-form
 
 # This document carries three Scalar values, each in a different atom
 # form (per §14–§15 of the TEL Specification, with selection rules in

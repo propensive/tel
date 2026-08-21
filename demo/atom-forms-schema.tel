@@ -1,4 +1,4 @@
-tel 1.0 https://tel-lang.org/schema/tel-schema
+tel 1.0 specification.tel/tels:1.0.0
 
 # A small schema demonstrating that scalar values can be carried in
 # any of the three atom forms (inline, source, literal) depending on

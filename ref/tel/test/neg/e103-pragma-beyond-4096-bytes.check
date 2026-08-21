@@ -6,9 +6,11 @@ Document {
                 1,
                 0,
             ),
-            schema: Some(
-                "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            reference: Some(
+                "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ),
+            layers: [],
+            signature: None,
             sigil: None,
         },
     ),
@@ -30,4 +32,4 @@ Document {
     ],
 }
 errors:
-  E103 [4080,4208): Pragma line extends beyond first 4096 bytes
+  E103 [4080,4200): Pragma line extends beyond first 4096 bytes
