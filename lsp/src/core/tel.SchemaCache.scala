@@ -44,6 +44,47 @@ object SchemaCache:
     val tels = Tels.Reconstructor.fromTel(tel)
     Entry(tels.name, signature(tel, Nil), tels.layers.readable.to(List).map(_.name).join(t", "))
 
+  // The §20.1 checks Stratiform's `Tels.Validation` does not yet perform: every type reference
+  // must resolve within the composed namespace, and to a Definition of the right kind. A `Field`
+  // or `Variant` may reference a record or a scalar (the built-ins are prepended into
+  // `schema.scalars` at reconstruction, so they resolve here too), but not a select (E217 — the
+  // sum-typed member form is the `SelectRef`); a `SelectRef` must reference a select. A name that
+  // resolves to nothing at all is E209. Returns each offending TypeName with its reason, in
+  // declaration order; run against the COMPOSED schema, so layer-introduced definitions and
+  // references are both in scope.
+  def incoherences(schema: Tels): scala.List[(Text, Tel.Error.Reason)] =
+    def kindOf(name: Text): Optional[Text] =
+      if schema.records.readable.exists(_.name == name) then t"record"
+      else if schema.scalars.readable.exists(_.name == name) then t"scalar"
+      else if schema.selects.readable.exists(_.name == name) then t"select"
+      else Unset
+
+    def checkType(fieldType: Tels.Type): scala.List[(Text, Tel.Error.Reason)] = fieldType match
+      case Tels.Reference(name) => kindOf(name) match
+        case t"record" | t"scalar" => scala.Nil
+        case t"select"             => scala.List((name, Tel.Error.Reason.ReferenceKindMismatch))
+        case _                     => scala.List((name, Tel.Error.Reason.UnresolvedReference))
+
+      case struct: Tels.Struct => checkMembers(struct.members.readable.to(scala.List))
+      case _                   => scala.Nil
+
+    def checkMembers(members: scala.List[Tels.Member]): scala.List[(Text, Tel.Error.Reason)] =
+      members.flatMap:
+        case field: Tels.Field => checkType(field.fieldType)
+
+        case select: Tels.SelectRef => kindOf(select.reference) match
+          case t"select"             => scala.Nil
+          case t"record" | t"scalar" => scala.List((select.reference, Tel.Error.Reason.ReferenceKindMismatch))
+          case _                     => scala.List((select.reference, Tel.Error.Reason.UnresolvedReference))
+
+        case _ => scala.Nil
+
+    checkMembers(schema.document.members.readable.to(scala.List))
+    ++ schema.records.readable.to(scala.List)
+       . flatMap(record => checkMembers(record.members.readable.to(scala.List)))
+    ++ schema.selects.readable.to(scala.List).flatMap: select =>
+         select.variants.readable.to(scala.List).flatMap(variant => checkType(variant.variantType))
+
   private def read(file: Path on Linux)
       (using Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error])
   :   Tel =
@@ -85,7 +126,16 @@ object SchemaCache:
              Tactic[Path.Error])
   :   Entry =
     val text = file.read[Text]
-    val entry = entryOf(text.read[Tel])   // reconstructs the Tels (raises if malformed) and its id
+    val tel = text.read[Tel]
+    val entry = entryOf(tel)              // reconstructs the Tels (raises if malformed) and its id
+
+    // Full §20.1 verification before acceptance: compose the layers and run Stratiform's schema
+    // validity battery, then the reference-coherence checks it does not yet include. An
+    // incoherent schema would otherwise be accepted here and only fail later, when a document is
+    // validated against it.
+    val composed = Tels.Validation.validate(Tels.Reconstructor.fromTel(tel))
+    incoherences(composed).headOption.foreach { (_, reason) => abort(Tel.Error(reason)) }
+
     if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
     val target = t"${directory.encode}/${entry.name}.tel".as[Path on Linux]
     makeWritable(target)                   // a prior copy is stored read-only

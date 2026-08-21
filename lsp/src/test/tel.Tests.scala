@@ -384,6 +384,44 @@ field looks-like-a-compound
         . map(_.plain.s)
       . assert(_ == scala.List("✓ pets.tel: no problems found"))
 
+    suite(m"Schema coherence"):
+      def schemaDoc(body: Text): Text = t"tel 1.0 https://tel-lang.org/schema/tels\n\n$body"
+
+      test(m"An unresolved type reference is E209, located on the TypeName atom"):
+        val text = schemaDoc(t"name x\n\ndocument\n  field foo Widget\n")
+        TelServer.diagnose(text, resolver).stdlib
+        . map(d => (d.code.let(_.s).or("?"), d.range.start.line, d.range.start.character))
+      . assert(_ == scala.List(("E209", 5, 12)))
+
+      test(m"A field referencing a select is E217, not the SelectRef form"):
+        val text = schemaDoc:
+          t"name x\n\nselect Status\n  variant on Flag\n  variant off Flag\n\ndocument\n  field s Status\n"
+        TelServer.diagnose(text, resolver).stdlib.map(_.code.let(_.s).or("?"))
+      . assert(_ == scala.List("E217"))
+
+      test(m"A default on an optional member is E203 (the §20.1 battery is wired in)"):
+        val text = schemaDoc(t"name x\n\ndocument\n  field foo String optional fallback\n")
+        TelServer.diagnose(text, resolver).stdlib.map(_.code.let(_.s).or("?"))
+      . assert(_ == scala.List("E203"))
+
+      test(m"A coherent schema stays diagnostic-free"):
+        TelServer.diagnose(keyedSchemaText, resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"`schema add` rejects an incoherent schema and leaves no entry"):
+        val dir = java.nio.file.Files.createTempDirectory("tel-add-test").nn
+        val file = dir.resolve("dangling.tel").nn
+        java.nio.file.Files.write
+          ( file, schemaDoc(t"name dangling\n\ndocument\n  field foo Widget\n").s.getBytes("UTF-8").nn )
+
+        val registry = t"${dir.toString}/registry".as[Path on Linux]
+        val added = safely:
+          SchemaCache.add(registry, t"${file.toString}".as[Path on Linux])
+
+        val stored = java.nio.file.Files.exists(dir.resolve("registry/dangling.tel").nn)
+        (added.absent, stored)
+      . assert(_ == (true, false))
+
     suite(m"Hover"):
       test(m"Hovering a field keyword shows its schema declaration"):
         TelServer.hoverAt(document(signature), Lsp.Position(3, 2), resolver)

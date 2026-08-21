@@ -28,8 +28,14 @@ It is organised around subcommands:
   launches).
 - **`tel lsp --log`** — stream, live, the messages a running server sends/receives (a debugging aid).
 - **`tel schema list`** — list registered schemas as a table (name, BASE-256 id, layers).
-- **`tel schema add <file>`** — validate a schema against the TELS meta-schema and add it to the
-  registry (relative paths resolve against the invoking shell's directory).
+- **`tel schema add <file>`** — verify a schema and add it to the registry (relative paths resolve
+  against the invoking shell's directory). Acceptance requires the full battery: conformance to the
+  TELS meta-schema, Stratiform's §20.1 schema-validity checks over the layer-composed result
+  (`Tels.Validation.validate` — duplicate keywords, layer rules, `key` constraints, …), and
+  reference coherence (every `TypeName` must resolve, to a Definition of the right kind — E209 and
+  E217, which Stratiform itself only discovers lazily when a document is validated against the
+  schema). An incoherent schema is rejected rather than stored, so the registry can never hold a
+  schema that will fail at use.
 - **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
   with the named layers (in order; none = the base schema).
 - **`tel validate <file> [--llm]`** — parse and validate a TEL file, reporting exactly the
@@ -60,8 +66,10 @@ Features so far:
   `Tel.supplementPositions`), and, failing that, the focus's keyword path is resolved against the
   position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tels` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
-  malformed-schema errors such as `E306` (unrecognised keyword), plus a local `E210` check for
-  duplicate (or built-in-colliding) definition names. Diagnostics are cleared when a document
+  malformed-schema errors such as `E306` (unrecognised keyword); run through Stratiform's §20.1
+  schema-validity battery over the layer-composed result (E201-E221); and checked for reference
+  coherence (E209/E217, located on the offending `TypeName` atom). A local `E210` check covers
+  duplicate (or built-in-colliding) definition names, which the battery's base side does not. Diagnostics are cleared when a document
   closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
   identifier (the document is valid, just unvalidated).
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document

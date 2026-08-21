@@ -185,6 +185,10 @@ object TelServer:
     // inside the `guard` below, so it stays `Unset` exactly when the parse failed.
     var document: Optional[Tel] = Unset
 
+    // The composed schema of a schema document, set only when reconstruction AND the §20.1
+    // validity battery both succeed; the reference-coherence pass below runs against it.
+    var composed: Optional[Tels] = Unset
+
     // Parsing and the schema passes that depend on it share ONE accrual boundary, so the document
     // is parsed once and the dependency between the two is carried by the `Venture` rather than by
     // re-testing whether the parse produced errors. Forcing a failed venture skips the enclosing
@@ -210,7 +214,13 @@ object TelServer:
             resolution match
               case Resolution.Meta(_, _) =>
                 venture(Tel.Type.assign(tel, Tels.Axiom.tels))
-                venture(Tels.Reconstructor.fromTel(tel))
+
+                // Reconstruction alone checks only the document's shape; `Validation.validate`
+                // composes the layers and runs the §20.1 schema-validity battery (E201-E221)
+                // over the result. The composed schema feeds the reference-coherence pass.
+                val validated = venture(Tels.Validation.validate(Tels.Reconstructor.fromTel(tel)))
+                guard:
+                  composed = validated()
 
               case Resolution.Resolved(_, _, schema) =>
                 venture(Tel.Type.assign(tel, schema))
@@ -233,6 +243,13 @@ object TelServer:
       case Resolution.Meta(_, _) if !document.absent => duplicateDefinitions(lines)
       case _                                         => Nil
 
+    // Reference-coherence findings (E209/E217), located on the offending TypeName atom in the
+    // source scan. Computed only when the whole validity battery passed, so they are never
+    // cascade noise from a malformed schema.
+    val incoherent = composed.lay(scala.List[Lsp.Diagnostic]()): schema =>
+      SchemaCache.incoherences(schema).map: (name, reason) =>
+        incoherenceDiagnostic(name, reason, lines)
+
     // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
     // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
     val unresolved = resolution match
@@ -251,7 +268,8 @@ object TelServer:
 
       case _ => Nil
 
-    (entries.map(diagnostic(_, lines, document)) ::: duplicates ::: unresolved).stdlib
+    (entries.map(diagnostic(_, lines, document)) ::: duplicates ::: incoherent.to(List)
+     ::: unresolved).stdlib
     . distinctBy(entry => (entry.range, entry.code, entry.message))
     . to(List)
 
@@ -286,6 +304,38 @@ object TelServer:
         else seen += name
 
     out.to(scala.List).to(List)
+
+  // A reference-coherence finding, located on the first occurrence of the offending TypeName in a
+  // type slot: the third token of a `field`/`variant` line, or the second token of an indented
+  // `select` line (a `SelectRef`; the definition form is unindented). Falls back to the first
+  // line when the scan cannot find it, which only a scan/parse disagreement would cause.
+  private def incoherenceDiagnostic
+     ( name: Text, reason: Tel.Error.Reason, lines: IndexedSeq[String] )
+  :   Lsp.Diagnostic =
+
+    val located = lines.zipWithIndex.collectFirst(scala.Function.unlift { (line, index) =>
+      val lineTokens = tokens(line).stdlib
+
+      val slot =
+        if lineTokens.length >= 3 && (lineTokens(0)(0) == "field" || lineTokens(0)(0) == "variant")
+           && lineTokens(2)(0) == name.s
+        then Some(lineTokens(2))
+        else if lineTokens.length >= 2 && lineTokens(0)(0) == "select" && leadingSpaces(line) > 0
+                && lineTokens(1)(0) == name.s
+        then Some(lineTokens(1))
+        else None
+
+      slot.map((_, start, end) => (index, start, end))
+    })
+
+    val (line, start, end) = located.getOrElse((0, 0, 1))
+
+    Lsp.Diagnostic
+      ( range    = Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)),
+        severity = Lsp.DiagnosticSeverity.Error,
+        code     = t"E${reason.number}",
+        source   = t"tel",
+        message  = m"$reason".text )
 
   // ── Schema-aware information (hover + completion) ──────────────────────────────────────────────
   //
