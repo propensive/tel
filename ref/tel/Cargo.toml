@@ -7,3 +7,9 @@ edition = "2021"
 palimpsest = { path = "../palimpsest" }
 base256 = { path = "../base256" }
 blake3 = "1.5"
+# Pattern constraints (§21.8). The `regex` crate approximates the RE2
+# syntax pin (like RE2: no backreferences or lookaround, so patterns are
+# true regular languages); `regex-automata` supplies the DFAs behind the
+# containment decision procedure (§20.3 checked pattern replacement).
+regex = "1"
+regex-automata = "0.4"

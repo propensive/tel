@@ -66,11 +66,11 @@ The value hash of [`tels.tel`](tels.tel) — the schema-for-schemas defined in �
 of the TEL Specification — is:
 
 ```
-BLAKE3-256: 780979f62e3232703a733e260689a5d2dfa2ce82ce0ee950715ebdfac473cb8a
-BASE-256:   xȉyǶĮ22pĺsľȦĆẉƥǒӟҢώẂώĎῩPqŞẽῺτsϋΊ
+BLAKE3-256: d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3
+BASE-256:   ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ
 ```
 
-A conforming implementation that encodes the canonical `tels.tel` (1699 BinTEL bytes; raw
+A conforming implementation that encodes the canonical `tels.tel` (1741 BinTEL bytes; raw
 bytes recorded in [`demo/tels.bintel.hex`](demo/tels.bintel.hex)) and hashes the
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.

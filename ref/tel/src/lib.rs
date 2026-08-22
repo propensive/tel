@@ -20,6 +20,7 @@
 pub use base256;
 pub mod bintel;
 pub mod canonical;
+pub mod containment;
 pub mod mutate;
 pub mod resolver;
 
@@ -66,9 +67,10 @@ pub enum ErrorCode {
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
     E211, E212, E213, E214, E215, E216, E217, E218, E219, E220, E221,
+    E222, E223, E224,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
-    E312, E313, E314,
+    E312, E313, E314, E315,
 }
 
 impl ErrorCode {
@@ -118,6 +120,9 @@ impl ErrorCode {
             Self::E219 => "Key field's type does not resolve to a Scalar",
             Self::E220 => "Key field must be effectively required and non-repeatable",
             Self::E221 => "More than one key field in a Struct",
+            Self::E222 => "Invalid RE2 pattern",
+            Self::E223 => "Layer pattern replacement is not contained in the inherited patterns",
+            Self::E224 => "Scalar declares neither `validate` nor `pattern`",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -132,6 +137,7 @@ impl ErrorCode {
             Self::E312 => "Scalar value rejected by its type's codec encoder",
             Self::E313 => "Scalar type names a codec the codec binding does not provide",
             Self::E314 => "Duplicate key value among keyed children of one parent",
+            Self::E315 => "Scalar value does not match a declared pattern",
         }
     }
 }
@@ -264,6 +270,11 @@ pub struct RecordDefinition {
 pub struct ScalarDefinition {
     pub name: String,
     pub validators: Vec<String>,
+    /// RE2 pattern constraints (§21.8). Each pattern is matched against
+    /// the entire value text (implicit anchoring); multiple patterns
+    /// apply in AND-conjunction (intersection). Invalid patterns are
+    /// E222; a value that fails a pattern is E315.
+    pub patterns: Vec<String>,
     /// Optional codec name (§21.7). When present, values of this scalar
     /// are carried in BinTEL as the codec's bytes rather than as UTF-8
     /// text, and the codec's encoder acts as one further validity
@@ -326,6 +337,9 @@ pub struct Scalar {
     /// scalar's value text. Multiple validators apply in AND-conjunction.
     /// An empty list means the Scalar accepts any text.
     pub validators: Vec<String>,
+    /// RE2 pattern constraints (§21.8), copied from the resolved
+    /// `ScalarDefinition.patterns`. Empty on the built-in scalars.
+    pub patterns: Vec<String>,
     /// Optional codec name (§21.7), copied from the resolved
     /// `ScalarDefinition.encoding`. Null on the built-in scalars.
     pub encoding: Option<String>,
@@ -927,17 +941,20 @@ pub fn builtin_tels() -> Schema {
         description: Some("A record declaration: a named struct definition.".to_string()),
     };
 
-    // A `scalar` declaration: name + one or more validators + optional
-    // encoding.
+    // A `scalar` declaration: name + validators and/or RE2 pattern
+    // constraints + optional encoding. `validate` and `pattern` are both
+    // optional here; the at-least-one rule is E224 (not expressible
+    // structurally).
     let r_scalar = RecordDefinition {
         name: "Scalar".to_string(),
         members: vec![
             field(dflt, dflt, "name", tn_type()),
-            field(dflt, loose, "validate", id_type()),
+            field(loose, loose, "validate", id_type()),
+            field(loose, loose, "pattern", str_type()),
             field(loose, dflt, "encoding", id_type()),
             field(loose, dflt, "description", str_type()),
         ], validators: Vec::new(),
-        description: Some("A scalar declaration: a named scalar definition with one or more validators and an optional encoding.".to_string()),
+        description: Some("A scalar declaration: a named scalar definition constrained by validators and/or RE2 patterns, with an optional encoding.".to_string()),
     };
 
     // A top-level `select` declaration.
@@ -1099,18 +1116,22 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
         "Flag" => return ResolvedType::Flag,
         "String" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["string".to_string()],
+            patterns: Vec::new(),
             encoding: None,
         })),
         "Identifier" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["identifier".to_string()],
+            patterns: Vec::new(),
             encoding: None,
         })),
         "Sigil" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["sigil".to_string()],
+            patterns: Vec::new(),
             encoding: None,
         })),
         "TypeName" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["type-name".to_string()],
+            patterns: Vec::new(),
             encoding: None,
         })),
         _ => {}
@@ -1126,6 +1147,7 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
         if s.name == name {
             return ResolvedType::Scalar(Cow::Owned(Scalar {
                 validators: s.validators.clone(),
+                patterns: s.patterns.clone(),
                 encoding: s.encoding.clone(),
             }));
         }
@@ -1322,6 +1344,20 @@ fn validate_scalar_value(
         let req = ValidationRequest::Scalar { method: validator, value };
         if let ValidationResponse::Invalid(diag) = validate_with_builtins(&req, cb) {
             emit_e310(&diag, ctx, errors);
+        }
+    }
+    // Pattern constraints (§21.8): each pattern matches the entire value
+    // text; declaration order; AND-conjoined. An unparseable pattern is a
+    // schema error (E222, reported by `validate_schema`), so it is skipped
+    // here rather than double-reported.
+    for pattern in &sc.patterns {
+        if let Ok(matched) = containment::matches_whole(pattern, value) {
+            if !matched {
+                errors.push(TelError::with_detail(
+                    ErrorCode::E315, 0, 0,
+                    format!("`{}` value `{}` does not match pattern `{}`", ctx, value, pattern),
+                ));
+            }
         }
     }
     if let Some(name) = &sc.encoding {
@@ -1810,22 +1846,25 @@ fn construct_record(c: &Compound) -> RecordDefinition {
 }
 
 fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
-    // `scalar <Name>` with one or more `validate <name>` children and an
-    // optional `encoding <name>` child (§21.7).
+    // `scalar <Name>` with `validate <name>` and/or `pattern <regex>`
+    // children (§21.1, §21.8) and an optional `encoding <name>` child
+    // (§21.7).
     let name = definition_name(c);
     let mut validators: Vec<String> = Vec::new();
+    let mut patterns: Vec<String> = Vec::new();
     let mut encoding: Option<String> = None;
     for block in &c.children {
         for child in &block.compounds {
             match child.keyword.as_str() {
                 "validate" => validators.push(scalar_value_text(child)),
+                "pattern" => patterns.push(scalar_value_text(child)),
                 "encoding" => encoding = Some(scalar_value_text(child)),
                 _ => {}
             }
         }
     }
     let description = description_of(c);
-    ScalarDefinition { name, validators, encoding, description }
+    ScalarDefinition { name, validators, patterns, encoding, description }
 }
 
 /// Construct a `SelectDefinition` from a top-level `select <Name>` compound
@@ -2128,6 +2167,53 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
                 detail: format!("scalar `{}` collides with a built-in TypeName", sd.name),
             });
         }
+    }
+
+    // E222: every pattern (base and layer scalars alike) must be a valid
+    // RE2 pattern; fail closed like E313 — an unparseable pattern is never
+    // treated as satisfied. E224: a ScalarDefinition must carry at least
+    // one `validate` or `pattern`; for a layer scalar this applies only
+    // when it introduces a new name (a same-name scalar inherits the
+    // base's constraints).
+    for sd in s.scalars.iter().chain(s.layers.iter().flat_map(|l| l.scalars.iter())) {
+        for pattern in &sd.patterns {
+            if let Err(reason) = containment::check_syntax(pattern) {
+                errors.push(SchemaError {
+                    code: ErrorCode::E222,
+                    detail: format!(
+                        "scalar `{}` declares an invalid pattern `{}`: {}",
+                        sd.name, pattern, reason,
+                    ),
+                });
+            }
+        }
+    }
+    for sd in &s.scalars {
+        if sd.validators.is_empty() && sd.patterns.is_empty() {
+            errors.push(SchemaError {
+                code: ErrorCode::E224,
+                detail: format!(
+                    "scalar `{}` declares neither `validate` nor `pattern`", sd.name,
+                ),
+            });
+        }
+    }
+    let mut scalar_names: std::collections::HashSet<&str> =
+        s.scalars.iter().map(|sd| sd.name.as_str()).collect();
+    for layer in &s.layers {
+        for sd in &layer.scalars {
+            let inherits = scalar_names.contains(sd.name.as_str());
+            if !inherits && sd.validators.is_empty() && sd.patterns.is_empty() {
+                errors.push(SchemaError {
+                    code: ErrorCode::E224,
+                    detail: format!(
+                        "layer `{}` scalar `{}` declares neither `validate` nor `pattern`",
+                        layer.name, sd.name,
+                    ),
+                });
+            }
+        }
+        for sd in &layer.scalars { scalar_names.insert(sd.name.as_str()); }
     }
     for sl in &s.selects {
         if BUILTIN_TYPE_NAMES.contains(&sl.name.as_str()) {
@@ -2437,6 +2523,49 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
             }
             if let Some(pos) = scalars.iter().position(|x| x.name == sd.name) {
                 let merged = merge_validators(&scalars[pos].validators, &sd.validators);
+                // MergeScalar's pattern rule (§20.3): a layer scalar with
+                // one or more `pattern` lines REPLACES the inherited set,
+                // subject to the containment check L(⋂new) ⊆ L(⋂old),
+                // decomposed as ⋂new ⊆ Pᵢ for each inherited Pᵢ (E223 on
+                // failure, fail-closed: the inherited set is kept). A
+                // textually identical restatement short-circuits; an empty
+                // inherited set is Σ*, so first patterns are trivially
+                // contained. No `pattern` lines → inherit unchanged.
+                let merged_patterns = if sd.patterns.is_empty()
+                    || sd.patterns == scalars[pos].patterns
+                {
+                    if sd.patterns.is_empty() { scalars[pos].patterns.clone() }
+                    else { sd.patterns.clone() }
+                } else {
+                    let mut contained = true;
+                    for inherited in &scalars[pos].patterns {
+                        match containment::intersection_contained(&sd.patterns, inherited) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                contained = false;
+                                errors.push(SchemaError {
+                                    code: ErrorCode::E223,
+                                    detail: format!(
+                                        "layer `{}` replaces the patterns of scalar `{}`, but the new set is not contained in inherited pattern `{}`",
+                                        layer.name, sd.name, inherited,
+                                    ),
+                                });
+                            }
+                            Err(reason) => {
+                                contained = false;
+                                errors.push(SchemaError {
+                                    code: ErrorCode::E223,
+                                    detail: format!(
+                                        "layer `{}` replaces the patterns of scalar `{}`, but containment against `{}` was not provable: {}",
+                                        layer.name, sd.name, inherited, reason,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    if contained { sd.patterns.clone() }
+                    else { scalars[pos].patterns.clone() } // fail closed: keep the inherited set
+                };
                 // MergeScalar's encoding rule (§20.3): a layer MAY add an
                 // encoding where the base has none, MAY restate the base's,
                 // MUST NOT change it (E218). Removal has no syntax.
@@ -2460,6 +2589,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 scalars[pos] = ScalarDefinition {
                     name: sd.name.clone(),
                     validators: merged,
+                    patterns: merged_patterns,
                     encoding: merged_encoding,
                     // Layer description overrides base; else inherit base.
                     description: sd.description.clone()
@@ -4522,7 +4652,7 @@ mod tests {
     /// Two test conventions:
     ///
     /// (1) Pragma names tels (via its pinned LIRA coordinate,
-    ///     `specification.tel/tels:1.0.0`): type-assign against the
+    ///     `specification.tel/tels:2.0.0`): type-assign against the
     ///     built-in tels, and if that passes, construct a Schema and
     ///     validate it.
     ///
@@ -4948,7 +5078,7 @@ mod tests {
                         required: Polarity::Loose, // not required, so default is illegal
                         repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()] }),
+                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()] }),
                         default: Some("bar".to_string()),
                     }),
                 ],
@@ -5167,7 +5297,7 @@ mod tests {
     }
 
     fn scalar_string() -> Type {
-        Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]})
+        Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]})
     }
 
     #[test]
@@ -5211,7 +5341,7 @@ mod tests {
             Member::Field(Field { key: false, description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
-                r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()] }),
+                r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()] }),
                 default: Some("Anonymous".to_string()),
             }),
         ]);
@@ -5238,7 +5368,7 @@ mod tests {
             Member::Field(Field { key: false, description: None,
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
-                r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["identifier".to_string()]}), default: None,
+                r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["identifier".to_string()]}), default: None,
             }),
         ]);
         // "FOO" is not a valid identifier (uppercase)
@@ -6524,13 +6654,13 @@ layer fancy
                                 Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None,
+                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None,
+                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                             ],
@@ -6586,7 +6716,7 @@ layer fancy
                     Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6633,7 +6763,7 @@ layer fancy
                                 Member::Field(Field { key: false, description: None,
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
+                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                                 }),
                                 Member::Field(Field { key: false, description: None,
                                     required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6672,7 +6802,7 @@ layer fancy
                     Member::Field(Field { key: false, description: None,
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                     }),
                     Member::Field(Field { key: false, description: None,
                         required: Polarity::Loose, repeatable: Polarity::Default,
@@ -6783,7 +6913,7 @@ layer fancy
             Member::Field(f) => f.keyword.as_str(),
             _ => panic!("Scalar record has only Field members"),
         }).collect();
-        assert_eq!(keywords, vec!["name", "validate", "encoding", "description"]);
+        assert_eq!(keywords, vec!["name", "validate", "pattern", "encoding", "description"]);
     }
 
     #[test]

@@ -164,7 +164,7 @@ claim: *this document uses schema `ref`, with these layers, as attested by this 
 The built-in `tels` meta-schema has the canonical, version-pinned coordinate:
 
 ```text
-specification.tel/tels:1.0.0
+specification.tel/tels:2.0.0
 ```
 
 The pin is fixed until the TEL specification itself is revised; a later revision publishes a
@@ -199,7 +199,7 @@ computed from a resolved release).
 ### 3.2 Resolution protocol
 
 Steps 0–3 are unchanged in substance (embedded-schema lookup; built-in lookup, now also
-matching `specification.tel/tels:1.0.0`; cache lookup; library lookup), with one
+matching `specification.tel/tels:2.0.0`; cache lookup; library lookup), with one
 generalisation: **any content-addressed store may serve steps 2–3.** In particular, an
 implementation MAY consult both the tel schema cache and a local LIRA store, in either order —
 a hash lookup is order-independent, because any store's answer for a given signature is the

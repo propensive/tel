@@ -186,6 +186,22 @@ record Event
   validate start-precedes-end
 ```
 
+### Patterns
+
+A scalar may instead (or additionally) be constrained by **RE2 patterns**, matched against the
+entire value; repeated `pattern` lines intersect. Because RE2 patterns are true regular languages,
+pattern containment is decidable: a layer may *replace* a scalar's patterns with a provably
+narrower set, and the compatibility rules check the refinement rather than trusting it.
+
+```tel
+scalar ProductCode
+  pattern [A-Z]{2}-[0-9]{4}
+
+layer regional
+  scalar ProductCode
+    pattern (EU|UK)-[0-9]{4}
+```
+
 ## Binary form (BinTEL)
 
 Every well-typed TEL document has a deterministic **BinTEL** encoding (see

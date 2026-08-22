@@ -1,4 +1,4 @@
-tel 1.0 specification.tel/tels:1.0.0
+tel 1.0 specification.tel/tels:2.0.0
 
 # A schema demonstrating scalar encodings (§21.7 of the TEL Specification).
 # Each `encoding` line names a codec — an application-defined encoder/decoder

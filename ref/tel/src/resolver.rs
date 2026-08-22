@@ -40,7 +40,7 @@ fn builtin_tels_signature() -> Vec<u8> {
 /// The canonical, version-pinned LIRA coordinate of the built-in `tels`
 /// meta-schema (§8.1). The pin advances only when the TEL specification
 /// is revised.
-pub const BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:1.0.0";
+pub const BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:2.0.0";
 
 /// The schema identification carried by a pragma (§8.1): a LIRA
 /// reference, layer selections, and/or a schema signature, which

@@ -359,7 +359,7 @@ addressable by layer selections. These bindings are enforced at publish time by 
 schema source a reader will find.
 
 The built-in `tels` meta-schema (§20.5) has the canonical, version-pinned coordinate
-`specification.tel/tels:1.0.0`. The pin is fixed until this specification is next revised; a
+`specification.tel/tels:2.0.0`. The pin is fixed until this specification is next revised; a
 later revision publishes a new LIRA release of `tels` and advances the pinned version.
 
 #### Layer Selections
@@ -458,7 +458,7 @@ order:
    inputs, resolution begins at step 1.
 1. **Built-in lookup.** If the document schema's signature equals the built-in `tels`
    schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), or its
-   reference is the pinned coordinate `specification.tel/tels:1.0.0` (§8.1), the parser MUST
+   reference is the pinned coordinate `specification.tel/tels:2.0.0` (§8.1), the parser MUST
    use the built-in `Schema` and skip the remaining steps. Neither form requires network
    access.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema signature.
@@ -1520,6 +1520,10 @@ interface RecordDefinition {
 interface ScalarDefinition {
   name: TypeName;
   validators: string[];
+  // RE2 pattern constraints (§21.8), in declaration order. Each pattern
+  // matches the entire value text; multiple patterns AND-conjoin
+  // (intersection).
+  patterns: string[];
   encoding: string | null;
   description: string | null;
 }
@@ -1545,6 +1549,7 @@ interface Struct {
 
 interface Scalar {
   validators: string[];
+  patterns: string[];
   encoding: string | null;
 }
 
@@ -1656,17 +1661,19 @@ to those of a `Struct`: a `RecordDefinition` is, in effect, a named `Struct`.
 `RecordDefinition.validators` mirrors `Struct.validators` (§21.6) and applies to every instance
 of the Definition.
 
-A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above) and a non-empty
-list of `validators`; it is a named `Scalar`. A `scalar` declaration MUST carry at least one
-`validate` line (this is enforced structurally by the `tels` schema, whose `Scalar`
-record makes `validate` a required repeatable member; an unconstrained scalar names the
-built-in `String` instead). A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
+A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above), a list of
+`validators`, and a list of `patterns` (RE2 pattern constraints, §21.8); it is a named
+`Scalar`. A `scalar` declaration MUST carry at least one `validate` or `pattern` line
+(**E224**); the disjunction cannot be expressed structurally by the `tels` schema, whose
+`Scalar` record makes both members optional and repeatable. An unconstrained scalar names the
+built-in `String` instead. A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
 kebab-case name of a codec (§21.7) defining the binary representation of the scalar's values in
 BinTEL — or `null` when absent. A declared encoding additionally constrains validity: a value
 the codec's encoder rejects is invalid (**E312**), in AND-conjunction with the declared
-validators. Layer-merge of same-name `ScalarDefinition`s concatenates the `validators` lists in
-declaration order, deduplicated, and merges `encoding` per §20.3 (a layer MAY add an encoding
-where the base has none; a conflicting non-null encoding is **E218**).
+validators and patterns. Layer-merge of same-name `ScalarDefinition`s concatenates the
+`validators` lists in declaration order, deduplicated; replaces the `patterns` list under the
+containment check of §20.3 (**E223** on failure); and merges `encoding` per §20.3 (a layer MAY
+add an encoding where the base has none; a conflicting non-null encoding is **E218**).
 
 A `SelectDefinition` has a `name` (subject to the same uniqueness rule), a non-empty list of
 `variants`, and a list of `validators`. It is a named sum type. Each variant has a kebab-case
@@ -1978,6 +1985,15 @@ A schema is invalid if any of the following holds:
 - a `Field` has `key = true` but, on the composed member after polarity merge (§20.3), its
   effective `required` is `false` or its effective `repeatable` is `true` (**E220**)
 - within a single composed `Struct`, more than one member is key-flagged (**E221**)
+- a `ScalarDefinition`'s `patterns` list (base or layer) contains a string that is not a valid
+  RE2 pattern (§21.8) (**E222**). Like an unresolved encoding (E313), an unparseable pattern
+  MUST NOT be treated as satisfied: the schema is invalid, never silently permissive.
+- during layer composition, a layer's same-name `ScalarDefinition` declares a non-empty
+  `patterns` list that is not contained in the inherited list under the rule of §20.3
+  (`L(⋂new) ⊆ L(⋂old)`), or the containment was not provable within the implementation's
+  documented resource budget (**E223**; fail closed)
+- a `ScalarDefinition` declares neither a `validate` nor a `pattern` line (**E224**); an
+  unconstrained scalar names the built-in `String` instead
 
 #### Schema Errors (E2xx)
 
@@ -2004,6 +2020,9 @@ A schema is invalid if any of the following holds:
 | E219 | A `Field` has `key = true` but its type does not resolve to a `Scalar` | The `key` flag of the field declaration |
 | E220 | A `Field` has `key = true` but its composed effective `required` is `false` or its composed effective `repeatable` is `true` | The `key` flag of the field declaration (the layer's, when layer-introduced) |
 | E221 | More than one member of a composed `Struct` is key-flagged | The `key` flag of the second key-flagged field in member order |
+| E222 | A `pattern` value is not a valid RE2 pattern (§21.8) | The offending `pattern` value |
+| E223 | A layer's replacing `patterns` set is not contained in the inherited set (`L(⋂new) ⊆ L(⋂old)` fails or is not provable within the implementation's documented budget; §20.3) | The layer's first `pattern` value |
+| E224 | A `ScalarDefinition` declares neither `validate` nor `pattern` | The `ScalarDefinition`'s name compound |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -2014,7 +2033,8 @@ by the schema.
 **Reference resolution.** Wherever this algorithm asks "is T a Struct?", "is T a Scalar?", etc.,
 the question is asked of the type T after **reference resolution**: if T is a `Reference(N)`, T
 is replaced by the `Struct` formed from the `members` of the matching `RecordDefinition`, or by
-the `Scalar` formed from the `validators` and `encoding` of the matching `ScalarDefinition`. If
+the `Scalar` formed from the `validators`, `patterns`, and `encoding` of the matching
+`ScalarDefinition`. If
 `N` is one of
 the predefined built-in type names (§20.5), the Reference resolves directly to the built-in:
 `Flag` resolves to the `Flag` type, and `String`, `Identifier`, `Sigil`, and `TypeName` each
@@ -2206,6 +2226,17 @@ list is organised by the structural duality between records and selects.
   the base's `validators` list (in source order, deduplicated), and MAY declare an `encoding`
   when the base has none, or restate the base's existing one (**E218** on conflict). Adding an
   encoding is tightening (§24.4): it can only shrink the set of accepted values.
+- **Replace a ScalarDefinition's patterns, checked.** A same-name `scalar` in a layer with one
+  or more `pattern` lines replaces the inherited `patterns` list with its own, subject to the
+  containment premise `L(⋂new) ⊆ L(⋂old)` — decided as `L(⋂new) ⊆ L(Pᵢ)` for each inherited
+  pattern `Pᵢ` per §21.8 (**E223** on any failure; the implementation MUST fail closed,
+  retaining the inherited list). A layer scalar with no `pattern` lines inherits the base's
+  list unchanged; restating a textually identical list is a benign no-op requiring no
+  containment decision; an inherited *empty* list denotes Σ* (no pattern constraint), so a
+  layer's first patterns are trivially contained. Unlike validators, whose names are
+  semantically opaque and therefore append-only, patterns are the one constraint whose
+  semantics the composition rules can inspect — checked replacement is exactly what that
+  visibility licenses, and it is always tightening (§24.4).
 - **Append validators** to a Struct, RecordDefinition, or SelectDefinition. A layer's
   `validate K` lines at any such position are appended (in source order, deduplicated) to the
   base's `validators` list; validators apply in declaration order and AND-conjuncted (§21.1),
@@ -2230,6 +2261,9 @@ detecting any of them MUST report the corresponding error:
   `"default"` or `"tight"` (**E215**).
 - Remove a validator from a Struct, Scalar, RecordDefinition, or SelectDefinition (validators
   are append-only across layers; a layer's `validate K` adds K, never removes an existing K).
+- **Widen a ScalarDefinition's patterns** — replace the `patterns` list with one whose
+  intersection language is not contained in the inherited intersection (**E223**). Narrowing
+  replacement is permitted (see above); widening is what the containment premise excludes.
 - Remove `key` from a field (no syntax — structurally prevented; the `key` merge is a
   monotone OR).
 - Change a `ScalarDefinition`'s non-null `encoding` to a different name (**E218**). (Removal
@@ -2328,10 +2362,13 @@ loosening an already-tight or default cardinality is rejected.
 member lists and merges `validators` by the append-and-deduplicate rule.
 
 **`MergeScalar(base, layer): ScalarDefinition`** merges the `validators` lists by the
-append-and-deduplicate rule, and merges `encoding` as follows: if the layer's `encoding` is
-null, the base's is retained; if the base's is null, the layer's is adopted; if both are
-non-null and equal, the restatement is a benign no-op; if both are non-null and different, the
-schema is invalid (**E218**). A layer-added `encoding` changes the BinTEL representation of the
+append-and-deduplicate rule; merges `patterns` by the checked-replacement rule (Permitted
+Operations above: an empty layer list inherits, a textually identical list is a no-op, and any
+other non-empty layer list replaces the inherited list subject to `L(⋂new) ⊆ L(⋂old)`, **E223**
+on failure with the inherited list retained); and merges `encoding` as follows: if the layer's
+`encoding` is null, the base's is retained; if the base's is null, the layer's is adopted; if
+both are non-null and equal, the restatement is a benign no-op; if both are non-null and
+different, the schema is invalid (**E218**). A layer-added `encoding` changes the BinTEL representation of the
 affected scalar's values; this is sound because a BinTEL document is always encoded and decoded
 under its full composed schema (identified by its signature, BinTEL §8), never under a prefix
 of the composition.
@@ -2436,7 +2473,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `layer`         | `Schema.layers[i]`                             |
 | `sigil`         | `Schema.sigil`                                 |
 | `record`        | A `RecordDefinition`: `Schema.records[i]` at schema root, or `Layer.records[i]` inside a `layer` compound. The first inline atom is the record's `TypeName`. |
-| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is one or more `validate <name>` lines, optionally followed by an `encoding` line. |
+| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is `validate <name>` and/or `pattern <regex>` lines (at least one of the two, E224), optionally followed by an `encoding` line. |
 | `select`        | At top level (or inside `layer`): a `SelectDefinition` — `Schema.selects[i]` or `Layer.selects[i]`. First inline atom is the `TypeName`; body is `variant`, `validate`, and (in layers only) `exclude` lines. **At a member position** (inside a `record` body, the `document` block, or a layer's `overlay` block): a `SelectRef` — the first inline atom is the `TypeName` of the referenced SelectDefinition; polarity is per use site. There is no inline-anonymous form; every select is named. |
 | `overlay`       | `Layer.overlay` — the struct whose members are merged into the composed document root by the algorithm in §20.3. |
 | `field`         | A `Field` member. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
@@ -2450,7 +2487,8 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `type`          | The type-name field of a `Field` or a `Variant`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
 | `reference`     | `SelectRef.reference` — the `TypeName` of the referenced `SelectDefinition`. Carried as the first inline atom of a member-position `select` compound (or, less commonly, as an explicit `reference <TypeName>` child compound). |
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
-| `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is E308 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` member it can never be filled by an inline atom. |
+| `pattern`       | One entry of `ScalarDefinition.patterns` — an RE2 pattern constraint (§21.8) matched against the entire value text. A `String`-typed repeatable member, permitted only inside a `scalar` body; multiple `pattern` lines AND-conjoin (intersection). Written as a compound child line (`pattern [A-Z]{2}-[0-9]{4}`, or with a source atom, §14, for patterns containing doubled spaces); because it follows the repeatable `validate` member it can never be filled by an inline atom. Invalid patterns are E222; layer replacement is containment-checked (E223, §20.3). |
+| `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is E308 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` and `pattern` members it can never be filled by an inline atom. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E203 otherwise). |
 | `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
 | `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E216 otherwise). |
@@ -2510,9 +2548,12 @@ select Status optional
 introduces a non-required SelectRef referencing the `Status` SelectDefinition.
 
 Member order in `Scalar` (the TELS record for `scalar` declarations) is `name`,
-`validate` (required, repeatable), `encoding` (optional), `description` (optional). Only `name`
-and `validate` are inline-atom-fillable; `encoding` and `description` are always compound
-children.
+`validate` (optional, repeatable), `pattern` (optional, repeatable), `encoding` (optional),
+`description` (optional). At least one `validate` or `pattern` line is required (**E224**; the
+disjunction is not expressible structurally). Only `name` and `validate` are
+inline-atom-fillable; `pattern`, `encoding`, and `description` are always compound children —
+which also keeps regex text clear of the phrase-separation rules of §10.3 (a pattern containing
+a hard-space run uses a source atom, §14).
 
 **References.** A `Field.type`, `Variant.type`, or `SelectRef.reference` resolves through the
 composed namespace described above. If the name is `Flag`, `String`, `Identifier`, `Sigil`, or
@@ -2539,10 +2580,10 @@ The pinned value, computed against the canonical
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | `780979f62e3232703a733e260689a5d2dfa2ce82ce0ee950715ebdfac473cb8a`   |
-| BASE-256   | `xȉyǶĮ22pĺsľȦĆẉƥǒӟҢώẂώĎῩPqŞẽῺτsϋΊ`                                  |
+| BLAKE3-256 | `d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3`   |
+| BASE-256   | `ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ`                                  |
 
-The BinTEL document root encoding of `tels.tel` is 1699 bytes; the raw bytes are recorded
+The BinTEL document root encoding of `tels.tel` is 1741 bytes; the raw bytes are recorded
 in [`demo/tels.bintel.hex`](demo/tels.bintel.hex) and the hash in
 [`demo/tels.hash`](demo/tels.hash). The same value is pinned in §3 of the BinTEL
 Specification.
@@ -3027,6 +3068,7 @@ selector by the [TELP Specification](telp.md).
 | E312 | A scalar value was rejected by the encoder of its declared `encoding` (§21.7; the value has no binary representation) | As resolved by §21.3 from the returned `Diagnostic`                                              |
 | E313 | A scalar's declared `encoding` was not resolved by the configured codec binding (§21.7; the constraint cannot be checked) | The scalar value's text span                                                                 |
 | E314 | Two keyed children of the same parent filling effectively `repeatable` members have equal key values (§21.6, Key Uniqueness) | The key value of the later duplicate in semantic order (or that child's keyword, when its key value is default-supplied) |
+| E315 | A scalar value does not match a declared pattern constraint (§21.8); the diagnostic names the failing pattern | The value text |
 
 ### 21.7 Scalar Encodings (Codecs)
 
@@ -3101,7 +3143,8 @@ non-conforming; documents produced with it have no defined interchange semantics
 When a value's resolved `Scalar` type carries a non-null `encoding` and a `CodecBinding` is
 configured:
 
-1. The declared `validators` apply first, in declaration order, per §21.1.
+1. The declared `validators` apply first, in declaration order, per §21.1, followed by the
+   declared `patterns` in declaration order (§21.8).
 2. The encoding check applies last, in the same AND-conjunction: the implementation invokes
    the bound codec's `encode` on the value text. `Invalid` is reported as **E312**, its
    diagnostic translated per §21.3; the malformed-diagnostic rule of §21.3 applies with the
@@ -3131,6 +3174,54 @@ rejected by the scalar's codec therefore renders invalid (E312) every document t
 member; schema authors SHOULD ensure defaults are codec-accepted. Empty text has no special
 status: `encode("")` may succeed (with empty or non-empty bytes) or fail, per the codec
 (BinTEL §7.5).
+
+### 21.8 Pattern Constraints
+
+A **pattern constraint** is a regular expression in **RE2 syntax** (as defined by the RE2
+syntax specification, <https://github.com/google/re2/wiki/Syntax>) carried in a
+`ScalarDefinition.patterns` entry (§20). RE2 is chosen deliberately: it excludes
+backreferences and lookaround, so every pattern denotes a true regular language — which makes
+the containment relation between patterns *decidable*, the property underlying layer-merge's
+checked replacement (§20.3) and the pattern premise of the subtype relation (§24.3). A pattern
+using any construct outside the RE2 repertoire, or that is syntactically malformed, renders
+the schema invalid (**E222**); by the fail-closed principle of §21.4/§21.6, an unparseable
+pattern MUST NOT be treated as satisfied.
+
+**Matching.** A pattern matches against the **entire** value text — as if written
+`\A(?:pattern)\z` — over Unicode code points, with no implicit flags (RE2 inline flags such as
+`(?i)` are permitted). A value that fails any declared pattern is invalid (**E315**). Multiple
+patterns on one scalar apply in declaration order, AND-conjoined: the accepted language is the
+intersection of the patterns' languages. (RE2 has no intersection operator, which is why the
+repeated-member form exists.) An empty intersection is not itself an error — it is
+well-formed, merely unsatisfiable — but tooling SHOULD warn, since emptiness is decidable by
+the same machinery as containment. Pattern checks run after the declared validators and before
+the encoding check (§21.7); short-circuiting follows §21.1. Unlike validators and codecs,
+patterns are self-contained: no helper binding is involved, and two conforming implementations
+MUST accept exactly the same values for a given pattern.
+
+**Ordering with validators.** Validation reports E310 (validator), E315 (pattern), and
+E312/E313 (encoding) independently; a value may accumulate several. Matching is linear in the
+value's length (the defining property of RE2's construction), so pattern checks add no
+asymptotic cost to document validation.
+
+#### Pattern Containment
+
+The relation `L(r₁) ⊆ L(r₂)` — every text matched by `r₁` is matched by `r₂` — is exact and
+normative: it is a statement about the patterns' languages, not about any particular
+algorithm. It is invoked at **schema composition time only** (layer-merge replacement, §20.3,
+and the tooling uses of §24): document validation never decides containment.
+
+The algorithm is not mandated. The RECOMMENDED construction is product-automaton
+reachability: compile `r₁` (or the intersection of several patterns, as a product of their
+DFAs) and `r₂` to deterministic finite automata over the value alphabet; `L(r₁) ⊆ L(r₂)` fails
+iff a product state accepting in every `r₁`-component but not in the `r₂`-component is
+reachable from the anchored start. Deciding containment for arbitrary regular expressions is
+PSPACE-complete in the worst case (determinization may blow up exponentially), though
+schema-sized patterns are far from the pathological cases. An implementation MAY impose a
+documented resource budget (for example, a maximum product-state count) on the decision; a
+budget exhaustion MUST be treated as *not proven* — the schema is rejected (**E223**), never
+accepted. Failing closed preserves soundness at the cost of portability for extreme patterns,
+which is the acknowledged trade-off.
 
 ## 22. Reserialization and Editing
 
@@ -3789,9 +3880,11 @@ enough information to satisfy any consumer that expects type T₂.
 [Sub-Flag]            Flag <: Flag
 
 [Sub-Scalar]          V₂ ⊆ V₁                          (sub has at least super's validators)
+                      L(⋂P₁) ⊆ L(⋂P₂)                  (sub's pattern language within super's, §21.8;
+                                                        an empty pattern set denotes Σ*)
                       e₂ absent  ∨  e₁ = e₂            (sub keeps super's encoding; may add one)
                       ――――――――――――――――――――――――
-                      Scalar(V₁, e₁?) <: Scalar(V₂, e₂?)
+                      Scalar(V₁, P₁, e₁?) <: Scalar(V₂, P₂, e₂?)
 
 [Sub-Struct]          There is a strictly increasing map φ from M₂'s positions into M₁'s
                       positions such that M₁[φ(j)] <:_M M₂[j] for every position j of M₂.
@@ -3839,6 +3932,12 @@ enough information to satisfy any consumer that expects type T₂.
   accept variants the subtype never produces.
 - **Scalars are subtyped by tightening.** A Scalar with more validators is a subtype:
   values that satisfy the subtype's validators automatically satisfy the supertype's.
+- **Patterns are compared semantically.** The premise `L(⋂P₁) ⊆ L(⋂P₂)` is a statement about
+  the patterns' *languages* (§21.8), not their spellings: it is the one place the subtype
+  relation sees a constraint's meaning, which RE2's decidable containment makes possible. It
+  is trivially satisfied when `P₁ ⊇ P₂` textually (adding a pattern intersects, hence
+  narrows), and holds for a checked replacement by construction (§20.3). An empty pattern
+  set denotes Σ*, so an unconstrained-by-pattern supertype admits any subtype patterns.
 - **Encodings are compared by name.** Membership under the subtype must imply membership
   under the supertype; when the supertype demands that `encode_{e₂}` succeed, only an
   identical encoding guarantees it — codecs are extensionally opaque (§21.7), so no
@@ -3903,18 +4002,25 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
    one with `p₁ = false`), the tightening is subtype-producing.
 7. **Add struct or scalar validator** — `V_1 ⊇ V_0`. By [Sub-Struct] or [Sub-Scalar],
    the type is a subtype.
-8. **Add encoding to a ScalarDefinition** — `Scalar(V, ∅) → Scalar(V, e)`. By
+8. **Add encoding to a ScalarDefinition** — `Scalar(V, P, ∅) → Scalar(V, P, e)`. By
    [Sub-Scalar] (premise `e₂ absent`), subtype-producing.
 9. **Mark a field as key** — `D_1` has the same Field with `key: false → true`. Like
    adding a validator, keying only shrinks the set of valid documents (the E314
    uniqueness constraint of §21.6); by [Sub-Field] (premise `k₂ ⟹ k₁`), the change is
    subtype-producing.
+10. **Replace a ScalarDefinition's patterns, checked** — `Scalar(V, P_0, e?) →
+    Scalar(V, P_1, e?)` under §20.3's containment premise `L(⋂P_1) ⊆ L(⋂P_0)` (which the
+    merge *decided*, E223 otherwise — including the append-style replacement that restates
+    `P_0` and adds patterns, where containment is trivial). By [Sub-Scalar] (pattern
+    premise), the type is a subtype. This is the one layer operation whose
+    subtype-productivity rests on a semantic decision rather than a syntactic discipline;
+    RE2's decidable containment (§21.8) is what makes it sound to admit.
 
 §20.3 forbids the supertype-producing operations: removing a Field, adding a variant to
 an existing Select, loosening `required` from true to false (E214), loosening
 `repeatable` from false to true (E215), clearing a Field's `key` flag, dropping a
-validator, changing a non-null encoding (E218). By construction, no permitted layer operation moves in the supertype
-direction.
+validator, widening a pattern set (E223), changing a non-null encoding (E218). By
+construction, no permitted layer operation moves in the supertype direction.
 
 By transitivity ([Sub-Trans]), the iterative application of layers yields a chain of
 subtypes:
@@ -3953,11 +4059,14 @@ pass through unchanged.
 **Proof sketch.** By induction on T₂:
 
 - **Flag.** π is the identity. The result is the same flag-node, of type Flag. ✓
-- **Scalar(V₂, e₂?).** π is the identity on the text. By [Sub-Scalar], `V₂ ⊆ V₁`; since
-  `d` satisfied every validator in `V₁`, it satisfies every validator in `V₂` (subset).
-  Also by [Sub-Scalar], `e₂` is absent or equals `e₁`; since `d` satisfied
+- **Scalar(V₂, P₂, e₂?).** π is the identity on the text. By [Sub-Scalar], `V₂ ⊆ V₁`; since
+  `d` satisfied every validator in `V₁`, it satisfies every validator in `V₂` (subset). By
+  the pattern premise, `L(⋂P₁) ⊆ L(⋂P₂)`; since `d`'s text lies in `L(⋂P₁)` (it satisfied
+  every pattern of `P₁`), it lies in `L(⋂P₂)` and so satisfies every pattern of `P₂` —
+  projection never rewrites scalar text, which is exactly why the semantic premise
+  transfers. Also by [Sub-Scalar], `e₂` is absent or equals `e₁`; since `d` satisfied
   `encode_{e₁}` when `e₁` is present, any encoding premise of T₂ is satisfied.
-  So `π_{Scalar(V₂)}(d) : Scalar(V₂, e₂?)`. ✓
+  So `π_{Scalar(V₂, P₂)}(d) : Scalar(V₂, P₂, e₂?)`. ✓
 - **Struct(M₂, V₂).** For each `m₂ ∈ M₂`, [Sub-Struct] gives a matching `m₁ ∈ M₁` with
   `m₁ <:_M m₂`. The corresponding child in `d` has a type that's a subtype of `type-of-m₂`
   by [Sub-Field] or [Sub-Select]. By IH on the child, `π_{type-of-m₂}(child) :
@@ -4002,7 +4111,11 @@ LSP gives the schema ecosystem a useful guarantee:
   does not check this.
 - **Variance of encodings.** Encoding compatibility is by name only: two codecs with
   extensionally identical behaviour under different names are unrelated by `<:`, and the
-  relation cannot see whether one codec's acceptance set contains another's.
+  relation cannot see whether one codec's acceptance set contains another's. **Pattern
+  constraints are the deliberate exception**: unlike validators and codecs, whose semantics
+  live behind opaque names, a pattern's language is visible to the relation, and the
+  [Sub-Scalar] pattern premise is decided semantically (§21.8). Validators and codecs remain
+  name-compared precisely because no such decision procedure exists for them.
 - **Cross-document subtyping.** Two distinct schemas (different base names) are not
   subtypes of each other under this relation, even if their structural shapes happen to
   match. Subtyping is meaningful only within a single base-schema family (the same
@@ -4015,8 +4128,8 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E123** (parsing; E110 is reserved, §19.5), **E201–E221** (schema),
-and **E301–E314** (validation); every code is referenced at the point
+taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E224** (schema),
+and **E301–E315** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
 tables of §19.3, §20.1, and §21.6. Worked examples —
 including TEL documents shown with their presentation model, semantic model, and BinTEL byte

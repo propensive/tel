@@ -201,7 +201,7 @@ signature is matched against each cached schema's base, selected, or fully-compo
 (memoized per identification, invalidated when the registry directory changes). `+layer`
 selections compose exactly the named layers, in the schema's declaration order; an unknown or
 out-of-order selection is reported as `E124`. Schema *documents* (pragma references the pinned
-meta-schema coordinate, `specification.tel/tels:1.0.0`) are validated against the built-in
+meta-schema coordinate, `specification.tel/tels:2.0.0`) are validated against the built-in
 meta-schema. When the pragma names a schema that matches nothing in the registry, the LSP says so:
 an `Information` diagnostic (`schema-unresolved`) underlines the identifier, and hovering the
 pragma explains the resolution status (resolved schema name, signature and registry path;
