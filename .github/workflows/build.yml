@@ -1,0 +1,15 @@
+name: Build
+
+# Test the Cargo workspace (the reference implementation under ref/) on every pull request and
+# every merge into main, via the shared workflow in propensive/.github. Its check, `build / build`,
+# is required by the ruleset on main.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: propensive/.github/.github/workflows/rust-ci.yml@main
