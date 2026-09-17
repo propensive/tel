@@ -247,6 +247,16 @@ the same verification rules, rather than reporting an unresolved-schema diagnost
 
 ## 4. Compatibility: TEL Subtyping as LIRA Grades
 
+> **Superseded (September 2026).** The grade mapping below assumed the signature-subsequence
+> rule, which `tel.md` §8.2 has since replaced by a direct subtype check between composed
+> schemas, because the subsequence rule was unsound (see the remark in `tel.md` §24.4). The
+> `tels` discipline's atoms are TEL's **schema atoms** (`tel.md` §20.3, *Atoms and Canonical
+> Decomposition*) — the individual declarations of the base and of each layer — and the grade of
+> a successor release is: **patch** iff the two releases' atomic expansions are equal up to
+> `description` atoms; **minor** iff the successor's composed schema is a subtype of the
+> predecessor's (`tel.md` §24.3); **major** otherwise. The rest of this section is retained for
+> history.
+
 TEL already has a complete structural versioning discipline: schemas grow by appending layers,
 `S_doc <: S_cons` iff `S_cons`'s decoded hash sequence is a subsequence of `S_doc`'s (tel.md
 §8.2, §24.4, §24.5), and the signature encodes the exact composition. LIRA independently has a
@@ -301,8 +311,8 @@ purpose.
 Filed as issues on the LIRA repository; recorded here for cross-reference:
 
 1. **A `tels` discipline** (the main change): a per-format discipline in the pattern of LIRA's
-   existing discipline specs, decomposing a TEL schema payload into atoms such that grade
-   computation coincides with the signature-subsequence relation (§4); determining the derived
+   existing discipline specs, decomposing a TEL schema payload into TEL's schema atoms and
+   grading by the subtype check (see the note at the head of §4); determining the derived
    version on publication; enforcing the name bindings of §2.7; and exposing the composed
    schema signature for resolution queries.
 2. **Serving TEL schemas as LIRA modules**: adopt `‹domain›/‹name›:‹version›` (and `:‹tag›`)

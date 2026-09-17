@@ -414,25 +414,39 @@ spuriously fail the compatibility check of §8.2.
 
 Layer selections without a schema reference are permitted only alongside a signature, where
 they serve as decomposition hints for library lookup (§8.2, resolution step 3): the names
-guide the match against declared layer names.
+guide the match against declared layer names. Atoms (§20.3) have no names and no `+` form; a
+document names an atom only through its signature.
 
 #### Schema Signature
 
 A **schema signature** is a deterministic byte string derived from the 256-bit BLAKE3 value
-hashes of the schema's components (base schema and any layers, in order), constructed as a
-**palimpsest** of those hashes; the construction, its pinned parameters, and its decoding are
-defined in §8 of the [BinTEL Specification](bintel.md) (see also the
-[Palimpsest Specification](palimpsest.md)). The signature not only identifies the fully
-composed schema but also encodes the **identities of the base and each layer in order**: a
-receiver holding a library of known schemas and layers can decode it to reconstruct the exact
-composition (§20.3), and a producer extends a schema by appending each new layer's hash to the
-palimpsest body. A one-component signature is 33 bytes (33 BASE-256 characters); a signature
-with `n ≥ 2` components is `37 + 2·(n − 2)` bytes (37, 39, 41, … for `n = 2, 3, 4, …`).
+hashes of the schema's **components** — the base schema followed by whole layers and/or
+individual atoms (§20.3), in composition order — constructed as a **palimpsest** of those
+hashes; the construction, its pinned parameters, and its decoding are defined in §8 of the
+[BinTEL Specification](bintel.md) (see also the [Palimpsest Specification](palimpsest.md)). The
+signature not only identifies the fully composed schema but also encodes the **identity of
+each component in order**: a receiver holding a library of known schemas, layers, and atoms can
+decode it to reconstruct the exact composition (§20.3), and a producer extends a schema by
+appending each new component's hash to the palimpsest body — a whole layer's hash, or the hash
+of a single atom added during development and not yet gathered into a released layer. A
+one-component signature is 33 bytes (33 BASE-256 characters); a signature with `n ≥ 2`
+components is `37 + 2·(n − 2)` bytes (37, 39, 41, … for `n = 2, 3, 4, …`), whatever mixture of
+layers and atoms the components are.
 
-When a signature follows layer selections, it is authoritative and MUST include them: the
-signature MUST decompose into exactly `1 + n` components — the referenced schema's base hash
-followed by the hashes of the `n` selected layers, in order. Any mismatch (wrong component
-count, wrong hashes, wrong order) is a runtime resolution error (§8.2).
+The first component MUST be a base schema. Component order is part of the composed schema's
+identity (§20.3), so a document SHOULD list its components in **canonical order** — the
+schema's declaration order, each layer's atoms in that layer's canonical order — and tools that
+write signatures MUST do so; a signature naming the same components in a different order
+identifies a different schema, which will generally fail the compatibility check of §8.2. Two
+signatures whose component sequences have the same atomic expansion (§20.3) — one naming a
+layer, the other naming that layer's atoms — identify the same schema.
+
+When a signature follows layer selections, the two MUST agree: the atomic expansion of the
+signature's component sequence MUST be a subsequence of the atomic expansion of *the referenced
+schema's base followed by the selected layers in declaration order*, and the signature's
+components MUST be in canonical order. A document may therefore omit atoms of a selected layer
+that it does not need, but every component it names must belong to the base or to a selected
+layer. Any disagreement is a runtime resolution error (§8.2).
 
 ### 8.2 Schema Resolution
 
@@ -457,38 +471,62 @@ host language, enabling type-safe access through generated types, type providers
 mechanisms. When types are not statically known, the semantic model is still available but must be
 accessed through a dynamic or generic interface.
 
-Two schema identifications **match** iff both carry a signature and the signatures are
-identical. A document whose pragma carries only a development reference (no selector, no
-signature) has no global identity and never matches an invocation schema by name; the
-"matching" and "compatible" rows of the table above apply only once a signature is in play —
-carried directly, or computed from a resolved release.
+Two schema identifications **match** iff both carry a signature and the signatures identify the
+same composed schema: the signatures are identical, or their component sequences have equal
+atomic expansions (§20.3) — one may name a layer where the other names that layer's atoms. A
+document whose pragma carries only a development reference (no selector, no signature) has no
+global identity and never matches an invocation schema by name; the "matching" and "compatible"
+rows of the table above apply only once a signature is in play — carried directly, or computed
+from a resolved release.
 
 A document carrying signature `S_doc` is **compatible** with a consumer carrying signature
-`S_cons` iff `S_doc <: S_cons` under §24 (the formal subtype relation). The signature-subsequence
-rule is the concrete decision procedure: `S_doc <: S_cons` iff `S_cons`'s decoded hash sequence is
-a subsequence of `S_doc`'s. Every component of `S_cons` (base schema and layers, in order) appears
-in `S_doc` in the same order, but `S_doc` may include additional layers between or after them.
+`S_cons` iff the composed schema of `S_doc` is a subtype of the composed schema of `S_cons`:
+`compose(S_doc) <: compose(S_cons)` under the subtype relation of §24.3, which is normative for
+this purpose. The decision is made on the two *composed schemas*, never on the signatures
+themselves:
+
+1. Resolve both identifications to composed `Schema` values (Resolution Protocol below).
+   Resolution of `S_doc` MUST succeed in full; an unknown component of `S_doc` is a resolution
+   failure (see below).
+2. If the two component sequences have equal atomic expansions (§20.3), the identifications
+   match and the document is accepted without further checks.
+3. Otherwise, decide `compose(S_doc) <: compose(S_cons)` by the rules of §24.3 — coinductively
+   over Definition names, with the pattern premise decided by §21.8 containment, validators
+   compared as name sets, and encodings by name. If the relation holds the document is
+   compatible; if it does not, the document is incompatible and resolution fails with a runtime
+   resolution error that SHOULD identify the first premise that failed.
+
+No relation between the *hash sequences* of `S_doc` and `S_cons` decides compatibility. A
+component's effect depends on the components before it — a layer's `field note String`
+introduces a required field when `note` is fresh but leaves an earlier `optional` in force when
+it is not (`MergePolarity`, §20.3) — so, in particular, `S_cons`'s components forming a
+subsequence of `S_doc`'s does **not** imply `S_doc <: S_cons` (see the remark in §24.4). The
+subtype check on composed schemas is the only decision procedure. It is also what lets a
+document omit components it does not use: a document whose signature names only the atoms of a
+layer that it relies on composes to a schema lacking the layer's other, optional, members, and
+[Sub-Struct] of §24.3 admits a subtype that lacks a non-required member of the supertype.
 
 Compatibility is directional. Under the Liskov Substitution Principle (§24.5), a consumer
 expecting `S_cons` MAY read any document whose carried signature `S_doc` satisfies
 `S_doc <: S_cons`, because every constraint imposed by `S_cons` is also satisfied by `S_doc`. The
 converse does not hold in general: a consumer expecting `S_doc` cannot necessarily read a document
-carrying a supertype `S_cons`, since `S_doc` may require additional layers (and therefore members)
-that the supertype does not supply.
+carrying a supertype `S_cons`, since `S_doc` may require additional components (and therefore
+members) that the supertype does not supply.
 
 The "compatible" row of the table means *decode under `S_doc`, then project to `S_cons`*
 (§24.5). For BinTEL input this ordering is mandatory rather than merely conceptual: keyword
 indices are positions in the keyword order of the document's composed schema (§5 and §7.7 of
-the BinTEL Specification), and a layer may shift them (an `exclude` removes Select variants,
-which are interleaved in keyword order), so the document root cannot be read under any
-composition other than the one its signature names. A parser given an invocation schema MUST
-therefore still resolve every component of `S_doc` — through the Resolution Protocol below or,
-in self-contained mode (§6.2 of the BinTEL Specification), from the embedded schema body —
+the BinTEL Specification), and a component may shift them (an `exclude` removes Select
+variants, which are interleaved in keyword order), so the document root cannot be read under
+any composition other than the one its signature names. A parser given an invocation schema
+MUST therefore still resolve every component of `S_doc` — through the Resolution Protocol below
+or, in self-contained mode (§6.2 of the BinTEL Specification), from the embedded schema body —
 before the compatibility check is applied; an unknown component of `S_doc` is a resolution
 failure even when `S_cons` is a strict prefix of what could be decoded. A consumer that knows
-optional layers it can exploit but does not require SHOULD therefore state the *shortest*
-composition it needs as its invocation schema and treat the further layers as opportunistic;
-see §8.3 of the BinTEL Specification for the consequences in bidirectional exchange.
+optional components it can exploit but does not require SHOULD therefore state the *shortest*
+composition it needs as its invocation schema and treat the further components as
+opportunistic; see §8.3 of the BinTEL Specification for the consequences in bidirectional
+exchange.
 
 #### Resolution Protocol
 
@@ -509,15 +547,18 @@ order:
    reference is the pinned coordinate `specification.tel/tels:2.0.0` (§8.1), the parser MUST
    use the built-in `Schema` and skip the remaining steps. Neither form requires network
    access.
-2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema signature.
-   If the cache contains a `Schema` whose composed signature equals the document schema's
-   signature, the parser MUST use that cached `Schema`. Any content-addressed store may serve
+2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema
+   signature or by atomic expansion (§20.3). If the cache contains a `Schema` whose composed
+   signature equals the document schema's signature, or whose atomic expansion equals that of
+   the document schema's component sequence, the parser MUST use that cached `Schema`. Any
+   content-addressed store may serve
    this step — in particular, an implementation MAY consult both a tel schema cache and a
    local LIRA store, in either order: a hash lookup is order-independent, because any store's
    answer for a given signature is the right answer. No precedence rule is needed or
    specified.
 3. **Library lookup.** If the document schema's signature decodes (per §8 of the BinTEL
-   Specification) against the parser's library of known schemas and layers, the parser MUST use the
+   Specification) against the parser's library of known components — base schemas, layers, and
+   atoms; a library that holds a group holds its atoms (§20.3) — the parser MUST use the
    composition described by the decoded hash sequence. Layer selections in the pragma (§8.1)
    MAY guide the decomposition by matching declared layer names.
 4. **LIRA resolution.** A network-capable parser MAY resolve the schema through the LIRA
@@ -557,12 +598,13 @@ LIRA resolution, the parser MUST verify integrity by:
 
 1. Computing the value hash (§3 of the BinTEL Specification) of the resolved schema document's
    BinTEL encoding.
-2. Composing the value hashes of any layers identified by the signature into a candidate signature
-   per §8 of the BinTEL Specification.
+2. Composing the value hashes of the further components (layers or atoms) identified by the
+   signature into a candidate signature per §8 of the BinTEL Specification.
 3. Comparing the candidate signature, byte-for-byte, with the signature carried by the document
    schema.
-4. When the pragma also carries layer selections (§8.1), checking that the signature
-   decomposes into exactly the base hash followed by the selected layers' hashes, in order.
+4. When the pragma also carries layer selections (§8.1), checking that the atomic expansion of
+   the signature's component sequence is a subsequence of the expansion of the base followed by
+   the selected layers in declaration order, and that the components are in canonical order.
 
 If any comparison fails, the resolved schema MUST be discarded and resolution fails. A parser
 MUST cache only verified schemas.
@@ -576,11 +618,16 @@ signature. Every cached schema is signature-verified; there is no unverified res
 
 When the document schema's signature contains more than one component (signature byte length
 `37 + 2·(n − 2)` for `n ≥ 2`, per §8 of the BinTEL Specification), the parser MUST decompose
-it against its library of known hashes before parsing the document body. Decomposition produces an ordered sequence
-`h₀, h₁, …, h_{n-1}` of component value hashes; the parser MUST construct the composed `Schema` by
-applying the layers identified by `h₁ … h_{n-1}` to the base schema identified by `h₀`, in that
-order, using the merge algorithm of §20.3. If any component hash is unknown to the parser's
-library and cannot be resolved through LIRA (step 4), resolution fails.
+it against its library of known hashes before parsing the document body. Decomposition produces
+an ordered sequence `h₀, h₁, …, h_{n-1}` of component value hashes; the parser MUST construct the
+composed `Schema` by applying the components — layers or atoms — identified by `h₁ … h_{n-1}` to
+the base schema identified by `h₀`, in that order, using the merge algorithm of §20.3. If any
+component hash is unknown to the parser's library and cannot be resolved through LIRA (step 4),
+resolution fails. A parser SHOULD restrict the candidates for the components after `h₀` to the
+**lineage** of the base `h₀` identifies — its declared layers, their atoms, and any locally
+registered atoms written against it — rather than its whole library (§8.2 of the BinTEL
+Specification): with atoms in the library, a global candidate set can exceed what the pinned
+two-byte regular cadence distinguishes.
 
 #### Runtime Resolution Error
 
@@ -1748,7 +1795,9 @@ into the composed schema's root struct by the algorithm in §20.3. `Layer.record
 together they merge with the base schema's `Schema.records ∪ Schema.scalars ∪ Schema.selects`
 and any preceding layers' Definitions to form a single namespace visible to all references in
 the composed schema. The empty lists are the normal case for layers that only extend the root
-struct.
+struct. A layer is a *named group of atoms* — the individual declarations it contains (§20.3,
+*Atoms and Canonical Decomposition*) — and a document may identify its schema by naming atoms
+directly as well as whole layers (§8.1).
 
 A `RecordDefinition` has a `name`, a list of `members`, and a list of struct-level
 `validators`. The `name` MUST be a `TypeName` (§20.7), unique across the composed namespace
@@ -2045,7 +2094,7 @@ A schema is invalid if any of the following holds:
 - two or more `Layer`s within a `Schema` share the same `name` (**E204**)
 - a layer adds a `Field` or `SelectRef` to a `Struct` whose keyword — or, for a `SelectRef`, any
   variant keyword of the referenced `SelectDefinition` — collides with a keyword already present
-  in the merged `Struct` (§20.3) (**E205**)
+  in the merged `Struct` (**E205**; checked on the composed schema, §20.3)
 - a layer declares a `Field` whose keyword matches an existing `Field` in the same `Struct`, but
   the two types (after reference resolution) are neither structurally equal nor both `Struct`
   (§20.3) (**E206**)
@@ -2065,8 +2114,10 @@ A schema is invalid if any of the following holds:
 - an `Exclude(K)` operation in a layer SelectDefinition body names a keyword K that does not
   identify any variant of the SelectDefinition being merged — the base's variants less any
   variants already excluded by earlier operations (**E211**)
-- an `Exclude(K)` operation would empty a `SelectDefinition` referenced by any `SelectRef` whose
-  effective `required` is `true` (**E212**)
+- a `SelectDefinition` of the composed schema has no variants while some `SelectRef` of the
+  composed schema whose effective `required` is `true` references it — whether an `Exclude(K)`
+  emptied it or a required `SelectRef` was added to an already-emptied one (**E212**; checked on
+  the composed schema, §20.3)
 - a layer's SelectDefinition contains a `variant` declaration whose keyword is absent from the
   base SelectDefinition (variant addition is forbidden — would widen the sum) (**E213**)
 - a layer declares `optional` on an axis whose merged-base polarity is `"default"` or `"tight"`
@@ -2112,7 +2163,7 @@ A schema is invalid if any of the following holds:
 | E209 | A `Reference` or `SelectRef` names a `TypeName` that resolves neither to a built-in (§20.5) nor to a Definition in the composed schema | The `TypeName` atom                            |
 | E210 | Two or more Definitions in the *base* `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name`, or a Definition uses a predefined built-in name (§20.5) (any cross-kind name collision is also E210; same-name Definitions across layers merge instead) | The second Definition with the duplicate name |
 | E211 | `Exclude(K)` in a layer's SelectDefinition names a variant K not present in the SelectDefinition being merged             | The `Exclude` operation's variant keyword      |
-| E212 | `Exclude(K)` would empty a `SelectDefinition` referenced by a `required` `SelectRef`                                      | The `Exclude` operation's variant keyword      |
+| E212 | A `SelectDefinition` of the composed schema referenced by a `required` `SelectRef` has no variants                      | The `Exclude` that emptied it, or the `required` `SelectRef` declaration when that came later |
 | E213 | A layer's SelectDefinition introduces a variant whose keyword is absent from the base SelectDefinition (variant addition widens the sum) | The offending variant declaration |
 | E214 | A layer declares `optional` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `required`) | The offending field/select declaration         |
 | E215 | A layer declares `repeatable` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `repeatable`) | The offending field/select declaration         |
@@ -2387,12 +2438,16 @@ detecting any of them MUST report the corresponding error:
 
 #### Composed Schema Identity
 
-A composed schema is identified by the base schema's `name` together with the ordered sequence of
-layer `name`s applied to it. Two schemas with the same base `name` but different layer sequences
-are distinct schemas. Layer order is part of identity even when reordered layers produce a
-semantically equivalent composed Struct: the BinTEL signature (BinTEL §8) encodes the layer
-order, so two compositions of the same set of layers in different orders have distinct
-signatures.
+A composed schema is identified by the **atomic expansion** of its component sequence (*Atoms
+and Canonical Decomposition* below): two component sequences denote the same schema iff their
+expansions are equal, whether they name whole layers or individual atoms. Order is part of
+identity even when reordered components produce a semantically equivalent composed Struct,
+because member order is significant to type assignment (§20.2) and to BinTEL keyword indices:
+the same atoms in a different order are a different schema, and the signature (BinTEL §8)
+encodes the order. Two signatures may differ in their bytes and yet identify the same schema —
+one naming a layer, the other naming that layer's atoms — and §8.2 treats them as matching. The
+base schema's `name` and the layer `name`s are human-readable labels for groups of atoms, not
+the identity of the composition.
 
 #### Composed Definition Namespace
 
@@ -2410,7 +2465,67 @@ any Definition (of the appropriate kind) in the composed namespace.
 A `Layer` value has `name`, `overlay`, `records`, `scalars`, and `selects` fields (see §20). In
 TEL source, a layer's `overlay` is OPTIONAL — a layer that introduces or refines only
 Definitions without modifying the document root MAY omit `overlay` entirely. When `overlay` is
-absent it is treated as an empty `Struct` (no members).
+absent it is treated as an empty `Struct` (no members). For the purposes of identity, schema
+signatures, and library lookup, a layer is a *named group of atoms*; see *Atoms and Canonical
+Decomposition* below.
+
+#### Atoms and Canonical Decomposition
+
+A **schema atom** — throughout §8 and §20 simply an *atom*; the presentation-model atoms of §10,
+§14, and §15 are *inline*, *source*, and *literal* atoms — is the smallest modification of a
+schema that can appear on its own in a composition: a single compound of a schema body, together
+with its inline atoms, its own child compounds, and its **path** (the definition or body that
+contains it). Every schema component, base or layer, decomposes canonically into an ordered
+sequence of atoms:
+
+- **Base head.** The base schema's `name` and `sigil` form its head atom, always first. Layers
+  have no head: a layer's `name` is not an atom.
+- **`overlay` and `document` bodies.** Each `field`, `select` (SelectRef), and `validate` line is
+  one atom. A `field`'s `description` child is part of the field's atom.
+- **`record N`.** Each `field`, `select`, `validate`, and `description` line is one atom at path
+  `record N`. A `record N` with no children is itself one atom, so that a fresh, empty
+  RecordDefinition is not lost.
+- **`scalar N`.** Each `validate` line is one atom; all `pattern` lines together are **one** atom
+  (a replacement is decided by a single containment check, E223); the `encoding` line is one
+  atom; `description` is one atom. A `scalar N` with no children is itself one atom (E224 on the
+  composed schema unless a later atom constrains it).
+- **`select N`.** All `variant` lines together are **one** atom (a variant set can only be
+  introduced whole, E213; against an existing SelectDefinition it is a restatement, a no-op);
+  each `exclude` and `validate` line is one atom; `description` is one atom.
+
+The **canonical order** of a group's atoms is the order in which composition applies them,
+mirroring *Composing Layers* below: the head (base only); then the atoms of each `record`, in
+source order of the records and, within a record, `description` first and then members and
+`validate` lines in source order; then the atoms of each `scalar` (`validate` lines in source
+order, the pattern set, `encoding`, `description`); then the atoms of each `select` (variant
+set, `exclude` lines, `validate` lines, `description`); then the `overlay` (or `document`) atoms
+in source order. An atom that occurs twice within one group is retained once.
+
+Each atom has a value hash, computed as if it were a layer with an empty `name` containing that
+one atom (§8.1 of the BinTEL Specification). The hash depends on nothing but the atom and its
+path — not on the containing layer or schema, the layer's name, or the atom's position — so a
+consumer that holds a released layer also recognises, by hash, every atom that was written
+against that layer's contents before it was released. A group (the base or a layer) has a value
+hash of its own (the same section); a schema signature (§8.1) may carry any mixture of group
+hashes and atom hashes.
+
+The **atomic expansion** `A(S)` of a component sequence `S` replaces each group by its atoms in
+canonical order and leaves atoms as they are. Two component sequences denote the **same composed
+schema** iff their expansions are equal. **Composition of a component sequence** applies `A(S)`
+from left to right, treating each atom as a layer containing exactly that atom under the merge
+algorithm below. The validity constraints of §20.1 that concern the composed schema as a whole
+(E205, E209, E210, E212, E217, E219–E221, E224) are checked once on the final result, never
+after an individual component (*Layer Validity Constraints* below). E204 does not apply to
+atoms, which carry no name; an atom listed twice in a sequence applies once.
+
+**Equivalence.** For any valid group `G` with atoms `a₁ … aₖ` and any prefix `P`, composing
+`P + G` and composing `P + a₁ + … + aₖ` produce the same composed schema. The merge algorithm
+processes a layer's records, scalars, selects, and overlay members one declaration at a time, in
+exactly the canonical order; validators append and deduplicate; a scalar's pattern set and a
+select's variant set are single atoms, so the containment check and the no-variant-addition
+check see the same inputs either way; and every constraint that could depend on the whole of `G`
+is checked on the composed schema. A layer is therefore no more than a name for a sequence of
+atoms, and a document may name the atoms it needs directly (§8.1).
 
 #### Merge Algorithm
 
@@ -2419,7 +2534,10 @@ incorporates the layer's members into the base:
 
 1. Begin with a copy of `base.members` in member order.
 2. Construct the keyword map K for the base struct by iterating it in keyword order: for each
-   entry `(keyword, type)` at member index i, map keyword → (i, members[i]).
+   entry `(keyword, type)` at member index i, map keyword → (i, members[i]). A SelectRef whose
+   `reference` does not yet resolve (its Definition may be introduced by a later component)
+   contributes no variant keywords to K; the collision check is completed on the composed
+   schema (**E205**, *Layer Validity Constraints*).
 3. For each member L declared by the layer at this Struct position, in source order:
 
    a. **Field members.** If L is a `Field` with keyword W:
@@ -2444,16 +2562,16 @@ incorporates the layer's members into the base:
         declared polarity directly.)
 
    b. **SelectRef members.** If L is a `SelectRef` referencing `N`:
-      - Resolve `N` in the composed Definition namespace to a SelectDefinition (E209/E217 if it
-        cannot be resolved to a SelectDefinition).
-      - For each variant keyword W of the referenced SelectDefinition, look up W in K. If any W
-        matches an existing entry that is *not* a SelectRef referencing the same `N`, the
-        layer is invalid (**E205**). If every matched W resolves to a SelectRef referencing
-        the same `N`, the layer's SelectRef refines the existing one: per-axis polarities are
-        merged via `MergePolarity`, and the merged SelectRef replaces the base member at that
-        position.
-      - Otherwise (no overlap at all), append L as a new member at the end of the member list.
-        For each variant V of `N`, add V.keyword → (new index, L) to K.
+      - If an existing member of the Struct is a SelectRef referencing the same `N`, the
+        layer's SelectRef refines it: per-axis polarities are merged via `MergePolarity`, and
+        the merged SelectRef replaces the base member at that position.
+      - Otherwise, append L as a new member at the end of the member list. If `N` already
+        resolves, add each variant keyword V.keyword → (new index, L) to K.
+      - `N` MUST resolve, in the composed Definition namespace, to a SelectDefinition
+        (**E209**/**E217**), and no variant keyword of `N` may collide with any other keyword
+        of the composed Struct (**E205**). Both are checked on the composed schema (*Layer
+        Validity Constraints*), so a SelectRef may reference a Definition that a later
+        component introduces.
 
    c. **Exclude in a Struct position.** An `exclude` operation MUST NOT appear inside a Struct
       body (root or RecordDefinition body) — only inside a layer's SelectDefinition body
@@ -2504,11 +2622,12 @@ base SelectDefinition:
    - If L is an exclusion `Exclude(W)` (an entry W in the layer SelectDefinition's `excludes`):
      W MUST identify an existing variant in the current variant list; if not, the layer is
      invalid (**E211**). Remove the variant from the list.
-3. After all layer operations apply, the variant list MUST be non-empty *if* any
-   composed-schema SelectRef whose effective `required` is `true` references this
-   SelectDefinition; otherwise **E212**. (A SelectDefinition referenced only by non-required
-   SelectRefs MAY be emptied; the referencing SelectRefs are then effectively unreachable in
-   composed documents.)
+3. In the **composed** schema, the variant list MUST be non-empty *if* any SelectRef whose
+   effective `required` is `true` references this SelectDefinition; otherwise **E212**. This is
+   a constraint on the composed schema, not on the individual merge: a later component that
+   adds a required SelectRef to a SelectDefinition an earlier component emptied is equally
+   E212. (A SelectDefinition referenced only by non-required SelectRefs MAY be emptied; the
+   referencing SelectRefs are then effectively unreachable in composed documents.)
 4. The merged SelectDefinition's `validators` is the concatenation of the base's `validators`
    with any new validator names contributed by the layer's `validate` lines (in source order,
    deduplicated).
@@ -2539,13 +2658,22 @@ list T (for `records`), scalar list S, and select list U:
 3. The final `Rₙ` is the root Struct of the composed schema; `Tₙ`, `Sₙ`, `Uₙ` are its
    Definition lists.
 
+A component sequence that names atoms directly (§8.1) is composed by the same procedure, each
+atom standing as a layer containing exactly that atom (*Atoms and Canonical Decomposition*).
+
 #### Layer Validity Constraints
 
-The schema validity constraints, including those checked at layer-composition time (**E204**,
-**E205**, **E206**, and **E210**–**E218**), are catalogued in §20.1; the algorithms above define
-where in composition each is detected. The key-field constraints (**E219**–**E221**) are
-checked against each composed Struct after all layers have been applied, since a layer may
-both key a field and tighten its polarity.
+The schema validity constraints, including those detected while a component is merged
+(**E204**, **E206**, **E211**, **E213**–**E216**, **E218**, **E223**), are catalogued in §20.1;
+the algorithms above define where in composition each is detected. The constraints that concern
+the composed schema as a whole — keyword collisions (**E205**), reference resolution (**E209**,
+**E217**), the Definition namespace (**E210**), non-empty required Selects (**E212**), the
+key-field constraints (**E219**–**E221**), and the presence of a scalar constraint (**E224**) —
+are checked once after all components have been applied, never after an individual component: a
+component may both key a field and tighten its polarity, may reference a Definition that a later
+component introduces, or may add a required SelectRef to a Select that an earlier component
+emptied. Checking on the composed schema is also what makes a layer and its atoms
+interchangeable (*Atoms and Canonical Decomposition*).
 
 ### 20.4 BinTEL
 
@@ -3918,16 +4046,19 @@ be applied.
 
 ## 24. Formal Type System and Subtyping (Informative)
 
-This section is **informative**, not normative. It gives a formal account of TEL's type system,
-defines a subtype relation `<:` over the types of §20, states the inference rules for that
-relation, sketches that the layer composition rules of §20.3 produce subtypes of the base
-schema, and shows that the **Liskov Substitution Principle** holds: a document valid under a
-subtype is, after projection, a valid document under the supertype.
+This section is **informative**, with one exception: **§24.3, the subtype relation, is
+normative**, because it is the decision procedure for schema compatibility (§8.2). The section
+gives a formal account of TEL's type system, defines a subtype relation `<:` over the types of
+§20, states the inference rules for that relation, sketches that the layer composition rules of
+§20.3 produce subtypes of the base schema, and shows that the **Liskov Substitution Principle**
+holds: a document valid under a subtype is, after projection, a valid document under the
+supertype.
 
-Conformance to this specification does not require an implementation to compute `<:`
-explicitly: §20.2, §20.3, and §21 are stated as concrete algorithms and discharge every
-constraint a conforming parser must check. §24 exists to give schema authors and tool builders a
-precise shared vocabulary for what "compatible schemas" means.
+Type assignment (§20.2), layer composition (§20.3), and validation (§21) are stated as concrete
+algorithms and never compute `<:`. The one place a conforming implementation computes it is the
+compatibility decision of §8.2, which compares two composed schemas by the rules of §24.3. The
+rest of §24 exists to give schema authors and tool builders a precise shared vocabulary for what
+"compatible schemas" means.
 
 ### 24.1 Type Grammar
 
@@ -4012,9 +4143,14 @@ the schema-document Struct as the root type).
 
 ### 24.3 Subtype Relation
 
+*This subsection is normative* (see the note at the head of §24): §8.2 decides whether a
+document's composed schema is compatible with a consumer's by these rules.
+
 The subtype relation `T₁ <: T₂` (under Δ, when needed) is defined by the following
 inference rules. The intuition is: `T₁ <: T₂` means any element of type T₁ contains
-enough information to satisfy any consumer that expects type T₂.
+enough information to satisfy any consumer that expects type T₂. On recursive Definitions the
+relation is interpreted coinductively (see below), so a decision procedure carries an
+assumption set of Definition-name pairs and terminates.
 
 ```
 [Sub-Refl]            T <: T
@@ -4032,10 +4168,17 @@ enough information to satisfy any consumer that expects type T₂.
                       ――――――――――――――――――――――――
                       Scalar(V₁, P₁, e₁?) <: Scalar(V₂, P₂, e₂?)
 
-[Sub-Struct]          There is a strictly increasing map φ from M₂'s positions into M₁'s
-                      positions such that M₁[φ(j)] <:_M M₂[j] for every position j of M₂.
-                      (M₂ matches an order-preserving subsequence of M₁; order matters
-                      because membership [Mem-Struct] consumes members in member order.)
+[Sub-Struct]          For each position j of M₂, let φ(j) be the position of the member of M₁
+                      that shares a keyword with M₂[j] — a Field's keyword, or any variant
+                      keyword of a Select member — if there is one. (Keywords are unique
+                      within a Struct, so φ(j) is unique where it exists.)
+                      φ(j) exists for every j whose member has effective `required` = true.
+                      M₁[φ(j)] <:_M M₂[j] wherever φ(j) exists.
+                      φ is strictly increasing where it is defined.
+                      (M₂'s matched members form an order-preserving subsequence of M₁; order
+                      matters because membership [Mem-Struct] consumes members in member
+                      order. A non-required member of M₂ with no keyword in M₁ is never
+                      populated by an element of M₁, which M₂ permits.)
                       V₂ ⊆ V₁                          (sub has at least super's validators)
                       ――――――――――――――――――――――――
                       Struct(M₁, V₁) <: Struct(M₂, V₂)
@@ -4072,7 +4215,10 @@ enough information to satisfy any consumer that expects type T₂.
 
 - **Records are subtyped by extension.** A Struct with more members is a subtype: every
   member required by the supertype must be present (and subtype-compatible) in the
-  subtype; the subtype may have additional members the supertype knows nothing about.
+  subtype; the subtype may have additional members the supertype knows nothing about, and
+  may lack members the supertype does not require, since an element of the subtype then
+  never populates them. This last clause is what makes a document that names only the atoms
+  it uses (§8.1) compatible with a consumer holding the whole layer.
 - **Sums are subtyped by narrowing.** A Select with fewer variants is a subtype: every
   variant offered by the subtype must be offered by the supertype, but the supertype may
   accept variants the subtype never produces.
@@ -4177,6 +4323,20 @@ D_n <: D_{n-1} <: … <: D_1 <: D_0
 
 The composed schema is a subtype of the base. ∎
 
+**Remark (prefixes, not subsequences).** The theorem is about a *prefix*: applying further
+components on top of a composition yields a subtype of that composition. It does not extend to
+arbitrary subsequences, because a component's effect depends on the components before it. With
+base `field id String`, layer `loose` declaring `field note String optional`, and layer `strict`
+declaring `field note String`, the composition [base, strict] has `note` required, while
+[base, loose, strict] has `note` optional (`MergePolarity(loose, default) = loose`, §20.3): the
+longer composition is *not* a subtype of the shorter one, though the shorter's hash sequence is
+a subsequence of the longer's, and a document without `note` that is valid under the longer
+composition projects to an invalid element of the shorter. A field `default` carried from an
+earlier component, and a variant set restated in a refining `select` (a no-op when the select
+already exists, a fresh narrower select when it does not), behave the same way. This is why
+§8.2 decides compatibility by computing `<:` on the two composed schemas rather than by
+comparing signatures.
+
 ### 24.5 The Liskov Substitution Theorem
 
 **Theorem (LSP).** If `T₁ <: T₂` and `Δ ⊢ d : T₁`, then there exists a **projection**
@@ -4214,13 +4374,16 @@ pass through unchanged.
   transfers. Also by [Sub-Scalar], `e₂` is absent or equals `e₁`; since `d` satisfied
   `encode_{e₁}` when `e₁` is present, any encoding premise of T₂ is satisfied.
   So `π_{Scalar(V₂, P₂, e₂?)}(d) : Scalar(V₂, P₂, e₂?)`. ✓
-- **Struct(M₂, V₂).** For each `m₂ ∈ M₂`, [Sub-Struct] gives a matching `m₁ ∈ M₁` with
-  `m₁ <:_M m₂`. The corresponding child in `d` has a type that's a subtype of `type-of-m₂`
-  by [Sub-Field] or [Sub-Select]. By IH on the child, `π_{type-of-m₂}(child) :
+- **Struct(M₂, V₂).** For each `m₂ ∈ M₂` matched by φ, [Sub-Struct] gives `m₁ = M₁[φ(j)]`
+  with `m₁ <:_M m₂`. The corresponding child in `d` has a type that's a subtype of
+  `type-of-m₂` by [Sub-Field] or [Sub-Select]. By IH on the child, `π_{type-of-m₂}(child) :
   type-of-m₂`. Validators in `V₂ ⊆ V₁` were satisfied by `d`. Required/repeatable
   constraints carry: if `m₂` required the member (`r₂ = true`), then `r₂ ⟹ r₁` gives
   `r₁ = true`, so the member is present; and since `p₁ ⟹ p₂`, if `m₂` is non-repeatable
-  (`p₂ = false`) then `m₁` is non-repeatable too, so at most one occurrence is present. ✓
+  (`p₂ = false`) then `m₁` is non-repeatable too, so at most one occurrence is present. For an
+  `m₂` not matched by φ, `m₂` is non-required and none of its keywords occurs in `M₁`, so `d`
+  has no child under any of them: the projection contributes nothing at `m₂`, and its
+  cardinality (zero occurrences permitted) is satisfied. ✓
 - **Reference(N).** Inductive: substitute the resolved Struct. ✓
 
 In every case the projection yields a valid `T₂` element.   ∎
@@ -4232,26 +4395,40 @@ LSP gives the schema ecosystem a useful guarantee:
 - A **document written against a subtype schema** can be consumed by any tool that
   understands the supertype schema, as long as the tool reads through the supertype's
   schema (so it implicitly performs the projection by ignoring unknown fields).
-- The **schema-signature compatibility rule** of §8.2 (a document's signature is
-  compatible with a consumer's signature when the consumer's decoded hash sequence is a
-  subsequence of the document's) is now grounded: §24.4 establishes that the composed-with-fewer-layers schema is
-  a supertype of the composed-with-more-layers schema, so a document written against the
-  longer composition can be consumed (after projection) by a tool expecting the shorter
-  composition.
+- The **schema compatibility rule** of §8.2 *is* this relation: a document is compatible with
+  a consumer when the document's composed schema is a subtype of the consumer's, decided by
+  §24.3 on the two composed schemas. §24.4 establishes that extending a composition — by a
+  whole layer or by a single atom (§20.3) — always yields a subtype, so a document written
+  against a longer composition can be consumed (after projection) by a tool expecting the
+  composition it extends; and because [Sub-Struct] admits a subtype that lacks a non-required
+  member of the supertype, a document that names only the atoms it uses remains compatible
+  with a consumer holding the whole layer.
 - **A producer can always degrade.** A producer holding a value of a subtype composition can
-  serve any consumer that names a subsequence of that composition (one that itself composes
-  validly under §20.3) by projecting the value per §24.5 and re-encoding it under the shorter
-  composition. Projection is lossy only in the members the consumer could not address anyway.
-  §8.3 of the BinTEL Specification builds on this to describe schema exchange between peers.
+  serve any consumer whose composition is a supertype of it — in particular any composition it
+  extends and which itself composes validly under §20.3 — by projecting the value per §24.5 and
+  re-encoding it under that composition. Projection is lossy only in the members the consumer
+  could not address anyway. §8.3 of the BinTEL Specification builds on this to describe schema
+  exchange between peers.
+- **A document's signature can be minimised.** A tool MAY shorten a document's component
+  sequence by dropping atoms the document does not rely on: for every member that the document
+  never populates and whose effective `required` is `false`, *all* atoms declaring that member
+  (the one that introduced it and any that restate it), and then, to a fixpoint, every atom
+  addressing a Definition that thereby becomes unreachable from the root. The tool MUST verify
+  that the reduced sequence still composes validly and that the document validates under it.
+  The reduced composition is then a subtype of every composition the original was compatible
+  with, so no consumer is lost, and a consumer that later gathers the surviving atoms into a
+  released layer still recognises them by hash. The `tel` command is the intended home of this
+  step.
 - **`construct` operations** (§22.2) can target the supertype's schema: a freshly
   constructed compound that satisfies the supertype's required-set is automatically a
   valid subtype value at any position where the subtype permits the same members. (The
   reverse — using a supertype-validated compound at a subtype position — is NOT
   generally safe; the subtype may demand additional fields the supertype didn't supply.)
-- **The implementation never needs to compute `<:` explicitly.** The type-assignment
-  algorithm (§20.2) directly checks element membership; the layer composition algorithm
-  (§20.3) directly produces the subtype. Subtyping is a property of how these algorithms
-  fit together, not a separate runtime check.
+- **Type assignment never computes `<:`.** The type-assignment algorithm (§20.2) directly
+  checks element membership; the layer composition algorithm (§20.3) directly produces the
+  subtype. Subtyping is a property of how these algorithms fit together. The one place an
+  implementation computes `<:` explicitly is the compatibility decision of §8.2, between two
+  composed schemas.
 
 ### 24.7 What This Type System Does NOT Cover
 
