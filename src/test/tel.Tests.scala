@@ -6,11 +6,11 @@ import soundness.*
 import proscenium.{List, Nil}
 
 import strategies.throwUnsafely
-import interfaces.paths.pathOnLinux
+import pathInterfaces.pathOnLinux
 
 // Tests for the LSP server's pure handler functions: no JSON-RPC transport is involved, and the
 // schema registry is a throwaway temporary directory, so the suite exercises exactly the logic the
-// handlers close over. Run with `mill tel.test.run`.
+// handlers close over. Run with `make test` (fume) or `make test-plain`.
 object Tests extends Suite(m"TEL LSP server tests"):
 
   // A small contact schema, registered under `contact.tel` in the temporary registry.

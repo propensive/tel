@@ -8,10 +8,10 @@ import soundness.*
 // modules themselves do. A named import outranks the `soundness` wildcard.
 import proscenium.{List, Nil, Chain}
 
-import interfaces.paths.pathOnLinux
-import systems.javaSystem
-import filesystemBackends.virtualMachineFilesystem
-import filesystemOptions.overwritePreexisting.enabled
+import pathInterfaces.pathOnLinux
+import systems.javaBaseSystem
+import filesystemBackends.javaBaseFilesystem
+import filesystemOptions.overwritePreexisting
 import textSanitizers.skipSanitizer
 import logging.silentLogging
 import charEncoders.utf8Encoder
@@ -117,7 +117,7 @@ object SchemaCache:
     ensurePreloaded(directory)
     safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).flatMap: file =>
       safely(entryOf(read(file))).let(scala.List(_)).or(scala.Nil)
-    . sortBy(_.name).to(List)
+    . sortBy(_.name.s).to(List)
 
   // Add a schema file to the cache: validate it against the meta-schema, then store it under its
   // declared name. Returns the added entry. Raises if the file is missing or is not a valid schema.

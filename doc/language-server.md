@@ -1,27 +1,32 @@
 # tel — the TEL command-line tool (and Language Server)
 
 The `tel` executable, built in Scala with the Soundness ecosystem and packaged in the same style as
-[Flame](https://github.com/propensive/flame) (Mill + an Ethereal self-fetching native launcher).
+[fume](https://github.com/propensive/fume) and [flame](https://github.com/propensive/flame):
+Mill, a Burdock-repackaged self-fetching launcher, and an `xeq` native executable published to
+GitHub Releases by `make release`.
 
-> **Build note:** Soundness now publishes only *bundles*, under the `dev.propensive` group, so this
-> build depends on four of them — `soundness-base`, `soundness-data` (Stratiform), `soundness-cli`
-> and `soundness-tool` (Exegesis) — rather than one artifact per library. The pinned version is
-> **0.0.2-TEST**, a local build of Soundness `main` — which carries the LIRA schema-reference
-> pragma grammar, Stratiform's schema-resolution engine (soundness#1841), and the TEL `key`
-> fields, TELP paths and scalar codecs this server needs — resolved from `~/.ivy2/local`; override
-> with `$SOUNDNESS_VERSION`. Reproduce it with
-> `SOUNDNESS_RELEASE_VERSION=0.0.2-TEST ./mill 'soundness.{base,cli,data,sci,test,tool,web}.publishLocal'`
-> in that worktree (the version must be given explicitly; the git-describe fallback picks up a stray
-> tag). Only four bundles are depended on directly, but the bundle dependency graph pulls in `sci`,
-> `test` and `web`, so all seven must be published or resolution fails.
+> **Build note:** Soundness publishes one jar per *component* (Soundness #1929), as the assets of
+> each tagged GitHub release, so this build names the components it needs directly — Stratiform,
+> Exegesis, Ethereal, Exoskeleton, Galilei, Escritoire and the rest — rather than a bundle
+> aggregate. The version is pinned in [`etc/refs`](../etc/refs), which the `deps` object in
+> `build.mill` reads; `make sync-deps` installs exactly what it names into `~/.ivy2/local`, from
+> which coursier resolves them. The tools the repository *runs* rather than compiles against —
+> `fume`, which runs the test suites, and `flair`, which checks the sources — are pinned separately
+> in [`etc/tools`](../etc/tools) and installed by `make tools`. See
+> [propensive/.github](https://github.com/propensive/.github) for the whole flow. Tel is not a
+> Pyrocosm application: it depends on Soundness alone.
 >
 > Soundness is built with the propensive Scala fork, and its TASTy is only readable by that
-> compiler, so `scalaVersion`/`scalaRelease` here must match the values the Soundness build used —
-> currently `3.9.0-RC5-p14` for both the coordinate and the release tag. The build downloads
-> that release from [proscala](https://github.com/propensive/proscala) into a shared cache
-> (`~/.cache/soundness/proscala/<tag>/lib`) — the same one the Soundness build uses — so no local
-> compiler build is needed; set `$SOUNDNESS_SCALA_HOME` to a `make`-built `release` directory to
-> override.
+> compiler, so `scalaVersion`/`scalaRelease` in `build.mill` must match the values the Soundness
+> build used — currently `3.9.0-p16` for both the coordinate and the release tag. The build
+> downloads that release from [proscala](https://github.com/propensive/proscala) into a shared
+> cache (`~/.cache/soundness/proscala/<tag>/lib`) — the same one the Soundness build uses — so no
+> local compiler build is needed; set `$SOUNDNESS_SCALA_HOME` to a `make`-built `release` directory
+> to override.
+>
+> The build is NOT capture-checked, unlike fume's and flame's: those projects' sources are written
+> for it and tel's are not. Reading Soundness's capture-checked TASTy from an unchecked compilation
+> unit is fine.
 
 It is organised around subcommands:
 
@@ -77,7 +82,7 @@ which a caller can act on differently.
 Every subcommand, flag and operand completes. Ethereal serves completions by re-running the
 argument dispatch in *completion mode*, where the `execute` blocks are skipped, so everything the
 shell offers must be registered outside them — that is the one rule the dispatch in
-[`tel.TelServer.scala`](src/core/tel.TelServer.scala) is written around. What that buys:
+[`tel.TelServer.scala`](../src/core/tel.TelServer.scala) is written around. What that buys:
 
 - `tel <TAB>` — the subcommands, grouped and described.
 - `tel lsp --<TAB>`, `tel validate --<TAB>` — only the flags that command accepts (`--log`,
@@ -173,7 +178,7 @@ Features so far:
   phrase before it. Lines with remarks or source/literal payloads are declined rather than risked.
 
 The whole tool is a single object, `tel.TelServer`, in
-[`src/core/tel.TelServer.scala`](src/core/tel.TelServer.scala). Its `main` dispatches on the
+[`src/core/tel.TelServer.scala`](../src/core/tel.TelServer.scala). Its `main` dispatches on the
 subcommand; `tel lsp` calls `exegesis.Lsp.listen`, which supplies the JSON-RPC dispatch, the
 open-document store (applying the editor's incremental edits) and the stdio transport. Each feature
 is a **registration** in that call — `opened`, `hover`, `complete()`, `definition`, … — and the
@@ -183,16 +188,27 @@ capabilities record to keep in step. Within a handler the current `document`, th
 
 ## Building and installing
 
-Requires JDK 25 (Mill fetches it via `temurin:25`) on the path used by Mill.
+Requires JDK 25 (Mill fetches it via `temurin:25`) on the path used by Mill, and `git` — the shared
+scripts in `etc/shared` are fetched at the commit pinned in `etc/github-ref`. Run everything from
+the repository root.
 
 ```sh
-make install    # builds the `tel` launcher and copies it to ~/.local/bin
-which tel        # sanity check that it is on your PATH
-tel lsp          # run the language server on stdio (Ctrl-C to stop)
+make sync-deps  # install the Soundness release pinned in etc/refs into ~/.ivy2/local
+make tools      # install fume (and flair) from the releases pinned in etc/tools
+make install    # build the `tel` executable and copy it to ~/.local/bin
+which tel       # sanity check that it is on your PATH
+tel lsp         # run the language server on stdio (Ctrl-C to stop)
 ```
 
-Other targets: `make assembly` (just the JAR), `make run` (runs `tel lsp` via the launcher for a
-manual JSON-RPC smoke test), `make dev` (watch-compile).
+Other targets: `make assembly` (the launcher JAR), `make tel.jar` (that JAR, Burdock-repackaged so
+its dependencies become on-demand downloads), `make tel` (the `xeq` native executable), `make run`
+(runs `tel lsp` via the launcher for a manual JSON-RPC smoke test), `make test` / `make test-plain`,
+`make check` (flair), and `make dev` (watch-compile).
+
+`make release VERSION=X.Y.Z` publishes to GitHub Releases: the `tel-core` jar first, then — once
+GitHub has indexed its digest — the repackaged executables for five platforms, the polyglot `tel`
+bootstrap and an `install.sh`, exactly as fume, flame and flair are released. It requires an
+authenticated `gh`, a clean tree, and `val telVersion` in `build.mill` to agree with `VERSION`.
 
 The tool runs as an [Ethereal](https://github.com/propensive/ethereal) resident daemon: the first
 launch starts a background JVM and later launches reconnect to it, so editor restarts are fast. After
@@ -261,7 +277,7 @@ cursor.
 
 ## Testing
 
-`mill tel.test.run` runs a Probably suite ([`tel.Tests`](src/test/tel.Tests.scala)) over the
+`make test` runs a Probably suite ([`tel.Tests`](../src/test/tel.Tests.scala)) with fume, over the
 server's pure handler functions — diagnostics, schema resolution, the structure scan (including
 §14/§15 payload handling), hover and completion — against a throwaway schema registry. No JSON-RPC
 transport is involved; for a live smoke test, drive `tel lsp` over stdio and watch with

@@ -1,3 +1,14 @@
 /target
 **/target/
 **/__pycache__/
+
+# The Mill build's output, and the artefacts `make` produces from it. Every pattern here is
+# ANCHORED with a leading slash: a bare `tel` would also match `ref/tel/` and
+# `ref/tree-sitter-tel/`, silently untracking the Rust reference implementation.
+/out
+/tel
+/tel.jar
+/dist/
+.bloop
+.metals
+.bsp
