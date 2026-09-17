@@ -101,6 +101,13 @@ longer-prefix ones.
 _never_ be removed. A palimpsest encodes references to hashes that must be present in the
 receiver's library at decode time; removing a referenced hash makes the palimpsest undecodable.
 
+**Step-scoped libraries.** A library MAY be indexed per decoding step rather than globally. An
+embedding protocol whose first hash is drawn from a global set and whose later hashes are drawn
+from a much smaller set determined by the first (the mixed regime of §6.3) may look up `h₀` in a
+global index and every later hash in an index scoped to `h₀`. The decoding procedure of §5.3 is
+unchanged; only `library.lookup` becomes step-aware, and the expected candidate counts of §7.2
+are then computed against the scoped set rather than against `N`.
+
 ---
 
 ## 4. Encoding

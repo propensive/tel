@@ -578,12 +578,15 @@ is one valid presentation form for a decoded semantic model.
 ## 8. Schema Signature
 
 A schema signature identifies a composed schema as an ordered sequence of components: a base schema
-followed by zero or more layers. Each component is identified by its value hash (§3).
+followed by zero or more further components, each either a whole layer or a single **atom** — one
+declaration of a layer or of the base, as defined in §20.3 of the TEL Specification. Each
+component is identified by its value hash (§3).
 
 A schema document (a TEL document conforming to the `tels` schema; see §20 of the TEL
-Specification) defines a base schema and zero or more layers. Each component's hash is its value
-hash (§3): the component is encoded as a BinTEL document root (§7) and the 256-bit BLAKE3 digest
-is taken over that root encoding alone, without the magic number or schema signature.
+Specification) defines a base schema and zero or more layers, and each of these decomposes
+canonically into atoms. Each component's hash is its value hash (§3): the component is encoded as
+a BinTEL document root (§7) and the 256-bit BLAKE3 digest is taken over that root encoding alone,
+without the magic number or schema signature.
 
 ### 8.1 Per-Component Encoding
 
@@ -608,6 +611,19 @@ cases reuse the entire composed `tels` namespace (every Definition reachable fro
   encoded element list at the root contains the layer's `name`, each of its `record` /
   `scalar` / `select` children, and its `overlay` child (if present), in canonical order per
   §7.2. Keyword indices are computed against `Layer`'s keyword order.
+- **Atom component** uses `Schema.document = Layer`, exactly as a layer component does, applied
+  to a *virtual* `layer` compound whose `name` is the **empty string** and whose only other
+  content is the atom under its path (§20.3 of the TEL Specification): a `record N`, `scalar N`,
+  or `select N` compound containing only that atom's line(s), or an `overlay` compound
+  containing only that member. The empty name encodes as its keyword index followed by `00`
+  (§7.5). An `Identifier` cannot be empty (§20.7 of the TEL Specification), so no valid layer's
+  encoding coincides with an atom's; and because the encoding mentions neither the containing
+  layer nor the atom's position, an atom hashes identically wherever it appears — in a
+  developer's working schema before release and in the released layer that later gathers it.
+  The base schema's atoms are encoded the same way, its `document` members standing as `overlay`
+  members, except for its **head atom** (`name` and `sigil`), which is encoded under
+  `Schema.document = Document` as the schema document with every `record`, `scalar`, `select`,
+  and `layer` child removed and an empty `document` body.
 
 A conforming implementation of `schema-signature(schema-document)` therefore:
 
@@ -616,6 +632,10 @@ A conforming implementation of `schema-signature(schema-document)` therefore:
 2. For each `layer` compound L_i in source order, computes h_{i+1} = BLAKE3-256 of the
    document-root BinTEL encoding of L_i's children under the `Layer` Definition.
 3. Combines the sequence (h₀, h₁, …, h_n) into the palimpsest signature per §8.2 below.
+
+A document that names atoms rather than whole layers (§8.1 of the TEL Specification) substitutes
+the atom hashes for the corresponding layer hash in step 3; the group hashes of steps 1–2 are
+unaffected, and a library that holds a layer can derive the hashes of its atoms.
 
 ### 8.2 Signature Construction
 
@@ -626,7 +646,7 @@ initial cadence 4 bytes. The palimpsest framework permits any combination of the
 this specification pins them so that producers and consumers can statically reason about
 signature sizes. The pinned values are sufficient for schema libraries of up to `2^32 ≈ 4 × 10^9`
 distinct base components without backtracking during decode of the base hash, while keeping
-signature size growth to two bytes per additional layer.
+signature size growth to two bytes per additional component, whether a layer or an atom.
 
 **Encoding.** Given an ordered sequence of `n` component hashes `h₀, h₁, …, h_{n−1}` (each
 32 bytes, BLAKE3-256), the signature is computed as the palimpsest of those hashes per §4 of
@@ -670,8 +690,8 @@ Palimpsest Specification: the first `k_i = 4` bytes of the body equal `h₀[0..3
 and after `h₀` is XORed out, the bytes at offset `o₁ = 4` for the next `k_r = 2` positions equal
 `h₁[0..1]` uncontested, and so on. Decoding therefore proceeds deterministically as long as no
 two hashes in the candidate library share the same first 4 bytes (for the base lookup) or the
-same first 2 bytes (for layer lookups within a single base's reachable layers); see §6 of the
-Palimpsest Specification for the probabilistic analysis.
+same first 2 bytes (for the lookups within a single base's lineage of layers and atoms); see §6
+of the Palimpsest Specification for the probabilistic analysis.
 
 **Decoding.** Given a signature of known byte length `L` and a set of candidate hashes:
 
@@ -684,7 +704,12 @@ Palimpsest Specification for the probabilistic analysis.
    malformed length or a bad cadence byte.
 3. Treating bytes `[0..L − 2]` as the palimpsest body, run the recursive search of §5.3 of the
    Palimpsest Specification with `(H, k_i, k_r) = (32, 4, 2)`. Candidates at step 0 are looked
-   up by 4-byte prefix; at every subsequent step by 2-byte prefix.
+   up by 4-byte prefix; at every subsequent step by 2-byte prefix. A decoder SHOULD draw the
+   candidates for the steps after the first from the components of the **lineage** of the base
+   recovered at step 0 — its declared layers, their atoms, and any locally registered atoms
+   written against it — rather than from its whole library: two bytes distinguish at most
+   65 536 prefixes, and once a library of atoms approaches that size the backtracking search
+   over a global candidate set grows as `(N / 65 536)ⁿ` (§3.2 of the Palimpsest Specification).
 4. If the search returns a valid sequence, decoding succeeds. If no valid sequence is found
    against the candidate library, the signature is malformed (B04). The "more than one valid
    sequence" case requires a BLAKE3 collision among components — a second-preimage attack on
@@ -693,12 +718,13 @@ Palimpsest Specification for the probabilistic analysis.
    sequences MUST also report B04 (treating it as a corruption or integrity failure rather than
    as a regular decoding outcome).
 
-The decoded sequence gives the component hashes in order: h₀ (base schema), h₁ (first layer), …,
-h_{n−1} (last layer). A BinTEL decoder uses this sequence to locate and compose the schema before
-decoding the document root.
+The decoded sequence gives the component hashes in order: h₀ (base schema), then h₁ … h_{n−1}
+(layers or atoms, in composition order). A BinTEL decoder uses this sequence to locate and
+compose the schema (§20.3 of the TEL Specification) before decoding the document root.
 
-Schema compatibility is defined in §8.2 of the TEL Specification in terms of subsequence
-relationships between decoded signature hash sequences.
+Schema compatibility is defined in §8.2 of the TEL Specification as the subtype relation between
+the two *composed* schemas (§24.3 there); no relation between the decoded hash sequences decides
+it.
 
 ### 8.3 Schema Exchange Between Peers
 
@@ -707,7 +733,7 @@ BinTEL documents are exchanged between two parties — a client and a server, or
 peers — whose libraries of schema components differ. BinTEL itself defines no handshake,
 request, or negotiation message: the carrier for any exchange described here is the embedding
 protocol's concern (§6), and this specification supplies only the vocabulary — signatures,
-component hashes, and the subsequence rule.
+component hashes, and the subtype check.
 
 **Two independent questions.** Whether a receiver can process a document tagged with signature
 `S_doc` splits into:
@@ -719,10 +745,11 @@ component hashes, and the subsequence rule.
    TEL Specification) — or decoding fails. In self-contained mode (§6.2) the schema body is
    inline, and a receiver holding only the `tels` axiom can decode any document at all.
 2. **Compatibility.** Having decoded, the receiver checks `S_doc <: S_cons` against its own
-   invocation schema `S_cons`: `S_cons`'s hash sequence must be a subsequence of `S_doc`'s
-   (§8.2 of the TEL Specification). The direction matters: a receiver may consume documents
-   composed with *more* layers than it expects (by projection, §24.5 of the TEL
-   Specification), never fewer.
+   invocation schema `S_cons`: the composed schema of `S_doc` must be a subtype of the composed
+   schema of `S_cons` by the rules of §24.3 of the TEL Specification (§8.2 there). The direction
+   matters: a receiver may consume documents composed with *more* constraints than it expects
+   (by projection, §24.5 of the TEL Specification), never fewer; a document that omits an
+   optional member the receiver knows about is still a subtype.
 
 **Worked example.** A receiver whose library holds a base schema `foo` and layers `bar` and
 `baz` receives documents in external-schema mode:
@@ -747,10 +774,10 @@ members of any layer present in `S_doc` are available in the semantic model, and
 `S_cons` discards only what you cannot address anyway.
 
 **Sender guidance.** Send the richest composition the receiver can resolve. A sender holding a
-value under `S` can always degrade it to any composition `S'` whose hash sequence is a
-subsequence of `S`'s and which composes validly, by projecting (§24.5 of the TEL
-Specification) and re-encoding under `S'`; degradation is always available, so the only
-question is how the sender learns which `S'` the receiver can resolve.
+value under `S` can always degrade it to any valid composition `S'` of which `S` is a subtype —
+in particular any composition that `S` extends — by projecting (§24.5 of the TEL Specification)
+and re-encoding under `S'`; degradation is always available, so the only question is how the
+sender learns which `S'` the receiver can resolve.
 
 **Partial decode as a diagnostic.** The palimpsest decode of §8.2 recovers components in order
 — `h₀` by four-byte prefix, each subsequent layer by two-byte prefix — and a failure at step
@@ -771,8 +798,9 @@ receiver can name back, which is the natural content of a "please degrade" reply
   holds, or with the signature of the composition it prefers. The sender then degrades to that
   composition. One round-trip; no schema bytes.
 - *Capability exchange.* Each peer advertises the component hashes (or full signatures) it
-  holds, once per connection. Each sender then picks the longest subsequence of its own
-  composition that the receiver holds. Suits long-lived sessions with many messages.
+  holds, once per connection. Each sender then picks the richest composition it can form from
+  components the receiver holds and of which its own composition is a subtype. Suits long-lived
+  sessions with many messages.
 
 None of these changes the wire format of a BinTEL document, and none is required: a receiver
 that can resolve through LIRA, or a sender that always uses self-contained mode, needs no
