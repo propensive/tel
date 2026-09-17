@@ -221,9 +221,9 @@ that continuation. Because the length is read before anything else, a reader can
 skip or forward documents while resolving no schema at all.
 
 The BLAKE3-256 hash of a BinTEL document root is the document's **value hash**: a stable,
-schema-aware identifier suitable for content addressing. Composed schemas (base + layers) are
-identified by a **palimpsest** of component hashes, encoded as a single BASE-256 token on the pragma
-line.
+schema-aware identifier suitable for content addressing. Composed schemas — a base, whole layers,
+or the individual atoms that make up layers — are identified by a **palimpsest** of component
+hashes, encoded as a single BASE-256 token on the pragma line.
 
 ## BASE-256
 
