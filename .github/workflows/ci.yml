@@ -13,8 +13,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The job id is `scala`, not `build` as in fume and flame: a check is named
+# `<caller job> / <reusable job>`, and build.yml (the Cargo workspace) already contributes
+# `build / build`. Two jobs both called `build` would report two checks of the same name, leaving
+# the required-check setting on main unable to tell them apart. This one is `scala / build`.
 jobs:
-  build:
+  scala:
     uses: propensive/.github/.github/workflows/scala-ci.yml@main
     with:
       compile:       tel.core.compile
