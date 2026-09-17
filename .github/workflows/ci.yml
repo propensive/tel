@@ -1,0 +1,23 @@
+name: CI
+
+# Build and test every pull request and every merge into main, via the shared Soundness-application
+# workflow — see propensive/.github for what it does and what it expects of this repository (the
+# ./mill wrapper, etc/shared, and the pins in etc/refs). The Rust reference implementation under
+# ref/ is built separately, by build.yml.
+#
+# The launcher resolves tel-core as a published coordinate, so it is published locally first.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: propensive/.github/.github/workflows/scala-ci.yml@main
+    with:
+      compile:       tel.core.compile
+      publish_local: tel.core
+      assembly:      tel.launcher.assembly
+      test_assembly: tel.test.assembly

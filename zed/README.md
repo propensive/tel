@@ -3,7 +3,7 @@
 A [Zed](https://zed.dev) extension that adds support for [TEL](../readme.md) documents (`.tel`):
 
 - **Syntax highlighting** via the existing [`tree-sitter-tel`](../ref/tree-sitter-tel) grammar.
-- **Diagnostics and hover** via the [`tel`](../lsp) Language Server (built with Soundness/Exegesis).
+- **Diagnostics and hover** via the [`tel`](../doc/language-server.md) Language Server (built with Soundness/Exegesis).
 
 The extension itself is tiny: [`src/lib.rs`](src/lib.rs) simply tells Zed to launch `tel lsp` (the
 `tel` binary it finds on your `PATH`, with the `lsp` subcommand). Everything else is configuration:
@@ -27,9 +27,9 @@ The extension itself is tiny: [`src/lib.rs`](src/lib.rs) simply tells Zed to lau
 ### 2. Build and install the language server
 
 ```sh
-cd ../lsp
-make install    # builds the `tel` launcher and copies it to ~/.local/bin
-which tel        # sanity check
+cd ..
+make install    # builds the `tel` executable and copies it to ~/.local/bin
+which tel       # sanity check
 ```
 
 ### 3. Install this extension as a dev extension
