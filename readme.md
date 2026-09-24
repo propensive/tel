@@ -225,6 +225,12 @@ schema-aware identifier suitable for content addressing. Composed schemas — a 
 or the individual atoms that make up layers — are identified by a **palimpsest** of component
 hashes, encoded as a single BASE-256 token on the pragma line.
 
+When two peers' schema libraries differ, a reader states what it can consume with an
+**acceptance** (BinTEL §8.4): a small TEL document listing, in preference order, the compositions
+it accepts, with the further layers or atoms it can resolve and would like included if the writer
+has them. The message is itself TEL, so it travels as text, as BinTEL, or as a single BASE-256
+word, and the writer replies with the richest composition the reader can read.
+
 ## BASE-256
 
 [`spec/base256.md`](spec/base256.md) describes a binary-to-text encoding that maps every byte to one
@@ -236,7 +242,7 @@ whitespace or punctuation, and decodes losslessly via a single modulo operation.
 
 - [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system, error
   taxonomy, machine operations, round-trip properties).
-- [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format.
+- [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format, schema signatures, and acceptances.
 - [`spec/telp.md`](spec/telp.md) — TELP, the path language for addressing elements of a document's
   semantic model by keyword and key value.
 - [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed schema

@@ -8,7 +8,9 @@ mapping is fully deterministic. A schema is itself a TEL document and therefore 
 encoding.
 
 BinTEL provides an unambiguous, compact serialization of the semantic model, suitable for hashing,
-transmission, and schema identification.
+transmission, and schema identification. It also defines the **acceptance** (§8.4), a small TEL
+document by which a reader tells a writer which composed schemas it can consume, so that peers
+whose schema libraries differ can agree on a composition without a transport-specific handshake.
 
 A BinTEL document is defined here as a byte sequence. Where a text-oriented carrier is required —
 embedding in a TEL document, transmission over a textual channel, display, or copy-and-paste — a
@@ -60,7 +62,7 @@ representation. A schema with no layers has a single-component signature compris
 base-component hash followed by a one-byte cadence trailer (§8), giving 33 bytes total, encoded
 as 33 BASE-256 characters.
 
-### Normative Test Vector
+### Normative Test Vectors
 
 The value hash of [`tels.tel`](../tels.tel) — the schema-for-schemas defined in §20.5
 of the TEL Specification — is:
@@ -75,6 +77,11 @@ bytes recorded in [`demo/tels.bintel.hex`](../demo/tels.bintel.hex)) and hashes 
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
 `tels` declares no encodings, so this vector's derivation involves no codec.
+
+The value hash of [`acceptance.tel`](../acceptance.tel) — the schema of acceptances, §8.4 — is
+pinned in §8.4 alongside its 33-byte signature; it is derived the same way (453 BinTEL bytes,
+recorded in [`demo/acceptance.bintel.hex`](../demo/acceptance.bintel.hex)), and likewise
+involves no codec, since a schema document is encoded under `tels`.
 
 ## 4. Integer Encoding
 
@@ -785,26 +792,324 @@ sender learns which `S'` the receiver can resolve.
 The signature alone thus identifies the longest prefix of the sender's composition that the
 receiver can name back, which is the natural content of a "please degrade" reply.
 
-**Mechanisms, in increasing cost.** All three sit entirely within the embedding protocol:
+**Mechanisms, in increasing cost.** All three sit entirely within the embedding protocol, and
+the message each needs is an **acceptance** (§8.4) — a small TEL document in which a reader
+lists the compositions it accepts, in preference order, with the further components it can
+resolve:
 
 - *Self-contained first message.* The sender uses self-contained mode until the receiver
   confirms, by whatever means the embedding provides, that it now holds the signature; the
   receiver caches the verified schema (§8.2 of the TEL Specification, Caching) and both sides
   switch to external-schema mode. No negotiation round-trip is needed; the cost is the schema
   body on early messages. This is the recommended default for peers that cannot assume a
-  shared library.
+  shared library. A receiver that states it in advance sends an acceptance whose alternative
+  carries `self-contained`.
 - *Signature probe.* The sender transmits only its intended signature (33–41 bytes for typical
-  compositions). The receiver runs the palimpsest decode and replies with the longest prefix it
-  holds, or with the signature of the composition it prefers. The sender then degrades to that
+  compositions). The receiver runs the palimpsest decode and replies with an acceptance naming
+  the longest prefix it holds, or the composition it prefers. The sender then degrades to that
   composition. One round-trip; no schema bytes.
-- *Capability exchange.* Each peer advertises the component hashes (or full signatures) it
-  holds, once per connection. Each sender then picks the richest composition it can form from
-  components the receiver holds and of which its own composition is a subtype. Suits long-lived
-  sessions with many messages.
+- *Capability exchange.* Each peer sends, once per connection, an acceptance naming the
+  compositions it accepts and every further component it holds. Each sender then picks the
+  richest composition it can form from components the receiver holds and of which its own
+  composition is a subtype — the writer obligations of §8.4. Suits long-lived sessions with
+  many messages.
 
 None of these changes the wire format of a BinTEL document, and none is required: a receiver
 that can resolve through LIRA, or a sender that always uses self-contained mode, needs no
 exchange at all.
+
+### 8.4 Acceptance
+
+*This subsection is normative.* An **acceptance** is a TEL document by which a **reader** —
+a peer about to receive a BinTEL document — tells a **writer** which composed schemas it can
+consume, in decreasing order of preference, and which further components of each base's
+lineage it can resolve and would like included if the writer holds them. It is the concrete
+message behind every mechanism of §8.3: a client requesting a response, a server stating what
+it accepts in a request, or a peer advertising its capabilities once per session sends an
+acceptance. This subsection defines only the message and its meaning; how it is carried, when
+it is sent, and how a writer reports that it can satisfy no alternative remain the embedding
+protocol's concern.
+
+An acceptance is designed around the compatibility rule of §8.2 of the TEL Specification. A
+writer holding a value under composition `S_srv` may answer a reader with any composition
+`S_doc` such that the reader can resolve every component of `S_doc` (or the document is sent
+self-contained), `compose(S_doc) <: compose(S_cons)` for the reader's invocation schema `S_cons`
+(§24.3 of the TEL Specification), and the writer can produce a valid document under `S_doc`.
+The reader therefore has exactly two things to say per acceptable outcome: its **requirement**
+`S_cons`, an ordered composition, and the **further components** it can resolve beyond that
+requirement. Because a composition's meaning depends on the order of its components (§24.4 of
+the TEL Specification), the requirement is carried as an ordered schema signature rather than
+as a set of hashes with required/optional marks; the further components, which the writer is
+free to include or omit independently, are carried as an unordered set.
+
+#### The `acceptance` schema
+
+An acceptance is a TEL document conforming to the following schema, supplied as the file
+[`acceptance.tel`](../acceptance.tel) at the root of this repository (the file additionally
+carries comments) and published under the canonical, version-pinned coordinate
+`specification.tel/acceptance:1.0.0`:
+
+```tel
+tel 1.0
+
+name acceptance
+
+scalar Signature
+  description
+      A schema signature (BinTEL §8.2): a palimpsest of component hashes at the pinned parameters.
+  encoding schema-signature
+
+scalar Component
+  description
+      A component hash, or a prefix of one at least four bytes long.
+  pattern .{4,32}
+  encoding base-256
+
+record Alternative
+  description
+      One composition the reader accepts, with the further components it can resolve.
+  field schema Signature
+  field self-contained Flag optional
+  field any-published Flag optional
+  field component Component optional repeatable
+
+document
+  field accept Alternative repeatable
+```
+
+The pinned identity of this schema, computed from the canonical `acceptance.tel` exactly as
+the `tels` vector of §3 is computed, is:
+
+| Form                 | Value                                                              |
+| -------------------- | ------------------------------------------------------------------ |
+| BLAKE3-256           | `ed8e981cd770b7d75067e05dfd87d8b5c37e97763872febf513c125ab1a8b245` |
+| BASE-256 (hash)      | `íΎẘĜϗpҷϗPgàѝǽẇῘεÃžẗv8rþοQļĒZᾱƨβE`                                 |
+| Signature (33 bytes) | `íΎẘĜϗpҷϗPgàѝǽẇῘεÃžẗv8rþοQļĒZᾱƨβEX`                                |
+
+The document-root encoding of `acceptance.tel` under `tels` is 453 bytes; the raw bytes are
+recorded in [`demo/acceptance.bintel.hex`](../demo/acceptance.bintel.hex) and the hash in
+[`demo/acceptance.hash`](../demo/acceptance.hash). Like every schema document, it is encoded
+under `tels`, which declares no encodings, so the vector's derivation involves no codec even
+though the schema it describes declares two.
+
+An implementation that supports acceptances MUST hold the `acceptance` schema built in, so
+that a peer can parse an acceptance before any schema has been exchanged: the built-in lookup
+of the Resolution Protocol (§8.2 of the TEL Specification, step 1) recognises its signature
+and its pinned coordinate exactly as it recognises those of `tels`. The pin is fixed until this
+specification is next revised.
+
+**Member order is load-bearing.** Each `accept` compound is written on one line: its first
+inline atom fills `schema`; an atom equal to `self-contained` or `any-published` sets that
+flag; and every remaining atom fills `component`, a repeatable Scalar, which the atom phase of
+§20.2 of the TEL Specification never skips. The flag keywords contain `-`, which is not in the
+BASE-256 alphabet, so a flag can never be read as a component nor a component as a flag; a
+flag written after a component is consumed as a component and rejected by the codec (E312).
+Components MAY equally be written as compound children (`component ‹hash›`), which suits long
+lists. The base's own hash never appears among the components: it is the first component of
+`schema`.
+
+#### The `base-256` and `schema-signature` codecs
+
+The schema names two encodings (§21.7 of the TEL Specification). Their behaviour is defined
+here, and an implementation that supports acceptances MUST bind both names to codecs with
+exactly this behaviour; `tels` itself continues to declare no encodings, so the bootstrap of
+§6.2 is unaffected.
+
+- **`base-256`.** The accepted texts are the BASE-256 strings (§4 of the BASE-256
+  Specification), including the empty string; `encode` is the BASE-256 decoder (§5 there)
+  and `decode` is the BASE-256 encoder. Every byte sequence is the encoding of exactly one
+  accepted text, so laws C1–C4 hold by construction.
+- **`schema-signature`.** As `base-256`, except that `encode` additionally rejects any text
+  whose bytes are not structurally a schema signature: the length is neither `33` nor
+  `37 + 2·(n − 2)` for some `n ≥ 2`, or the XOR of every byte is not the pinned cadence byte
+  `0x79` (§8.2, decoding steps 1 and 2). `decode` succeeds on exactly the byte sequences
+  `encode` produces (C3). A malformed signature in an acceptance is therefore E312 at
+  validation, and a writer never runs the palimpsest search of §8.2 step 3 on bytes that fail
+  its structural checks. Any schema that carries a signature as a field MAY use this codec.
+
+The `Component` pattern states the admissible prefix lengths (§21.8 of the TEL Specification);
+the codecs do the rest, and `Signature` needs no constraint beyond its codec.
+
+#### Forms
+
+An acceptance has three interchangeable forms, and a peer that supports acceptances MUST
+accept whichever the embedding protocol specifies:
+
+- **Text.** The TEL document itself, whose pragma names the schema by its pinned coordinate
+  (`tel 1.0 specification.tel/acceptance:1.0.0`) or its signature.
+- **Binary.** Either a framed BinTEL document (§6.1, external-schema mode, carrying the
+  33-byte signature above), which is self-framing and suits streams and files; or the **bare
+  form** — the document-root encoding alone (§7.1), exactly as an embedded schema body (§6.2
+  field 4) or a schema component (§8.1) is encoded — for embeddings that already know the
+  payload is an acceptance, such as a protocol header or a fixed slot in a request. The bare
+  form is 39 bytes shorter than the framed form; it is not self-framing, so the embedding
+  MUST delimit it.
+- **BASE-256.** Either binary form as text, per §9. The bare form's BASE-256 text is a single
+  word under Unicode word segmentation, as every BASE-256 string is.
+
+The value hash (§3) of an acceptance is the BLAKE3-256 digest of its bare form, and is the
+same whichever form is sent. An embedding that sends the same acceptance repeatedly MAY use
+the value hash as a cache key; this specification defines no such exchange.
+
+#### Meaning
+
+An acceptance is a non-empty sequence of **alternatives**, one per `accept` compound, in
+**decreasing order of preference**. An alternative has:
+
+- **`schema`** — the composition the reader will use as its invocation schema for this
+  alternative, `S_cons`, as a schema signature (§8.2). It MAY name layers or atoms (§8.1 of the
+  TEL Specification). Its first component identifies the alternative's **base**, and
+  everything else in the alternative is relative to that base's lineage.
+- **`component`** (zero or more) — further components of the base's lineage — layers or atoms —
+  that the reader can resolve and would like included if the writer holds them. A value of
+  fewer than 32 bytes is a **prefix**: it denotes the component whose hash begins with those
+  bytes, among the components of the writer's **lineage** of the base (§8.2 decoding step 3:
+  the base's declared layers, their atoms, and any locally registered atoms written against
+  it). A 32-byte value is a full hash and denotes that component alone. A value matching no
+  component of the writer's lineage denotes nothing and is ignored — this is the ordinary case
+  of a reader that knows a layer the writer does not have. A value matching two or more
+  components MUST be treated as matching none: the writer cannot tell which the reader meant,
+  and including the wrong one would give the reader a document it cannot resolve. A
+  component that is already part of `schema` is redundant and harmless; a component of another
+  base's lineage never matches.
+- **`self-contained`** — the reader accepts a document in self-contained mode (§6.2) for this
+  alternative. Every composition is then decodable by the reader, so only compatibility
+  constrains the writer's choice, and the writer MAY compose with components the reader has
+  not named — provided the document embeds its schema.
+- **`any-published`** — the reader can resolve any published component of the base's lineage
+  (LIRA resolution, §8.2 of the TEL Specification, step 4). The writer MAY then use, in
+  external-schema mode, any component it holds that belongs to a published release, and need
+  not restrict itself to the named components. Unpublished components — a writer's own
+  ad-hoc atoms — remain restricted to those the reader has named.
+
+Neither flag changes the meaning of `schema`: the alternative's requirement is always the
+named composition, and an acceptance with no components and no flags is the plain statement
+"send me exactly this composition, or a subtype of it built from its own components".
+
+#### Writer obligations
+
+A writer that receives an acceptance considers its alternatives in order and MUST serve the
+first alternative it can serve. For an alternative:
+
+1. The writer decodes `schema` against its library (§8.2, scoping the candidates for the
+   later components to the lineage of the base recovered at the first step). If any component
+   is unknown to the writer, the alternative cannot be served, and the writer proceeds to the
+   next; a decode that fails at step `i` tells the writer that it holds the first `i`
+   components and lacks the next, which it MAY report through the embedding protocol.
+2. Otherwise the writer composes `schema` to obtain `compose(S_cons)`, and MAY serve the
+   alternative if it can produce a document under some composition `S_doc` such that:
+   - every component of `S_doc` is a component of `schema` or is denoted by a `component`
+     value of the alternative — unless the alternative carries `any-published`, in which case
+     any published component of the lineage is also permitted, or the writer sends the
+     document in self-contained mode, which the alternative MUST permit with
+     `self-contained`;
+   - `S_doc` composes validly (the composed-schema constraints of §20.1 of the TEL
+     Specification hold) and `compose(S_doc) <: compose(S_cons)` under §24.3 of the TEL
+     Specification; and
+   - the document is valid under `compose(S_doc)`.
+   Among the compositions satisfying these conditions the writer SHOULD choose the richest —
+   one including as many of the alternative's components as it can — since the reader has said
+   it can use them; where several are incomparable the choice is the writer's.
+3. The writer encodes the document under `S_doc`, in external-schema mode unless it relies on
+   `self-contained`, and sends it. It carries no indication of which alternative it served:
+   the document's own signature identifies the composition, and the reader recovers the
+   alternative from it.
+
+The writer's guarantee is that every document it sends in reply to an acceptance is
+compatible with the `schema` of the alternative served and resolvable by the reader under the
+terms of that alternative. A writer that can serve no alternative MUST NOT send a document
+under some other composition; how it reports failure is the embedding protocol's concern.
+
+#### Reader obligations
+
+A reader MUST be able to resolve every component it names in an acceptance — every component
+of every `schema` and every component denoted by a `component` value — and, if it sets
+`any-published`, every published component of the lineage; if it sets `self-contained`, it
+MUST accept self-contained mode.
+
+On receiving a document, the reader proceeds exactly as §8.2 of the TEL Specification
+prescribes: it resolves the document's signature `S_doc` in full (an unknown component is a
+resolution failure, as ever), composes it, and takes as the alternative served the **first**
+alternative `a` of its acceptance for which `compose(S_doc) <: compose(a.schema)`; that
+alternative's `schema` is the invocation schema under which the document is read, and the
+document is projected to it (§24.5 of the TEL Specification), with the members of any further
+components of `S_doc` available before projection. If no alternative's schema is a supertype
+of `compose(S_doc)`, the document is incompatible: a runtime resolution error, as for any
+incompatible document. Because a document may satisfy several alternatives, taking the first
+is what gives the reader its most preferred reading of what it received.
+
+#### Choosing a composition (informative)
+
+A writer holding a value `v` under `S_srv` can always serve an alternative whose `schema` is a
+supertype of `compose(S_srv)`, by projecting `v` to `S_cons` and encoding it under `S_cons`
+itself — every component of `S_cons` is by definition resolvable by the reader. The
+alternative's components are a bonus on top of that floor, and one procedure that collects
+them is:
+
+1. Let `C` be the atomic expansion of `S_srv` (§20.3 of the TEL Specification) restricted to
+   the components the alternative permits, in `S_srv`'s order. If `compose(S_srv) <:
+   compose(C)` and `compose(C) <: compose(S_cons)`, use `C`: it is the richest composition the
+   writer holds that the reader can take, and `v` projects to it.
+2. Otherwise let `C = S_cons`, and add the permitted components of `S_srv` one at a time, in
+   canonical order, keeping each only if `C` still composes validly and both relations still
+   hold.
+
+Naming a component as optional does not by itself make its inclusion safe. Compatibility is
+decided on composed schemas, and a component's effect depends on the components before it:
+with a base declaring `field id String`, a layer `loose` declaring `field note String
+optional` and a layer `strict` declaring `field note String`, a reader requiring `[base,
+strict]` (`note` required) is *not* served by `[base, loose, strict]` (`note` optional), even
+though it named `loose` as a component it can resolve (the remark in §24.4 of the TEL
+Specification). The subtype check after every addition is what catches this; a writer that
+skips it can send a document the reader will reject.
+
+#### Size (informative)
+
+An acceptance is small because each of its parts is encoded the cheapest way that the reader's
+and writer's asymmetric knowledge allows:
+
+- A **requirement** is a palimpsest: 33 bytes for a base alone, then 2 bytes per further
+  component. A palimpsest is decodable only by a peer holding every hash it names, which is
+  exactly the precondition for serving the alternative at all.
+- An **optional component** is a 4-byte prefix: 6 bytes in BinTEL (keyword index, length,
+  prefix) rather than 34 for a full hash. A palimpsest would be the wrong tool here — a writer
+  lacking one component would lose the ability to recover the rest — and truncated prefixes
+  give the same compression without the sequential dependency. Against a lineage of `N`
+  components, `m` listed prefixes are expected to collide with `m·N / 2³²` unrelated
+  components; a reader for which even that is too many sends longer prefixes.
+- A **released layer's hash stands for all its atoms** (a library that holds a group holds its
+  atoms, §8.2 of the TEL Specification), so a reader working from published schemas lists one
+  base and a few layers. Only atoms not yet gathered into a released layer need listing one
+  by one.
+- The **flags replace enumeration** entirely for readers that can decode any composition
+  (`self-contained`) or resolve any published one (`any-published`).
+
+Worked sizes, in the bare form:
+
+| Acceptance                                                              | Bytes |
+| ----------------------------------------------------------------------- | ----: |
+| One alternative: a base, `self-contained`                               |    39 |
+| One alternative: a base and five optional layers by 4-byte prefix       |    68 |
+| The two-alternative example of [`demo/acceptance-request.tel`](../demo/acceptance-request.tel): a base with one layer plus two optional layers, then the base alone with `self-contained` | 92 |
+| For comparison, six full hashes concatenated with no structure          |   192 |
+
+The framed form adds 39 bytes (magic number, document length, signature length, and the
+33-byte signature). A developer-mode reader naming two hundred ad-hoc atoms individually sends
+about 1.2 KB, which the embedding may choose to send once per session.
+
+#### Security considerations
+
+An acceptance is unauthenticated, like a signature (§11): it states what a peer claims to
+accept, and a protocol that must trust that claim supplies authenticity at a separate layer.
+Decoding the `schema` of an alternative is palimpsest decoding on attacker-influenced input
+and MUST be bounded as §10 and §11 of the Palimpsest Specification require; the structural
+checks performed by the `schema-signature` codec run first and cost nothing. A prefix that
+collides with an unrelated component of the writer's lineage — accidentally, or because an
+adversary registered a component with a chosen prefix — can make the writer include a
+component the reader cannot resolve; the reader then fails to resolve the response, which is
+a recoverable failure of that exchange, never a silent misreading, because the full signature
+travels with every document. A reader whose writer's lineage may contain adversarial
+components sends full 32-byte hashes.
 
 ## 9. Textual Encoding
 
@@ -883,6 +1188,12 @@ they already do for text scalars.
 A decoder MAY perform additional consistency checks beyond those above (for example, checking
 that a Struct-typed child's claimed type is actually a Struct after Reference resolution); these
 are implementation-specific and are not error conditions defined by this specification.
+
+An acceptance (§8.4) introduces no codes of its own: it is an ordinary document under the
+`acceptance` schema, so a malformed one fails as any document does — a signature that is not
+structurally a signature is E312 from the `schema-signature` codec at validation, or B14 from
+its decoder in BinTEL — and a `schema` that does not decode against the writer's library is
+not an error at all but an alternative the writer cannot serve.
 
 ## 11. Security Considerations
 

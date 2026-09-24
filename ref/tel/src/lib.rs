@@ -68,7 +68,7 @@ pub enum ErrorCode {
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
     E211, E212, E213, E214, E215, E216, E217, E218, E219, E220, E221,
-    E222, E223, E224,
+    E222, E223,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
     E312, E313, E314, E315,
@@ -123,7 +123,6 @@ impl ErrorCode {
             Self::E221 => "More than one key field in a Struct",
             Self::E222 => "Invalid RE2 pattern",
             Self::E223 => "Layer pattern replacement is not contained in the inherited patterns",
-            Self::E224 => "Scalar declares neither `validate` nor `pattern`",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -942,10 +941,9 @@ pub fn builtin_tels() -> Schema {
         description: Some("A record declaration: a named struct definition.".to_string()),
     };
 
-    // A `scalar` declaration: name + validators and/or RE2 pattern
-    // constraints + optional encoding. `validate` and `pattern` are both
-    // optional here; the at-least-one rule is E224 (not expressible
-    // structurally).
+    // A `scalar` declaration: name + optional validators and/or RE2
+    // pattern constraints + optional encoding. A scalar with none of them
+    // accepts every value, like the built-in `String`.
     let r_scalar = RecordDefinition {
         name: "Scalar".to_string(),
         members: vec![
@@ -2172,10 +2170,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
 
     // E222: every pattern (base and layer scalars alike) must be a valid
     // RE2 pattern; fail closed like E313 — an unparseable pattern is never
-    // treated as satisfied. E224: a ScalarDefinition must carry at least
-    // one `validate` or `pattern`; for a layer scalar this applies only
-    // when it introduces a new name (a same-name scalar inherits the
-    // base's constraints).
+    // treated as satisfied.
     for sd in s.scalars.iter().chain(s.layers.iter().flat_map(|l| l.scalars.iter())) {
         for pattern in &sd.patterns {
             if let Err(reason) = containment::check_syntax(pattern) {
@@ -2188,33 +2183,6 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
                 });
             }
         }
-    }
-    for sd in &s.scalars {
-        if sd.validators.is_empty() && sd.patterns.is_empty() {
-            errors.push(SchemaError {
-                code: ErrorCode::E224,
-                detail: format!(
-                    "scalar `{}` declares neither `validate` nor `pattern`", sd.name,
-                ),
-            });
-        }
-    }
-    let mut scalar_names: std::collections::HashSet<&str> =
-        s.scalars.iter().map(|sd| sd.name.as_str()).collect();
-    for layer in &s.layers {
-        for sd in &layer.scalars {
-            let inherits = scalar_names.contains(sd.name.as_str());
-            if !inherits && sd.validators.is_empty() && sd.patterns.is_empty() {
-                errors.push(SchemaError {
-                    code: ErrorCode::E224,
-                    detail: format!(
-                        "layer `{}` scalar `{}` declares neither `validate` nor `pattern`",
-                        layer.name, sd.name,
-                    ),
-                });
-            }
-        }
-        for sd in &layer.scalars { scalar_names.insert(sd.name.as_str()); }
     }
     for sl in &s.selects {
         if BUILTIN_TYPE_NAMES.contains(&sl.name.as_str()) {
