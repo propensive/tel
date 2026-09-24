@@ -99,8 +99,21 @@ actually use.
 
 The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
 CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against
-it to validate ordinary documents (see below). The built-in **TELS** meta-schema is always
-preloaded, so it appears in `list` (and is resolvable) even on a fresh cache.
+it to validate ordinary documents (see below). The two schemas the specification pins — the built-in
+**TELS** meta-schema (`specification.tel/tels:2.0.0`) and the **acceptance** schema of BinTEL §8.4
+(`specification.tel/acceptance:1.0.0`) — are always preloaded, so they appear in `list` (and are
+resolvable) even on a fresh cache, and a copy that has drifted from the embedded source is refreshed.
+
+The registry is the local content-addressed store of the Resolution Protocol (TEL §8.2, steps 2–3).
+A pragma **signature** is resolved by *decoding* its palimpsest against the component hashes of every
+registered schema (BinTEL §8.2), with any `+layer` selections as decomposition hints, and resolves to
+the base composed with exactly the layers the signature names, in the order it names them — so a
+signature naming any subset of a schema's layers resolves, not only its declaration-order prefixes.
+When a pragma carries a reference and a signature, the signature is authoritative (§8.1) and the
+reference must agree with it; when it carries `+layer` selections and a signature, the signature
+must name exactly those layers. A **reference** resolves by its module-name tail; a **bare**
+reference is local-only by design and never triggers network resolution. Atom components (TEL §20.3)
+are not yet decodable, since Stratiform hashes whole layers only.
 
 Features so far:
 
@@ -118,11 +131,22 @@ Features so far:
   position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tels` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
   malformed-schema errors such as `E306` (unrecognised keyword); run through Stratiform's §20.1
-  schema-validity battery over the layer-composed result (E201-E221); and checked for reference
+  schema-validity battery over the layer-composed result (E201–E223); and checked for reference
   coherence (E209/E217, located on the offending `TypeName` atom). A local `E210` check covers
-  duplicate (or built-in-colliding) definition names, which the battery's base side does not. Diagnostics are cleared when a document
-  closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
-  identifier (the document is valid, just unvalidated).
+  duplicate (or built-in-colliding) definition names, which the battery's base side does not. E224
+  was withdrawn from the specification (an unconstrained scalar is valid), so the error Stratiform
+  0.67 still raises for it is dropped, and such a schema is composed without the battery.
+  Ordinary documents are validated in full: the four **built-in validators** of §21.5 run (E310),
+  every **pattern** constraint is matched (E315), and the two **codecs** the specification defines
+  — `base-256` and `schema-signature`, BinTEL §8.4 — check the values of scalars that declare them
+  (E312). An application-defined validator name is treated as satisfied, since only the application
+  can run it, and an application-defined encoding is reported as an **E313 warning** (the value is
+  unchecked) rather than the error an application would raise. Diagnostics are cleared when a
+  document closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
+  identifier (the document is valid, just unvalidated); a `+layer` selection out of declaration
+  order is `E124`, while an undeclared layer name (`layer-unknown`) and a signature that disagrees
+  with the reference or selections beside it (`signature-disagrees`) are runtime resolution errors
+  under codes of their own, since the specification gives them no E-code.
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
   highlights** — derived from an indentation scan of the source. (Stratiform positions are looked up
   by keyword *path*, which can't disambiguate same-keyword siblings, so the scan stays authoritative
@@ -141,11 +165,12 @@ Features so far:
   navigates the schema alongside the document's compound tree (descending into `record` references and
   flattening `select` variants):
   - **hover** is column-accurate: over a compound *keyword* it shows the member's type, cardinality
-    (`optional`/`repeatable`), default, and **description**; over a *value atom* it shows what the
-    schema says about that slot — the expected scalar type and validators (with the field's
-    default), the matched `select` variant (or the admissible variants), or a record's
-    atom-assignable flag members; over a built-in validator name on a `validate` line, its §21.5
-    blurb. Every hover carries the hovered token's range.
+    (`optional`/`repeatable`/`key`), default, and **description**; over a *value atom* it shows what
+    the schema says about that slot — the expected scalar type, validators, patterns and encoding
+    (with the field's default), the matched `select` variant (or the admissible variants), or a
+    record's atom-assignable flag members; over a built-in validator name on a `validate` line, its
+    §21.5 blurb; over the pragma, the resolved composition and its signature. Every hover carries
+    the hovered token's range.
   - **completion** is driven by the schema at the cursor's position (a space after a keyword
     triggers it):
     - at a **keyword** slot — the members valid for the enclosing struct (`field`s and flattened
@@ -154,7 +179,8 @@ Features so far:
     - at a **value** slot — the inline atoms the member's type admits: a select reference's
       variants, or a record's atom-assignable members (flag fields and flag-typed variants);
     - at the **pragma's identifier slot** — the registered schemas, labelled by name, inserting the
-      BASE-256 signature;
+      BASE-256 signature; and after it, the `+layer` selections the resolved schema declares and the
+      pragma does not yet select, in declaration order;
     - and, because a schema document is itself checked against the built-in **meta-schema**, editing a
       schema completes meta-keywords (`record`, `field`, `validate`, …) at a keyword slot, the
       available **type names** (the document's own `record`/`scalar`/`select` definitions plus the
@@ -162,6 +188,10 @@ Features so far:
       slot, the **flags** (`optional`, `required`, `repeatable`, `irrepeatable`, derived from the
       meta-schema) after a member declaration, and the four built-in **validator names** on a
       `validate` line.
+- **Rubber-stamping code action** — on the pragma line of a document that names its schema by
+  reference alone, **append the schema signature**: the signature of the base composed with the
+  pragma's selected layers, placed after the selections and before any sigil (§8.1). A bare
+  reference resolves only against local state, so this is what makes the document portable.
 - **Refactoring code actions** — when the schema is known, two inverse rewrites between the
   presentations of a member (§20.2): **expand** moves a compound's last inline atom onto a child
   line under the member's keyword (`pet amy` → `pet` / `name amy`), and **inline** folds a

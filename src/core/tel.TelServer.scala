@@ -56,6 +56,56 @@ object TelServer:
   extends Error(m"${items.size} TEL errors"):
     def add(focus: Optional[Tel.Focus], error: Tel.Error): Accrued = Accrued(items :+ (focus, error))
 
+  // The validators a document is checked with (§21.4, §21.5): the four built-ins, which TELS
+  // itself relies on, run for real; an application-defined validator name — which only the
+  // application can run — is treated as satisfied here. §21.4's rule that an unknown validator
+  // is never silently satisfied binds the application, not an editor that has no way to bind it;
+  // hover shows the name so the reader knows the value is unchecked. Struct validators are
+  // application-defined without exception.
+  private val editorValidators: Tel.Validator.Registry = new Tel.Validator.Registry:
+    override def apply(request: Tel.Validator.Request): Tel.Validator.Response =
+      Tel.Validator.Registry.builtins(request) match
+        case Tel.Validator.Response.Invalid(Tel.Validator.Diagnostic.Scalar(message, _))
+             if message.s.startsWith("unknown validator") =>
+          Tel.Validator.Response.Valid
+
+        case Tel.Validator.Response.Invalid(Tel.Validator.Diagnostic.Struct(_, _)) =>
+          Tel.Validator.Response.Valid
+
+        case response => response
+
+  // The two codecs the specification defines (BinTEL §8.4), so that acceptances validate: every
+  // BASE-256 string is an accepted `base-256` text, and a `schema-signature` text must further
+  // decode to bytes that are structurally a signature (length and cadence byte, §8.2).
+  private object Base256Codec extends Tel.Codec:
+    def encode(text: Text): Tel.Codec.Encoded =
+      safely(Base256.decodeStrict(text))
+      . lay(Tel.Codec.Encoded.Invalid(t"not a BASE-256 string"))(Tel.Codec.Encoded.Bytes(_))
+
+    def decode(bytes: Data): Tel.Codec.Decoded = Tel.Codec.Decoded.Value(Base256.encode(bytes))
+
+  private object SignatureCodec extends Tel.Codec:
+    def encode(text: Text): Tel.Codec.Encoded =
+      safely(Base256.decodeStrict(text)).lay(Tel.Codec.Encoded.Invalid(t"not a BASE-256 string")):
+        bytes =>
+          if safely(SchemaSignature.componentCount(bytes)).present
+          then Tel.Codec.Encoded.Bytes(bytes)
+          else
+            Tel.Codec.Encoded.Invalid
+              ( t"not a schema signature: the length must be 33 or 37 + 2·(n − 2) bytes and the "
+                + t"bytes must XOR to the cadence byte 0x79" )
+
+    def decode(bytes: Data): Tel.Codec.Decoded = Tel.Codec.Decoded.Value(Base256.encode(bytes))
+
+  // The codec binding (§21.7) a document is checked with: the two specified codecs resolve; any
+  // other encoding name is application-defined, and its values go unchecked — reported by
+  // `diagnostic` as a warning rather than the E313 error an application would raise.
+  private val editorCodecs: Tel.Codec.Bindings = new Tel.Codec.Bindings:
+    def apply(name: Text): Optional[Tel.Codec] = name.s match
+      case "base-256"         => Base256Codec
+      case "schema-signature" => SignatureCodec
+      case _                  => Unset
+
   // The schema registry directory is resolved once, where the invoker's `Environment` is in scope,
   // and threaded to the handlers that need it: nothing capability-carrying or stateful lives in this
   // object, which the capture-checked API requires and the Ethereal daemon (one JVM, many editor
@@ -131,7 +181,7 @@ object TelServer:
         Pragma(index, false, Unset, Nil, Unset, '#')
 
   // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? The meta-schema's
-  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:1.0.0`;
+  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.0.0`;
   // Stratiform's `Reference.isTels` accepts the coordinate with or without its version pin.
   private[tel] def namesTels(identifier: Text): Boolean =
     Tel.Pragma.Reference.parse(identifier).lay(false)(_.isTels)
@@ -139,25 +189,35 @@ object TelServer:
   // The outcome of resolving a document's pragma schema identification. `Unresolved` is
   // distinguished from `NoSchema` so that an identifier which matches nothing in the registry can
   // be reported to the user, rather than validation being skipped invisibly; `BadLayers` reports
-  // a resolved schema whose `+layer` selection does not match its declared layers (§8.1).
+  // a resolved schema whose layer selection or signature does not agree with the rest of the
+  // pragma (§8.1), with the diagnostic code that names the disagreement. A `Resolved` schema
+  // carries the layers it was composed with — the pragma's selection, or the components a
+  // signature named — and the signature of that composition.
   private[tel] enum Resolution:
     case NoSchema
     case Meta(meta: Tels, file: Optional[Path on Linux])
-    case Resolved(entry: SchemaCache.Entry, file: Path on Linux, schema: Tels)
+
+    case Resolved
+      ( entry:     SchemaCache.Entry,
+        file:      Path on Linux,
+        schema:    Tels,
+        layers:    List[Text],
+        signature: Text )
+
     case Unresolved(identifier: Text)
-    case BadLayers(identifier: Text, detail: Text)
+    case BadLayers(identifier: Text, detail: Text, code: Text)
 
     // The schema to validate and navigate with, if resolution succeeded.
     def tels: Optional[Tels] = this match
-      case Meta(meta, _)          => meta
-      case Resolved(_, _, schema) => schema
-      case _                      => Unset
+      case Meta(meta, _)                => meta
+      case Resolved(_, _, schema, _, _) => schema
+      case _                            => Unset
 
     // The registry file backing the schema (for cross-file go-to-definition).
     def schemaFile: Optional[Path on Linux] = this match
-      case Meta(_, file)        => file
-      case Resolved(_, file, _) => file
-      case _                    => Unset
+      case Meta(_, file)              => file
+      case Resolved(_, file, _, _, _) => file
+      case _                          => Unset
 
   // The registry lookup name for a pragma schema identifier: a LIRA reference resolves by its
   // module-name tail (the local tel cache stores schemas as `<name>.tel`, and §2.7 of the design
@@ -181,51 +241,86 @@ object TelServer:
       case directory: (Path on Linux) => java.io.File(directory.encode.s).lastModified
       case _                          => 0L
 
+    // A pragma carrying both a reference and a signature is resolved by the signature, which is
+    // authoritative (§8.1), and the reference must agree with it (§8.2): the schema the signature
+    // decodes to must be the referenced one.
     def apply(pragma: Pragma): Resolution =
-      pragma.identifier.lay(Resolution.NoSchema)(id => apply(id.name, pragma.layerNames))
+      pragma.identifier.lay(Resolution.NoSchema): id =>
+        val expected =
+          if pragma.signature.present then pragma.reference.let(ref => lookupName(ref.name))
+          else Unset
 
-    def apply(identifier: Text): Resolution = apply(identifier, Nil)
+        apply(id.name, pragma.layerNames, expected)
 
-    def apply(identifier: Text, layers: List[Text]): Resolution = synchronized:
-      val now = registryStamp
-      if now != stamp then
-        cache.clear()
-        stamp = now
+    def apply(identifier: Text): Resolution = apply(identifier, Nil, Unset)
 
-      val key = (identifier :: layers).join(t" +")
-      cache.getOrElseUpdate(key, resolve(identifier, layers))
+    def apply(identifier: Text, layers: List[Text]): Resolution = apply(identifier, layers, Unset)
+
+    def apply(identifier: Text, layers: List[Text], expected: Optional[Text]): Resolution =
+      synchronized:
+        val now = registryStamp
+        if now != stamp then
+          cache.clear()
+          stamp = now
+
+        val key = (identifier :: layers).join(t" +") + expected.let(name => t" =$name").or(t"")
+        cache.getOrElseUpdate(key, resolve(identifier, layers, expected))
 
     def entries: List[SchemaCache.Entry] = registry match
       case directory: (Path on Linux) => SchemaCache.entries(directory)
       case _                          => Nil
 
-    private def resolve(identifier: Text, layers: List[Text]): Resolution = registry match
-      case directory: (Path on Linux) =>
-        if namesTels(identifier)
-        then Resolution.Meta(Tels.Axiom.tels, SchemaCache.resolveFile(directory, t"tels"))
-        else
-          val name = lookupName(identifier)
-          SchemaCache.resolveFile(directory, name, layers) match
-            case file: (Path on Linux) => SchemaCache.resolve(directory, name, layers) match
-              case schema: Tels =>
+    // The layers the registered schema `name` declares, in declaration order.
+    def layersOf(name: Text): List[Text] = registry match
+      case directory: (Path on Linux) => SchemaCache.layerNames(directory, name)
+      case _                          => Nil
+
+    private def resolve(identifier: Text, layers: List[Text], expected: Optional[Text])
+    :   Resolution =
+
+      registry match
+        case directory: (Path on Linux) =>
+          if namesTels(identifier) then
+            val file = SchemaCache.lookup(directory, t"tels") match
+              case SchemaCache.Lookup.Found(file, _, _, _) => file
+              case _                                       => Unset
+
+            Resolution.Meta(Tels.Axiom.tels, file)
+          else
+            SchemaCache.lookup(directory, lookupName(identifier), layers) match
+              case SchemaCache.Lookup.Found(file, schema, selected, signature) =>
                 val entry =
                   SchemaCache.describe(file).or(SchemaCache.Entry(identifier, identifier, t""))
-                Resolution.Resolved(entry, file, schema)
 
-              case _ =>
-                // The schema itself is present — only the layer selection can have failed. An
-                // empty selection failing means the file no longer parses, which `describe`
-                // above would also have caught; report the layers, the actionable case.
-                if layers.nil then Resolution.Unresolved(identifier)
-                else Resolution.BadLayers
+                if expected.lay(false)(_ != entry.name) then
+                  Resolution.BadLayers
+                    ( identifier,
+                      t"the signature identifies the schema `${entry.name}`, not the referenced "
+                      + t"schema `${expected.or(t"")}`",
+                      t"signature-disagrees" )
+                else
+                  Resolution.Resolved(entry, file, schema, selected, signature)
+
+              case SchemaCache.Lookup.UnknownLayer(_, layer) =>
+                Resolution.BadLayers
+                  ( identifier, t"the selected layer `$layer` is not one the schema declares",
+                    t"layer-unknown" )
+
+              case SchemaCache.Lookup.LayerOrder(_) =>
+                Resolution.BadLayers
                   ( identifier,
-                    t"the `+` layer selection does not match the schema's declared layers "
-                    + t"(unknown name, or not in declaration order)" )
-            case _ => Resolution.Unresolved(identifier)
+                    t"the `+` layer selections are not in the schema's declaration order",
+                    t"E124" )
 
-      case _ =>
-        if namesTels(identifier) then Resolution.Meta(Tels.Axiom.tels, Unset)
-        else Resolution.NoSchema
+              case SchemaCache.Lookup.Disagreement(_, detail) =>
+                Resolution.BadLayers(identifier, detail, t"signature-disagrees")
+
+              case SchemaCache.Lookup.Missing =>
+                Resolution.Unresolved(identifier)
+
+        case _ =>
+          if namesTels(identifier) then Resolution.Meta(Tels.Axiom.tels, Unset)
+          else Resolution.NoSchema
 
   private[tel] def diagnose(text: Text, resolver: PragmaResolver): List[Lsp.Diagnostic] =
     val lines = text.s.linesIterator.toIndexedSeq
@@ -265,7 +360,7 @@ object TelServer:
 
             resolution match
               case Resolution.Meta(_, _) =>
-                venture(Tel.Type.assign(tel, Tels.Axiom.tels))
+                venture(Tel.Type.assign(tel, Tels.Axiom.tels, editorValidators, editorCodecs))
 
                 // Reconstruction alone checks only the document's shape; `Validation.validate`
                 // composes the layers and runs the §20.1 schema-validity battery (E201-E221)
@@ -274,8 +369,8 @@ object TelServer:
                 guard:
                   composed = validated()
 
-              case Resolution.Resolved(_, _, schema) =>
-                venture(Tel.Type.assign(tel, schema))
+              case Resolution.Resolved(_, _, schema, _, _) =>
+                venture(Tel.Type.assign(tel, schema, editorValidators, editorCodecs))
 
               case _ =>
                 ()
@@ -284,9 +379,14 @@ object TelServer:
     // reason. This is deliberately not applied when the parse failed: parse errors legitimately
     // repeat one reason at several positions, and the `guard` guarantees the two sets are never
     // both present.
+    // E224 (a scalar declaring neither `validate` nor `pattern`) was withdrawn from the
+    // specification: an unconstrained scalar is valid. Stratiform 0.67 still raises it, so it is
+    // dropped here; the registry's `validated` composes such a schema without the battery.
+    val retired = accrued.items.filter((_, error) => error.reason.number != 224)
+
     val collapsed =
-      if document.absent then accrued.items
-      else accrued.items.stdlib.distinctBy((_, error) => (error.reason.number, error.reason)).to(List)
+      if document.absent then retired
+      else retired.stdlib.distinctBy((_, error) => (error.reason.number, error.reason)).to(List)
 
     // Stratiform's validity battery now checks reference coherence itself (E209/E217), and — since
     // Soundness 0.67.0 — duplicate definition names (E210) too, but it aborts at the first defect
@@ -323,8 +423,10 @@ object TelServer:
 
     // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
     // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
-    // A bad `+` layer selection against a resolved schema is an error (§8.1: unknown layer names,
-    // and selections out of declaration order — E124 — fail resolution).
+    // A bad `+` layer selection against a resolved schema is an error (§8.1): a selection out of
+    // declaration order is E124, and an undeclared layer name — like a signature that disagrees
+    // with the reference or selections beside it — is a runtime resolution error, which carries
+    // no E-code and is reported under a code of its own.
     val unresolved = resolution match
       case Resolution.Unresolved(identifier) =>
         val range = pragma.identifier
@@ -339,16 +441,18 @@ object TelServer:
             message  = t"Schema `$identifier` is not registered, so this document is parsed but "
                        + t"not validated. Register the schema with `tel schema add <file>`." ))
 
-      case Resolution.BadLayers(identifier, detail) =>
-        val start = pragma.layers.stdlib.headOption.map(_.start)
+      case Resolution.BadLayers(identifier, detail, code) =>
+        // The layer phrases when the selection is at fault; the whole identification otherwise.
+        val phrases = if code == t"signature-disagrees" then Nil else pragma.layers
+        val start = phrases.stdlib.headOption.map(_.start)
           . getOrElse(pragma.identifier.let(_.start).or(0))
-        val end = pragma.layers.stdlib.lastOption.map(_.end)
+        val end = phrases.stdlib.lastOption.map(_.end)
           . getOrElse(pragma.identifier.let(_.end).or(1))
 
         List(Lsp.Diagnostic
           ( range    = Lsp.Range(Lsp.Position(pragma.line, start), Lsp.Position(pragma.line, end)),
             severity = Lsp.DiagnosticSeverity.Error,
-            code     = t"E124",
+            code     = code,
             source   = t"tel",
             message  = t"Schema `$identifier` resolves, but $detail." ))
 
@@ -473,11 +577,16 @@ object TelServer:
       case Tels.Flag            => t"Flag"
       case Tels.Struct(_, _)    => t"record"
 
-      // A declared `encoding` (§21.7) is part of what the scalar accepts — the codec's encoder is
-      // one further validity constraint — so it belongs in the label beside the validators.
-      case Tels.Scalar(validators, encoding, _) =>
+      // A declared `encoding` (§21.7) and the `pattern` constraints (§21.8) are part of what the
+      // scalar accepts — the codec's encoder and each pattern are further validity constraints —
+      // so they belong in the label beside the validators.
+      case Tels.Scalar(validators, encoding, patterns) =>
         val base = if validators.length == 0 then t"scalar" else validators.readable.to(List).join(t"+")
-        encoding.let(codec => t"$base [$codec]").or(base)
+        val constrained =
+          if patterns.length == 0 then base
+          else t"$base ~ ${patterns.readable.to(List).map(pattern => t"/$pattern/").join(t" ")}"
+
+        encoding.let(codec => t"$constrained [$codec]").or(constrained)
 
   // The declaration flags shown after a member's type in hover markup. `key` (§20) is not a
   // polarity — it marks the field as its record's identifier — but it reads naturally in the same
@@ -542,17 +651,23 @@ object TelServer:
        validators:  List[Text],
        default:     Optional[Text],
        description: Optional[Text],
-       encoding:    Optional[Text] )
+       encoding:    Optional[Text],
+       patterns:    List[Text] = Nil )
   :   Text =
 
     val checks =
       if validators.nil then t""
       else t", validated as ${validators.map(validator => t"`$validator`").join(t", ")}"
 
+    // Every `pattern` (§21.8) must match the whole value; several AND-conjoin.
+    val matching =
+      if patterns.nil then t""
+      else t", matching ${patterns.map(pattern => t"`$pattern`").join(t" and ")}"
+
     // A declared `encoding` (§21.7) is a further constraint on the value — the codec's encoder
     // rejects what it cannot represent (E312) — as well as its BinTEL representation.
     val codec = encoding.let(name => t", encoded as `$name`").or(t"")
-    val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks$codec"
+    val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks$matching$codec"
     val fallback = default.let(value => t"\n\nDefault: `$value`").or(t"")
     val about = description.let(value => t"\n\n$value").or(t"")
     t"$header$fallback$about"
@@ -579,7 +694,7 @@ object TelServer:
             case Some(scalar) =>
               scalarValueMarkup
                 ( keyword, name, scalar.validators.readable.to(List), default,
-                  scalar.description, scalar.encoding )
+                  scalar.description, scalar.encoding, scalar.patterns.readable.to(List) )
 
             case None => builtinScalars.stdlib.find(_(0) == name) match
               case Some((_, validator)) =>
@@ -590,8 +705,10 @@ object TelServer:
               case None => structOf(Tels.Reference(name), schema)
                 . let(fieldMarkup(_, atom, schema))
 
-      case Tels.Scalar(validators, encoding, _) =>
-        scalarValueMarkup(keyword, Unset, validators.readable.to(List), default, Unset, encoding)
+      case Tels.Scalar(validators, encoding, patterns) =>
+        scalarValueMarkup
+          ( keyword, Unset, validators.readable.to(List), default, Unset, encoding,
+            patterns.readable.to(List) )
 
       case struct: Tels.Struct =>
         fieldMarkup(struct, atom, schema)
@@ -781,6 +898,25 @@ object TelServer:
                        else t"BASE-256 signature; layers: ${entry.layers}",
           insertText = entry.id )
 
+  // Layer-selection completions on the pragma line: `+name` for each layer the resolved schema
+  // declares and the pragma does not yet select. Declaration order is preserved, since a
+  // selection must be written in it (E124).
+  private def layerCompletions(pragma: Pragma, resolver: PragmaResolver): List[Lsp.CompletionItem] =
+    resolver(pragma) match
+      case Resolution.Resolved(entry, _, _, _, _) =>
+        val selected = pragma.layerNames.stdlib
+
+        resolver.layersOf(entry.name).filter(!selected.contains(_)).map: (layer: Text) =>
+          val selection: Text = t"+$layer"
+
+          Lsp.CompletionItem
+            ( label      = selection,
+              kind       = Lsp.CompletionItemKind.Module,
+              detail     = t"layer of `${entry.name}`",
+              insertText = selection )
+
+      case _ => Nil
+
   // Validator-name completions on a `validate` line: the four built-in validators of §21.5 (the
   // only ones the validator registry is guaranteed to know).
   private def validatorCompletions: List[Lsp.CompletionItem] =
@@ -798,9 +934,12 @@ object TelServer:
     val line = lines.lift(position.line).getOrElse("")
     val (indent, keyword, atomsBefore) = completionContext(line, position.character)
 
-    // The pragma line's schema-identifier slot completes to the registered schemas.
+    // The pragma line's schema-identifier slot completes to the registered schemas; once the
+    // schema is named, each further slot completes to a `+` layer selection (§8.1) — the layers
+    // the resolved schema declares, minus those already selected, in declaration order.
     if position.line == pragma.line then
       if atomsBefore == 2 then Lsp.CompletionList(items = pragmaCompletions(resolver))
+      else if atomsBefore >= 3 then Lsp.CompletionList(items = layerCompletions(pragma, resolver))
       else Lsp.CompletionList()
     else (keyword, atomsBefore) match
       // Keyword position — the members valid for the enclosing struct (of the resolved schema, or
@@ -846,14 +985,56 @@ object TelServer:
   :   List[Lsp.CodeAction] =
 
     val (lines, tree) = structure(text)
+    val pragma = pragmaOf(lines)
 
-    documentSchema(lines, resolver) match
+    if range.start.line == pragma.line
+    then signatureAction(uri, lines, pragma, resolver).lay(Nil)(List(_))
+    else documentSchema(lines, resolver) match
       case schema: Tels =>
         ( expandAtomAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_)).stdlib
           ::: inlineChildAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
               .stdlib ).to(List)
 
       case _ => Nil
+
+  // Rubber-stamping (§8.1): a document whose pragma names its schema by reference alone is
+  // portable nowhere, since a bare reference resolves only against local state; appending the
+  // resolved composition's signature gives it a content-addressed identity wherever it goes. The
+  // signature is that of the base composed with the pragma's selected layers, and goes after the
+  // layer selections and before any sigil, in the pragma's positional order. Offered only when
+  // the pragma carries no signature yet.
+  private def signatureAction
+     ( uri: Text, lines: scala.IndexedSeq[String], pragma: Pragma, resolver: PragmaResolver )
+  :   Optional[Lsp.CodeAction] =
+
+    if !pragma.wellFormed || pragma.signature.present then Unset
+    else
+      val signature: Optional[Text] = resolver(pragma) match
+        case Resolution.Resolved(_, _, _, _, signature) => signature
+        case Resolution.Meta(_, _)                      => SchemaResolver.telsSignature
+        case _                                          => Unset
+
+      signature.let: signature =>
+        val line = lines.lift(pragma.line).getOrElse("")
+        val lineTokens = tokens(line).stdlib
+
+        // Insert before a trailing sigil phrase, else at the end of the line.
+        val at = lineTokens.lastOption match
+          case Some((token, start, _))
+               if lineTokens.length > 2 && token.length == 1
+                  && !Character.isLetterOrDigit(token.charAt(0)) && token.charAt(0) != '+' =>
+            start
+
+          case _ => line.length
+
+        val insertion = if at == line.length then t" $signature" else t"$signature "
+        val position = Lsp.Position(pragma.line, at)
+
+        Lsp.CodeAction
+          ( title = t"Append the schema signature to the pragma",
+            kind  = t"refactor.rewrite",
+            edit  = Lsp.WorkspaceEdit(changes = Map.from(scala.Predef.Map(uri -> List(
+              Lsp.TextEdit(Lsp.Range(position, position), insertion))))) )
 
   // The inline-atom spans of a compound line after `keywordEnd`, per §10.3 phrase separation:
   // initially a single space terminates a phrase, but from the start of the first hard-space run
@@ -1061,7 +1242,7 @@ object TelServer:
           val parsed = venture(text.read[Tel])
 
           guard:
-            model = Tel.Type.assign(parsed(), schema)
+            model = Tel.Type.assign(parsed(), schema, editorValidators, editorCodecs)
 
     if accrued.items.nil then model else Unset
 
@@ -1095,7 +1276,11 @@ object TelServer:
         . map(record => Tels.Struct(record.members, record.validators): Tels.Type)
         . orElse:
             schema.scalars.readable.find(_.name == name)
-            . map(definition => Tels.Scalar(definition.validators, definition.encoding): Tels.Type)
+            . map: definition =>
+                val scalar: Tels.Type =
+                  Tels.Scalar(definition.validators, definition.encoding, definition.patterns)
+
+                scalar
         . getOrElse(Unset)
 
       case other => other
@@ -1195,15 +1380,23 @@ object TelServer:
     val (focus, error) = entry
     val range = errorRange(focus, error, lines, document)
 
-    // Every TEL E-code is a hard error. (Scalar `encoding` used to be special-cased here as a
-    // warning, because Stratiform's schema reconstruction did not yet understand it and raised a
-    // spurious E306; it now does, so the exception is gone.)
+    // Every TEL E-code is a hard error, with one editor-specific exception: E313 (an encoding
+    // name the codec binding does not resolve) is what an application must raise, but here it
+    // means the codec is the application's — the editor binds only the two the specification
+    // defines (BinTEL §8.4) — so the value is merely unchecked, and that is a warning.
+    val unchecked = error.reason.number == 313
+
     Lsp.Diagnostic
       ( range    = range,
-        severity = Lsp.DiagnosticSeverity.Error,
+        severity = if unchecked then Lsp.DiagnosticSeverity.Warning
+                   else Lsp.DiagnosticSeverity.Error,
         code     = t"E${error.reason.number}",
         source   = t"tel",
-        message  = m"${error.reason}".text )
+        message  =
+          if unchecked
+          then t"${m"${error.reason}".text} — the encoding is application-defined, so the editor "
+               + t"cannot check this value"
+          else m"${error.reason}".text )
 
   // Every located TEL error carries a `Span` — 0-based, `Line`-mode, and carrying the *extent* of
   // the offending text, not merely its first character — which is exactly the shape of an LSP
@@ -1284,10 +1477,17 @@ object TelServer:
       Lsp.Range(Lsp.Position(pragma.line, id.start), Lsp.Position(pragma.line, id.end))
 
     val markup = resolver(pragma) match
-      case Resolution.Resolved(entry, file, _) =>
-        val layers = if entry.layers.s.isEmpty then t"" else t"; layers: ${entry.layers}"
-        t"**TEL document** — schema `${entry.name}` (`${entry.id}`$layers), registered at "
-        + t"`${file.encode}`"
+      case Resolution.Resolved(entry, file, _, selected, signature) =>
+        val composition =
+          if selected.nil then t"the base schema"
+          else t"the base with the layers ${selected.map(layer => t"`$layer`").join(t", ")}"
+
+        val declared =
+          if entry.layers.s.isEmpty then t""
+          else t"; the schema declares the layers ${entry.layers}"
+
+        t"**TEL document** — schema `${entry.name}`: $composition, signature `$signature`"
+        + t"$declared. Registered at `${file.encode}`."
 
       case Resolution.Meta(_, _) =>
         t"**TEL schema document** — validated against the built-in `tels` meta-schema"
@@ -1296,7 +1496,7 @@ object TelServer:
         t"**TEL document** — schema `$identifier` is not registered, so the document is parsed "
         + t"but not validated. Register it with `tel schema add <file>`."
 
-      case Resolution.BadLayers(identifier, detail) =>
+      case Resolution.BadLayers(identifier, detail, _) =>
         t"**TEL document** — schema `$identifier` resolves, but $detail."
 
       case Resolution.NoSchema =>
