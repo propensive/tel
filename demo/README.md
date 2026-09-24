@@ -20,6 +20,9 @@ machine operations.
 | [`document-stream.tel`](document-stream.tel) | Three independent documents in one source, separated by `##` document separators, demonstrating the streams of §6.1. |
 | [`tels.bintel.hex`](tels.bintel.hex) | The BinTEL document root encoding of `/tels.tel`, used to recompute the normative value hash pinned in §20.5 of the TEL Specification. |
 | [`tels.hash`](tels.hash) | The BLAKE3-256 and BASE-256 forms of the `tels.tel` value hash. |
+| [`acceptance-request.tel`](acceptance-request.tel) | An acceptance (§8.4 of the BinTEL Specification): a reader of the layered contact schema asks for the base with the `with-address` layer, plus the `with-phone` and `with-status` layers by 4-byte hash prefix if the writer has them, and falls back to the base alone in self-contained mode. Its bare BinTEL form is 92 bytes. |
+| [`acceptance.bintel.hex`](acceptance.bintel.hex) | The BinTEL document root encoding of `/acceptance.tel`, used to recompute the value hash pinned in §8.4 of the BinTEL Specification. |
+| [`acceptance.hash`](acceptance.hash) | The BLAKE3-256 and BASE-256 forms of the `acceptance.tel` value hash. |
 
 ## Validation
 

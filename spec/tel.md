@@ -394,7 +394,10 @@ schema source a reader will find.
 
 The built-in `tels` meta-schema (§20.5) has the canonical, version-pinned coordinate
 `specification.tel/tels:2.0.0`. The pin is fixed until this specification is next revised; a
-later revision publishes a new LIRA release of `tels` and advances the pinned version.
+later revision publishes a new LIRA release of `tels` and advances the pinned version. The
+`acceptance` schema of §8.4 of the BinTEL Specification, supplied as
+[`acceptance.tel`](../acceptance.tel), is pinned the same way, at
+`specification.tel/acceptance:1.0.0`.
 
 #### Layer Selections
 
@@ -526,7 +529,10 @@ failure even when `S_cons` is a strict prefix of what could be decoded. A consum
 optional components it can exploit but does not require SHOULD therefore state the *shortest*
 composition it needs as its invocation schema and treat the further components as
 opportunistic; see §8.3 of the BinTEL Specification for the consequences in bidirectional
-exchange.
+exchange. A consumer that can tell the producer what it accepts before the document is written
+does so with an **acceptance** (§8.4 of the BinTEL Specification): a small document naming, in
+preference order, each invocation schema it will read under and the further components it can
+resolve and would like included.
 
 #### Resolution Protocol
 
@@ -546,7 +552,9 @@ order:
    schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), or its
    reference is the pinned coordinate `specification.tel/tels:2.0.0` (§8.1), the parser MUST
    use the built-in `Schema` and skip the remaining steps. Neither form requires network
-   access.
+   access. An implementation that supports acceptances (§8.4 of the BinTEL Specification)
+   holds the `acceptance` schema built in as well, and this step recognises its signature and
+   its pinned coordinate `specification.tel/acceptance:1.0.0` in the same way.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema
    signature or by atomic expansion (§20.3). If the cache contains a `Schema` whose composed
    signature equals the document schema's signature, or whose atomic expansion equals that of
@@ -1810,10 +1818,10 @@ of the Definition.
 
 A `ScalarDefinition` has a `name` (subject to the same uniqueness rule above), a list of
 `validators`, and a list of `patterns` (RE2 pattern constraints, §21.8); it is a named
-`Scalar`. A `scalar` declaration MUST carry at least one `validate` or `pattern` line
-(**E224**); the disjunction cannot be expressed structurally by the `tels` schema, whose
-`Scalar` record makes both members optional and repeatable. An unconstrained scalar names the
-built-in `String` instead. A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
+`Scalar`. Both lists MAY be empty: a `scalar` declaration with no `validate`, `pattern`, or
+`encoding` accepts every value, exactly as the built-in `String` does, and is still useful as a
+distinct named type — for generated code, for diagnostics, and as a Definition that a later
+layer may tighten (§20.3). A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
 kebab-case name of a codec (§21.7) defining the binary representation of the scalar's values in
 BinTEL — or `null` when absent. A declared encoding additionally constrains validity: a value
 the codec's encoder rejects is invalid (**E312**), in AND-conjunction with the declared
@@ -2145,8 +2153,6 @@ A schema is invalid if any of the following holds:
   `patterns` list that is not contained in the inherited list under the rule of §20.3
   (`L(⋂new) ⊆ L(⋂old)`), or the containment was not provable within the implementation's
   documented resource budget (**E223**; fail closed)
-- a `ScalarDefinition` declares neither a `validate` nor a `pattern` line (**E224**); an
-  unconstrained scalar names the built-in `String` instead
 
 #### Schema Errors (E2xx)
 
@@ -2175,7 +2181,7 @@ A schema is invalid if any of the following holds:
 | E221 | More than one member of a composed `Struct` is key-flagged | The `key` flag of the second key-flagged field in member order |
 | E222 | A `pattern` value is not a valid RE2 pattern (§21.8) | The offending `pattern` value |
 | E223 | A layer's replacing `patterns` set is not contained in the inherited set (`L(⋂new) ⊆ L(⋂old)` fails or is not provable within the implementation's documented budget; §20.3) | The layer's first `pattern` value |
-| E224 | A `ScalarDefinition` declares neither `validate` nor `pattern` | The `ScalarDefinition`'s name compound |
+| E224 | Reserved. Formerly "a `ScalarDefinition` declares neither `validate` nor `pattern`", withdrawn: an unconstrained scalar is valid (§20) | — |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -2487,8 +2493,8 @@ sequence of atoms:
   RecordDefinition is not lost.
 - **`scalar N`.** Each `validate` line is one atom; all `pattern` lines together are **one** atom
   (a replacement is decided by a single containment check, E223); the `encoding` line is one
-  atom; `description` is one atom. A `scalar N` with no children is itself one atom (E224 on the
-  composed schema unless a later atom constrains it).
+  atom; `description` is one atom. A `scalar N` with no children is itself one atom, so that a
+  fresh, unconstrained ScalarDefinition is not lost.
 - **`select N`.** All `variant` lines together are **one** atom (a variant set can only be
   introduced whole, E213; against an existing SelectDefinition it is a restatement, a no-op);
   each `exclude` and `validate` line is one atom; `description` is one atom.
@@ -2514,7 +2520,7 @@ canonical order and leaves atoms as they are. Two component sequences denote the
 schema** iff their expansions are equal. **Composition of a component sequence** applies `A(S)`
 from left to right, treating each atom as a layer containing exactly that atom under the merge
 algorithm below. The validity constraints of §20.1 that concern the composed schema as a whole
-(E205, E209, E210, E212, E217, E219–E221, E224) are checked once on the final result, never
+(E205, E209, E210, E212, E217, E219–E221) are checked once on the final result, never
 after an individual component (*Layer Validity Constraints* below). E204 does not apply to
 atoms, which carry no name; an atom listed twice in a sequence applies once.
 
@@ -2667,9 +2673,9 @@ The schema validity constraints, including those detected while a component is m
 (**E204**, **E206**, **E211**, **E213**–**E216**, **E218**, **E223**), are catalogued in §20.1;
 the algorithms above define where in composition each is detected. The constraints that concern
 the composed schema as a whole — keyword collisions (**E205**), reference resolution (**E209**,
-**E217**), the Definition namespace (**E210**), non-empty required Selects (**E212**), the
-key-field constraints (**E219**–**E221**), and the presence of a scalar constraint (**E224**) —
-are checked once after all components have been applied, never after an individual component: a
+**E217**), the Definition namespace (**E210**), non-empty required Selects (**E212**), and the
+key-field constraints (**E219**–**E221**) — are checked once after all components have been
+applied, never after an individual component: a
 component may both key a field and tighten its polarity, may reference a Definition that a later
 component introduces, or may add a required SelectRef to a Select that an earlier component
 emptied. Checking on the composed schema is also what makes a layer and its atoms
@@ -2719,7 +2725,7 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `layer`         | `Schema.layers[i]`                             |
 | `sigil`         | `Schema.sigil`                                 |
 | `record`        | A `RecordDefinition`: `Schema.records[i]` at schema root, or `Layer.records[i]` inside a `layer` compound. The first inline atom is the record's `TypeName`. |
-| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is `validate <name>` and/or `pattern <regex>` lines (at least one of the two, E224), optionally followed by an `encoding` line. |
+| `scalar`        | A `ScalarDefinition`: `Schema.scalars[i]` at schema root, or `Layer.scalars[i]` inside a `layer`. First inline atom is the `TypeName`; the body is zero or more `validate <name>` and `pattern <regex>` lines, optionally followed by an `encoding` line. |
 | `select`        | At top level (or inside `layer`): a `SelectDefinition` — `Schema.selects[i]` or `Layer.selects[i]`. First inline atom is the `TypeName`; body is `variant`, `validate`, and (in layers only) `exclude` lines. **At a member position** (inside a `record` body, the `document` block, or a layer's `overlay` block): a `SelectRef` — the first inline atom is the `TypeName` of the referenced SelectDefinition; polarity is per use site. There is no inline-anonymous form; every select is named. |
 | `overlay`       | `Layer.overlay` — the struct whose members are merged into the composed document root by the algorithm in §20.3. |
 | `field`         | A `Field` member. Lives inside a `record` body, the `document` block, or a layer's `overlay` block. |
@@ -2805,8 +2811,7 @@ introduces a non-required SelectRef referencing the `Status` SelectDefinition.
 
 Member order in `Scalar` (the TELS record for `scalar` declarations) is `name`,
 `validate` (optional, repeatable), `pattern` (optional, repeatable), `encoding` (optional),
-`description` (optional). At least one `validate` or `pattern` line is required (**E224**; the
-disjunction is not expressible structurally). Only `name` and `validate` are
+`description` (optional). Only `name` and `validate` are
 inline-atom-fillable; `pattern`, `encoding`, and `description` are always compound children —
 which also keeps regex text clear of the phrase-separation rules of §10.3 (a pattern containing
 a hard-space run uses a source atom, §14).
@@ -2895,8 +2900,7 @@ fields of the `Schema` model:
    order; for each `pattern` child, append its text to `ScalarDefinition.patterns`, in source
    order (§21.8); set `ScalarDefinition.encoding` from the optional `encoding` child's text, or
    `null` if absent; set `ScalarDefinition.description` from the optional `description` child's
-   text, or `null` if absent. A `scalar` element carrying neither a `validate` nor a `pattern`
-   child is **E224**.
+   text, or `null` if absent.
 4. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
    (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
    append a `Variant` to `SelectDefinition.variants` per step 5; for each `validate` child,
@@ -3324,7 +3328,10 @@ exactly two effects:
 
 Codec names are kebab-case identifiers in the shared helper namespace of §21.1. Every codec is
 application-defined; this specification defines only the interface, the laws, and the binding
-mechanism. `tels` itself declares no encodings.
+mechanism. `tels` itself declares no encodings. Two names are defined by a companion
+specification: `base-256` and `schema-signature`, the codecs of the `acceptance` schema (§8.4
+of the BinTEL Specification), which an implementation supporting acceptances MUST bind with
+the behaviour defined there.
 
 #### Codec Interface
 
@@ -4457,7 +4464,8 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E224** (schema),
+taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E224** (schema;
+E224 is reserved, §20.1),
 and **E301–E315** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
 tables of §19.3, §20.1, and §21.9. Worked examples —

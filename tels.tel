@@ -75,11 +75,10 @@ record Record
   select Member optional repeatable
   field description String optional
 
-# A `scalar` declaration: a named scalar definition constrained by named
-# validators and/or RE2 pattern constraints, with an optional binary
-# encoding. At least one `validate` or `pattern` is required (E224); the
-# disjunction cannot be expressed structurally, so both members are
-# optional here.
+# A `scalar` declaration: a named scalar definition, optionally constrained
+# by named validators and/or RE2 pattern constraints, with an optional
+# binary encoding. A scalar with no constraints accepts every value, like
+# the built-in `String`.
 
 record Scalar
   description
