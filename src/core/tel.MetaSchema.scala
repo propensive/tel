@@ -2,14 +2,19 @@ package tel
 
 import soundness.*
 
-// The built-in TELS meta-schema document (the schema-for-schemas, matching `Tels.Axiom.tels`),
-// embedded so the registry can always preload it. This is a verbatim copy of `tels.tel` at the root
-// of the TEL repository; keep the two in step. Kept as a plain triple-quoted String (no
-// interpolation/escapes) and converted to `Text`.
+// The two schema documents every conforming implementation carries built in, embedded so the
+// registry can always preload them: the TELS meta-schema (the schema-for-schemas, matching
+// `Tels.Axiom.tels`, TEL §20.5) and the `acceptance` schema (BinTEL §8.4). Each is a verbatim
+// copy of the file of the same name at the root of the TEL repository; keep them in step (the
+// registry refreshes its copies from these whenever they differ, so a stale copy never
+// survives an upgrade). Kept as plain triple-quoted Strings (no interpolation/escapes) and
+// converted to `Text`.
 object MetaSchema:
+  // `tels.tel`, published as `specification.tel/tels:2.0.0`.
   val source: Text = """tel 1.0
 
-# The TEL schema-for-schemas (v1.0). Self-describing: parsing this document
+# The TEL schema-for-schemas, published as `specification.tel/tels:2.0.0`
+# (the coordinate pinned in §8.1). Self-describing: parsing this document
 # under the schema it defines yields a valid semantic model. The vocabulary
 # and surface conventions are specified in §20.5 of the TEL Specification.
 #
@@ -24,8 +29,8 @@ object MetaSchema:
 #
 # Type references. Every `field type` and `variant type` atom, and every
 # SelectRef's first inline atom, is a TypeName that resolves through the
-# composed Definition namespace to a record, scalar, select, or built-in
-# (`Flag`, `String`, `Identifier`, `Sigil`).
+# composed Definition namespace to a record, scalar, select, or one of the
+# five built-ins (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`).
 
 name tels
 
@@ -83,14 +88,17 @@ record Record
   select Member optional repeatable
   field description String optional
 
-# A `scalar` declaration: a named scalar definition (one or more validators
-# and an optional binary encoding).
+# A `scalar` declaration: a named scalar definition, optionally constrained
+# by named validators and/or RE2 pattern constraints, with an optional
+# binary encoding. A scalar with no constraints accepts every value, like
+# the built-in `String`.
 
 record Scalar
   description
-      A scalar declaration: a named scalar definition with one or more validators and an optional encoding.
+      A scalar declaration: a named scalar definition constrained by validators and/or RE2 patterns, with an optional encoding.
   field name TypeName
-  field validate Identifier repeatable
+  field validate Identifier optional repeatable
+  field pattern String optional repeatable
   field encoding Identifier optional
   field description String optional
 
@@ -159,4 +167,61 @@ document
   field select Select optional repeatable
   field document Body
   field layer Layer optional repeatable
+""".tt
+
+  // `acceptance.tel`, published as `specification.tel/acceptance:1.0.0`.
+  val acceptance: Text = """tel 1.0
+
+# The TEL acceptance schema, published as `specification.tel/acceptance:1.0.0`
+# (the coordinate pinned in §8.4 of the BinTEL Specification). An acceptance
+# tells a writer which composed schemas a reader can consume, in decreasing
+# preference order, and which further components of each base's lineage it
+# can resolve and would like included if the writer holds them.
+#
+# Every alternative is one `accept` line: its first atom is the schema
+# signature (a palimpsest, BinTEL §8.2) the reader will use as its invocation
+# schema; the two optional flags follow; every remaining atom names a further
+# component by its hash or by a prefix of at least four bytes. The flag
+# keywords contain a hyphen, which is not in the BASE-256 alphabet, so a flag
+# can never be read as a component nor a component as a flag.
+#
+# Encodings. `schema-signature` and `base-256` are the two codecs BinTEL §8.4
+# defines; an implementation that supports acceptances binds both.
+
+name acceptance
+
+# A schema signature: a palimpsest of component hashes at the BinTEL-pinned
+# parameters. The codec rejects any byte sequence that is not structurally a
+# signature (a length other than 33, 37, 39, 41, …, or a cadence byte other
+# than 0x79), so a malformed signature is E312 at validation time.
+
+scalar Signature
+  description
+      A schema signature (BinTEL §8.2): a palimpsest of component hashes at the pinned parameters.
+  encoding schema-signature
+
+# A component hash — a layer or an atom of the required base's lineage — or a
+# prefix of one, at least four bytes long.
+
+scalar Component
+  description
+      A component hash, or a prefix of one at least four bytes long.
+  pattern .{4,32}
+  encoding base-256
+
+# One composition the reader accepts. Member order is load-bearing for inline
+# atoms (TEL §20.2): `schema` is the first atom, the optional flags are skipped
+# when the next atom does not match them, and `component` — a repeatable
+# Scalar — takes every atom that remains.
+
+record Alternative
+  description
+      One composition the reader accepts, with the further components it can resolve.
+  field schema Signature
+  field self-contained Flag optional
+  field any-published Flag optional
+  field component Component optional repeatable
+
+document
+  field accept Alternative repeatable
 """.tt

@@ -20,7 +20,10 @@ import charDecoders.utf8Decoder
 // A per-user registry of TEL schemas, shared by the `tel schema …` subcommands and the LSP. Schemas
 // live as `<name>.tel` files under `$XDG_CACHE_HOME/tel/schemas` (or `~/.cache/tel/schemas`). A schema
 // is validated against the built-in TELS meta-schema before it is cached, so the registry only
-// ever holds well-formed schemas, and the LSP can load them to validate ordinary documents.
+// ever holds well-formed schemas, and the LSP can load them to validate ordinary documents. The
+// registry is the local content-addressed store of the Resolution Protocol (TEL §8.2, steps 2–3):
+// a signature is resolved by decoding its palimpsest against the component hashes of every
+// registered schema, and a bare reference by its module name.
 object SchemaCache:
 
   // A summary of one cached schema, for `tel schema list`.
@@ -38,6 +41,18 @@ object SchemaCache:
     val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
     val byName = names.zip(layerHashes.stdlib).toMap
     Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
+
+  // A registered schema's component hashes (BinTEL §8.1), each layer's paired with its declared
+  // name: the library a pragma signature is decoded against.
+  private def components(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error])
+  :   (Data, List[(Text, Data)]) =
+
+    val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
+    val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
+    (baseHash, names.zip(layerHashes.stdlib).to(List))
+
+  // `Data` carries no structural equality, so hashes are compared by their BASE-256 rendering.
+  private def sameHash(a: Data, b: Data): Boolean = Base256.encode(a) == Base256.encode(b)
 
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
   private def entryOf(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error]): Entry =
@@ -102,15 +117,25 @@ object SchemaCache:
   private def markReadOnly(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setReadOnly())
   private def makeWritable(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setWritable(true))
 
-  // Write the built-in TELS meta-schema into the cache if it is not already there, so the
-  // registry always contains it. Best-effort (the cache may be unwritable).
+  // The schemas every implementation holds built in (TEL §8.2, resolution step 1): the `tels`
+  // meta-schema and the `acceptance` schema (BinTEL §8.4), each under its declared name.
+  private val builtins: scala.List[(Text, Text)] =
+    scala.List(t"tels" -> MetaSchema.source, t"acceptance" -> MetaSchema.acceptance)
+
+  // Write the built-in schemas into the cache, so the registry always contains them — and refresh
+  // any copy whose text differs from the embedded source, so an upgraded `tel` never resolves a
+  // stale pin. Best-effort (the cache may be unwritable).
   def ensurePreloaded(directory: Path on Linux): Unit =
-    safely:
-      val file = t"${directory.encode}/tels.tel".as[Path on Linux]
-      if !file.existent() then
-        if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
-        file.write(MetaSchema.source)
-        markReadOnly(file)
+    builtins.foreach: (name, source) =>
+      safely:
+        val file = t"${directory.encode}/$name.tel".as[Path on Linux]
+        val current = if file.existent() then readText(file).lay(false)(_ == source) else false
+
+        if !current then
+          if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
+          makeWritable(file)
+          file.write(source)
+          markReadOnly(file)
 
   // Every cached schema, sorted by name; unreadable or unparseable files are skipped.
   def entries(directory: Path on Linux): List[Entry] =
@@ -133,7 +158,7 @@ object SchemaCache:
     // validity battery, then the reference-coherence checks it does not yet include. An
     // incoherent schema would otherwise be accepted here and only fail later, when a document is
     // validated against it.
-    val composed = Tels.Validation.validate(Tels.Reconstructor.fromTel(tel))
+    val composed = validated(tel)
     incoherences(composed).headOption.foreach { (_, reason) => abort(Tel.Error(reason)) }
 
     if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
@@ -142,6 +167,20 @@ object SchemaCache:
     target.write(text)
     markReadOnly(target)                   // keep the registry copy read-only
     entry
+
+  // Stratiform's §20.1 validity battery over the composed schema. E224 (a scalar declaring neither
+  // `validate` nor `pattern`) was withdrawn from the specification — an unconstrained scalar is
+  // valid — but Stratiform 0.67 still raises it, aborting the battery at that point; such a schema
+  // is composed without the battery instead, until Stratiform catches up.
+  def validated(tel: Tel)(using Tactic[Tel.Error]): Tels =
+    recover:
+      case error: Tel.Error =>
+        if error.reason == Tel.Error.Reason.UnconstrainedScalar
+        then Tels.Layers.compose(Tels.Reconstructor.fromTel(tel))
+        else abort(error)
+
+    . protect:
+        Tels.Validation.validate(Tels.Reconstructor.fromTel(tel))
 
   // The declared layer names of the schema cached under `name`, in declaration order. Used to
   // tab-complete the layer operands of `tel schema signature <name> [layer…]`, where the
@@ -161,55 +200,89 @@ object SchemaCache:
       val file = t"${directory.encode}/${name}.tel".as[Path on Linux]
       if file.existent() then read(file) else Unset
 
-  // As `resolve`, but returns the cache *file* backing the identifier (for cross-file navigation from
-  // a document into its schema). Matches by name first, then by base/selected/fully-composed
-  // signature.
-  def resolveFile(directory: Path on Linux, identifier: Text, selection: List[Text] = Nil)
-  :   Optional[Path on Linux] =
+  // The outcome of looking a pragma schema identification up in the registry.
+  enum Lookup:
+    // The schema composed with `layers` (the pragma's selection, or the layers a signature named,
+    // in order), its registry file, and the composed signature.
+    case Found(file: Path on Linux, schema: Tels, layers: List[Text], signature: Text)
+    // The schema is registered, but a selected layer is not one it declares: a runtime resolution
+    // error (§8.1), distinct from a mis-ordered selection.
+    case UnknownLayer(file: Path on Linux, layer: Text)
+    // The schema is registered, but the layers are not in its declaration order (E124).
+    case LayerOrder(file: Path on Linux)
+    // The signature resolves, but not to what the pragma's other phrases claim (§8.1).
+    case Disagreement(file: Path on Linux, detail: Text)
+    case Missing
+
+  // Resolve a pragma schema identifier — a schema name (a LIRA reference's module-name tail), or
+  // a BASE-256 schema signature — against the registry. A name resolves to the base schema
+  // composed with exactly the selected layers (§8.1; none = the base alone). A signature is
+  // decoded (BinTEL §8.2) against the component hashes of each registered schema, the pragma's
+  // layer selections serving as decomposition hints, and resolves to the base composed with the
+  // layers the signature names, in the order it names them; when the pragma also selects
+  // layers, the signature is authoritative and MUST name exactly those (§8.1).
+  def lookup(directory: Path on Linux, identifier: Text, selection: List[Text] = Nil): Lookup =
     ensurePreloaded(directory)
-    val byName = safely:
+
+    val named = safely:
       val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
-      if file.existent() then file else Unset
+      if file.existent() then compose(file, read(file), selection) else Unset
 
-    byName.or:
-      safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).find: file =>
-        safely:
-          val tel = read(file)
-          val base = signature(tel, Nil)
-          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
-          val selected = if selection.stdlib.isEmpty then Unset else signature(tel, selection)
-          identifier == base || identifier == full || selected.lay(false)(identifier == _)
-        . or(false)
-      . getOrElse(Unset)
+    named.or:
+      safely(Base256.decodeStrict(identifier)).lay(Lookup.Missing): claimed =>
+        if safely(SchemaSignature.componentCount(claimed)).absent then Lookup.Missing
+        else
+          safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).iterator
+          . map(file => safely(decodeAgainst(file, claimed, selection)).or(Unset))
+          . collectFirst { case found: Lookup => found }
+          . getOrElse(Lookup.Missing)
 
-  // Resolve a pragma schema identifier — a schema name (a LIRA reference's module-name tail), or a
-  // bare BASE-256 signature — to a `Tels`, or `Unset` if it is neither cached nor resolvable. A
-  // name resolves to the base schema composed with exactly the selected layers (§8.1; none = the
-  // base alone); a signature resolves to whichever cached schema's base, selected, or
-  // fully-composed signature it matches, composed accordingly.
-  def resolve(directory: Path on Linux, identifier: Text, selection: List[Text] = Nil)
-  :   Optional[Tels] =
-    ensurePreloaded(directory)
+  // Compose a registered schema with a layer selection, telling the two ways a selection can
+  // fail apart: Stratiform raises `Resolution.Error` for an undeclared name and E124 for an
+  // order violation.
+  private def compose(file: Path on Linux, tel: Tel, selection: List[Text]): Lookup =
+    recover:
+      case error: Tels.Resolution.Error => error.reason match
+        case Tels.Resolution.Error.Reason.UnknownLayer(layer) => Lookup.UnknownLayer(file, layer)
+        case _                                                => Lookup.Missing
 
-    def compose(tel: Tel): Optional[Tels] =
-      safely:
+      case error: Tel.Error =>
+        if error.reason == Tel.Error.Reason.LayerOrderMismatch then Lookup.LayerOrder(file)
+        else Lookup.Missing
+
+      case error: Bintel.Error => Lookup.Missing
+
+    . protect:
         val base = Tels.Reconstructor.fromTel(tel)
-        if selection.stdlib.isEmpty then base else Tels.Layers.compose(base, selection)
+        val schema = if selection.nil then base else Tels.Layers.compose(base, selection)
+        Lookup.Found(file, schema, selection, signature(tel, selection))
 
-    val byName = safely:
-      val file = t"${directory.encode}/${identifier}.tel".as[Path on Linux]
-      if file.existent() then compose(read(file)) else Unset
+  // Decode a claimed signature against one registered schema's components. `Unset` when the
+  // signature does not decompose over them — it belongs to some other schema.
+  private def decodeAgainst(file: Path on Linux, claimed: Data, selection: List[Text])
+      ( using Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error],
+              Tactic[Bintel.Error] )
+  :   Optional[Lookup] =
 
-    byName.or:
-      safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).map: file =>
-        safely:
-          val tel = read(file)
-          val base = signature(tel, Nil)
-          val full = signature(tel, Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name))
-          val selected = if selection.stdlib.isEmpty then Unset else signature(tel, selection)
-          if selected.lay(false)(identifier == _) then compose(tel)
-          else if identifier == base then Tels.Reconstructor.fromTel(tel)
-          else if identifier == full then Tels.Layers.compose(Tels.Reconstructor.fromTel(tel))
-          else Unset
-        . or(Unset)
-      . find(!_.absent).getOrElse(Unset)
+    val tel = read(file)
+    val (baseHash, layers) = components(tel)
+
+    SchemaSignature.decodeHinted(claimed, baseHash, layers, selection).let: decoded =>
+      val hashes = decoded.stdlib
+
+      if hashes.isEmpty || !sameHash(hashes.head, baseHash) then Unset
+      else
+        val names = hashes.tail.map: hash =>
+          layers.stdlib.find((_, candidate) => sameHash(candidate, hash)).map(_(0))
+
+        if names.exists(_.isEmpty) then Unset
+        else
+          val layerNames = names.flatten.to(List)
+
+          if !selection.nil && selection.stdlib != names.flatten then
+            val named = layerNames.map(name => t"`$name`").join(t", ")
+
+            Lookup.Disagreement
+              ( file, t"the signature names the layers $named, not the `+` layer selections" )
+          else
+            compose(file, tel, layerNames)

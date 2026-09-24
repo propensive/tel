@@ -7,6 +7,7 @@ import proscenium.{List, Nil}
 
 import strategies.throwUnsafely
 import pathInterfaces.pathOnLinux
+import charEncoders.utf8Encoder
 
 // Tests for the LSP server's pure handler functions: no JSON-RPC transport is involved, and the
 // schema registry is a throwaway temporary directory, so the suite exercises exactly the logic the
@@ -14,7 +15,7 @@ import pathInterfaces.pathOnLinux
 object Tests extends Suite(m"TEL LSP server tests"):
 
   // A small contact schema, registered under `contact.tel` in the temporary registry.
-  val schemaText: Text = """tel 1.0 specification.tel/tels:1.0.0
+  val schemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
 
 name contact
 
@@ -46,7 +47,7 @@ document
 
   // A schema whose repeatable `pet` member is typed by a record with a `key` field (§20), so that
   // sibling pets must have distinct names (§21.6, E314).
-  val keyedSchemaText: Text = """tel 1.0 specification.tel/tels:1.0.0
+  val keyedSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
 
 name keyed
 
@@ -64,7 +65,7 @@ document
 
   // A schema whose record leads with a required Flag, so a flag atom's positional and keyword
   // bindings coincide — the meaning-preserving case for the inline/expand code actions.
-  val flagsSchemaText: Text = """tel 1.0 specification.tel/tels:1.0.0
+  val flagsSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
 
 name flags
 
@@ -78,7 +79,7 @@ document
 
   // A schema with an optional layer (§8.1): a document opts into `extras` with `+extras` in its
   // pragma; without it, only the base schema's members are admissible.
-  val themedSchemaText: Text = """tel 1.0 specification.tel/tels:1.0.0
+  val themedSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
 
 name themed
 
@@ -89,6 +90,29 @@ layer
   name extras
   overlay
     field subtitle String optional
+
+layer
+  name footer
+  overlay
+    field footer String optional
+""".tt
+
+  // A schema whose scalar carries a `pattern` constraint (§21.8), so a value that does not match
+  // it is E315.
+  val patternSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+
+name coded
+
+scalar Code
+  pattern [A-Z]{2}
+
+scalar Blob
+  validate string
+  encoding hex-bytes
+
+document
+  field code Code
+  field blob Blob optional
 """.tt
 
   // A document with source-atom and literal-atom payloads (§14, §15): the payload lines must not
@@ -123,6 +147,9 @@ field looks-like-a-compound
     java.nio.file.Files.write
       ( registryDir.resolve("themed.tel").nn, themedSchemaText.s.getBytes("UTF-8").nn )
 
+    java.nio.file.Files.write
+      ( registryDir.resolve("coded.tel").nn, patternSchemaText.s.getBytes("UTF-8").nn )
+
     val registry: TelServer.Registry = t"${registryDir.toString}".as[Path on Linux]
     val resolver = TelServer.PragmaResolver(registry)
     val schemaFile = t"${registryDir.toString}/contact.tel".as[Path on Linux]
@@ -132,11 +159,19 @@ field looks-like-a-compound
     val flagsFile = t"${registryDir.toString}/flags.tel".as[Path on Linux]
     val flagsSignature: Text = SchemaCache.describe(flagsFile).let(_.id).or(t"")
 
+    // The themed schema's signature composed with just its second layer, `footer` — a component
+    // sequence that is not a prefix of the declaration order, so only a palimpsest decode can
+    // resolve it.
+    val themedFooterSignature: Text =
+      safely(SchemaCache.signature(themedSchemaText.read[Tel], List(t"footer"))).or(t"")
+    val themedExtrasSignature: Text =
+      safely(SchemaCache.signature(themedSchemaText.read[Tel], List(t"extras"))).or(t"")
+
     suite(m"Schema resolution"):
       test(m"The registered schema's signature resolves"):
         resolver(signature)
       . assert:
-          case TelServer.Resolution.Resolved(entry, _, _) => entry.name == t"contact"
+          case TelServer.Resolution.Resolved(entry, _, _, _, _) => entry.name == t"contact"
           case _                                          => false
 
       test(m"An unknown identifier is Unresolved"):
@@ -146,7 +181,7 @@ field looks-like-a-compound
           case _                                  => false
 
       test(m"A tel-schema pragma resolves to the meta-schema"):
-        resolver(t"specification.tel/tels:1.0.0")
+        resolver(t"specification.tel/tels:2.0.0")
       . assert:
           case TelServer.Resolution.Meta(_, _) => true
           case _                               => false
@@ -179,7 +214,7 @@ field looks-like-a-compound
       // declaring one is simply valid — this used to raise a spurious E306 downgraded to a warning.
       test(m"A scalar `encoding` declaration is accepted"):
         val encodingSchema = List
-          ( t"tel 1.0 specification.tel/tels:1.0.0", t"", t"name enc", t"",
+          ( t"tel 1.0 specification.tel/tels:2.0.0", t"", t"name enc", t"",
             t"scalar Code", t"  validate string", t"  encoding hex-bytes", t"",
             t"document", t"  field code Code" )
         . join(t"\n")
@@ -207,7 +242,7 @@ field looks-like-a-compound
 
       test(m"A duplicate definition (E210) is located on the second declaration"):
         val duplicated = List
-          ( t"tel 1.0 specification.tel/tels:1.0.0", t"", t"name dup", t"",
+          ( t"tel 1.0 specification.tel/tels:2.0.0", t"", t"name dup", t"",
             t"record Foo", t"  field a String", t"", t"record Foo", t"  field b String", t"",
             t"document", t"  field foo Foo optional" )
         . join(t"\n")
@@ -215,6 +250,72 @@ field looks-like-a-compound
         TelServer.diagnose(duplicated, resolver).stdlib.filter(_.code == t"E210")
       . assert: diagnostics =>
           diagnostics.length == 1 && diagnostics.forall(_.range.start.line == 7)
+
+    suite(m"Validators, patterns and encodings"):
+      // The four built-in validators (§21.5) run in the editor: `Identifier` rejects a capital.
+      test(m"A built-in validator rejection is E310"):
+        TelServer.diagnose(keyedDocument(keyedSignature, t"Cat"), resolver).stdlib.map(_.code)
+      . assert(_ == scala.List(t"E310"))
+
+      test(m"A value failing a pattern constraint is E315"):
+        TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode ab\n", resolver).stdlib.map(_.code)
+      . assert(_ == scala.List(t"E315"))
+
+      test(m"A value matching its pattern constraint is accepted"):
+        TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode AB\n", resolver).stdlib.length
+      . assert(_ == 0)
+
+      // The editor binds only the codecs the specification defines; an application's encoding
+      // leaves its values unchecked, which is a warning here rather than the E313 error an
+      // application raises.
+      test(m"An application-defined encoding is an E313 warning, not an error"):
+        TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode AB\nblob 0a0b\n", resolver)
+        . stdlib.map(diagnostic => (diagnostic.code, diagnostic.severity))
+      . assert(_ == scala.List((t"E313", Lsp.DiagnosticSeverity.Warning)))
+
+      // E224 was withdrawn: a scalar with no constraint is valid (§20).
+      test(m"An unconstrained scalar declaration is valid"):
+        val text = t"tel 1.0 specification.tel/tels:2.0.0\n\nname loose\n\nscalar Loose\n\ndocument\n  field x Loose\n"
+        TelServer.diagnose(text, resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"Hovering a pattern-constrained value shows the pattern"):
+        TelServer.hoverAt(t"tel 1.0 example.org/coded\n\ncode AB\n", Lsp.Position(2, 6), resolver)
+      . assert(_.let(_.contents.value.s.contains("[A-Z]{2}")).or(false))
+
+    suite(m"Acceptances (BinTEL §8.4)"):
+      val acceptance = t"tel 1.0 specification.tel/acceptance:1.0.0\n\n"
+
+      test(m"The acceptance schema is built in and resolves by its pinned coordinate"):
+        resolver(t"specification.tel/acceptance:1.0.0")
+      . assert:
+          case TelServer.Resolution.Resolved(entry, _, _, _, _) => entry.name == t"acceptance"
+          case _                                                => false
+
+      test(m"An acceptance naming a signature and a component prefix validates"):
+        val text = acceptance + t"accept $signature self-contained ABCD\naccept $keyedSignature\n"
+        TelServer.diagnose(text, resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"A malformed signature in an acceptance is E312 from the schema-signature codec"):
+        TelServer.diagnose(acceptance + t"accept ABCDEFG\n", resolver).stdlib.map(_.code)
+      . assert(_ == scala.List(t"E312"))
+
+      test(m"A component prefix shorter than four bytes is E315"):
+        TelServer.diagnose(acceptance + t"accept $signature ABC\n", resolver).stdlib.map(_.code)
+      . assert(_ == scala.List(t"E315"))
+
+    suite(m"Registry preloading"):
+      test(m"A stale built-in copy is refreshed from the embedded source"):
+        val dir = java.nio.file.Files.createTempDirectory("tel-preload-test").nn
+        val stale = dir.resolve("tels.tel").nn
+        java.nio.file.Files.write(stale, "tel 1.0\n\nname tels\n\ndocument\n".getBytes("UTF-8").nn)
+        val registry = t"${dir.toString}".as[Path on Linux]
+        SchemaCache.ensurePreloaded(registry)
+        val tels = String(java.nio.file.Files.readAllBytes(stale), "UTF-8").tt
+        val acceptanceCopy = java.nio.file.Files.exists(dir.resolve("acceptance.tel").nn)
+        (tels == MetaSchema.source, acceptanceCopy)
+      . assert(_ == (true, true))
 
     suite(m"Structure scan"):
       test(m"Payload lines are not compounds"):
@@ -342,12 +443,14 @@ field looks-like-a-compound
 
       // ── Hard gaps (§10.3): a 2+-space run starts an atom and locks the line into hard mode ──
 
-      // `pet  fluffy cat` is ONE atom, `fluffy cat`, binding Pet's required `name`; the generated
-      // child line must also use a hard gap so the value stays a single phrase.
+      // `contact  fluffy cat` is ONE atom, `fluffy cat`, binding Contact's optional `label` (a
+      // `String`; a `key` field's `Identifier` would reject the space, E310, and no refactoring is
+      // offered on an invalid document); the generated child line must also use a hard gap so the
+      // value stays a single phrase.
       test(m"Expanding a hard-gap atom preserves it as one phrase"):
-        val text = t"tel 1.0 $keyedSignature\n\npet  fluffy cat\n"
-        editTexts(TelServer.codeActionsAt(uri, text, at(2), resolver))
-      . assert(_ == scala.List("\n  name  fluffy cat"))
+        val text = t"tel 1.0 $signature\n\nname Alice\ncontact  fluffy cat\n"
+        editTexts(TelServer.codeActionsAt(uri, text, at(3), resolver))
+      . assert(_ == scala.List("\n  label  fluffy cat"))
 
       // Soft atoms before the first hard run keep their positional bindings: `+44` stays inline on
       // the compound while the hard atom moves to a child.
@@ -357,11 +460,11 @@ field looks-like-a-compound
       . assert(_ == scala.List("\n  number  020 7946 0958"))
 
       test(m"Hard-gap expand and inline round-trip"):
-        val original = t"tel 1.0 $keyedSignature\n\npet  fluffy cat\n"
-        val expanded = applied(original, TelServer.codeActionsAt(uri, original, at(2), resolver))
-        val inlined = applied(expanded, TelServer.codeActionsAt(uri, expanded, at(3), resolver))
-        inlined.s == original.s
-      . assert(_ == true)
+        val original = t"tel 1.0 $signature\n\nname Alice\ncontact  fluffy cat\n"
+        val expanded = applied(original, TelServer.codeActionsAt(uri, original, at(3), resolver))
+        val inlined = applied(expanded, TelServer.codeActionsAt(uri, expanded, at(4), resolver))
+        (expanded.s != original.s, inlined.s == original.s)
+      . assert(_ == (true, true))
 
       // Appending to a line already in hard mode must use a hard gap, or the new atom would merge
       // into the phrase before it.
@@ -369,6 +472,38 @@ field looks-like-a-compound
         val text = t"tel 1.0 $signature\n\nname Alice\nphone  +44\n  number 0207946\n"
         applied(text, TelServer.codeActionsAt(uri, text, at(4), resolver)).s
       . assert(_ == s"tel 1.0 $signature\n\nname Alice\nphone  +44  0207946\n")
+
+    suite(m"Pragma code actions and completions"):
+      val uri = t"file:///test.tel"
+      def at(line: Int): Lsp.Range = Lsp.Range(Lsp.Position(line, 0), Lsp.Position(line, 0))
+
+      def edits(actions: List[Lsp.CodeAction]): scala.List[(Int, String)] =
+        actions.stdlib.flatMap: action =>
+          action.edit.let(_.changes).lay(scala.List[Lsp.TextEdit]()): changes =>
+            changes.stdlib.values.to(scala.List).flatMap(_.stdlib)
+        . map(edit => (edit.range.start.character, edit.newText.s))
+
+      test(m"A reference-only pragma offers to append the schema signature"):
+        edits(TelServer.codeActionsAt(uri, document(t"example.org/contact"), at(0), resolver))
+      . assert(_ == scala.List((27, s" $signature")))
+
+      test(m"The signature goes after the layer selections and before the sigil"):
+        val text = t"tel 1.0 example.org/themed +extras %\n\ntitle Hello\n"
+        edits(TelServer.codeActionsAt(uri, text, at(0), resolver))
+      . assert(_ == scala.List((35, s"$themedExtrasSignature ")))
+
+      test(m"A pragma already carrying a signature offers no action"):
+        TelServer.codeActionsAt(uri, document(signature), at(0), resolver).stdlib.length
+      . assert(_ == 0)
+
+      test(m"The pragma's layer slot offers the schema's unselected layers"):
+        TelServer.completions(t"tel 1.0 example.org/themed +extras \n", Lsp.Position(0, 35), resolver)
+        . items.stdlib.map(_.label)
+      . assert(_ == scala.List(t"+footer"))
+
+      test(m"Hovering the pragma shows the composed signature"):
+        TelServer.hoverAt(t"tel 1.0 example.org/themed +extras\n", Lsp.Position(0, 12), resolver)
+      . assert(_.let(_.contents.value.s.contains(themedExtrasSignature.s)).or(false))
 
     suite(m"Validation reports"):
       // Diagnostics for a document, in report order.
@@ -405,7 +540,7 @@ field looks-like-a-compound
       . assert(_ == scala.List("✓ pets.tel: no problems found"))
 
     suite(m"Schema coherence"):
-      def schemaDoc(body: Text): Text = t"tel 1.0 specification.tel/tels:1.0.0\n\n$body"
+      def schemaDoc(body: Text): Text = t"tel 1.0 specification.tel/tels:2.0.0\n\n$body"
 
       test(m"An unresolved type reference is E209, located on the TypeName atom"):
         val text = schemaDoc(t"name x\n\ndocument\n  field foo Widget\n")
@@ -446,17 +581,17 @@ field looks-like-a-compound
       test(m"A LIRA reference resolves by its module-name tail"):
         resolver(t"example.org/contact")
       . assert:
-          case TelServer.Resolution.Resolved(entry, _, _) => entry.name == t"contact"
+          case TelServer.Resolution.Resolved(entry, _, _, _, _) => entry.name == t"contact"
           case _                                          => false
 
       test(m"A selector-form reference also resolves locally"):
         resolver(t"example.org/contact:1.2.0")
       . assert:
-          case TelServer.Resolution.Resolved(entry, _, _) => entry.name == t"contact"
+          case TelServer.Resolution.Resolved(entry, _, _, _, _) => entry.name == t"contact"
           case _                                          => false
 
       test(m"The pinned tels coordinate resolves to the meta-schema"):
-        resolver(t"specification.tel/tels:1.0.0")
+        resolver(t"specification.tel/tels:2.0.0")
       . assert:
           case TelServer.Resolution.Meta(_, _) => true
           case _                               => false
@@ -472,10 +607,56 @@ field looks-like-a-compound
         . stdlib.count(_.severity == Lsp.DiagnosticSeverity.Error)
       . assert(_ > 0)
 
-      test(m"An unknown layer selection is E124"):
+      // §8.1: an undeclared layer name is a runtime resolution error, which carries no E-code;
+      // only a selection out of declaration order is E124.
+      test(m"An unknown layer selection is a resolution error, not E124"):
         TelServer.diagnose(t"tel 1.0 example.org/themed +bogus\n\ntitle Hello\n", resolver)
-        . stdlib.filter(_.code == t"E124").length
-      . assert(_ == 1)
+        . stdlib.map(diagnostic => (diagnostic.code, diagnostic.severity))
+      . assert(_ == scala.List((t"layer-unknown", Lsp.DiagnosticSeverity.Error)))
+
+      test(m"A layer selection out of declaration order is E124"):
+        TelServer.diagnose(t"tel 1.0 example.org/themed +footer +extras\n\ntitle Hello\n", resolver)
+        . stdlib.map(_.code)
+      . assert(_ == scala.List(t"E124"))
+
+      test(m"A signature naming a non-prefix subset of the layers resolves by decoding"):
+        resolver(themedFooterSignature)
+      . assert:
+          case TelServer.Resolution.Resolved(entry, _, _, layers, signature) =>
+            entry.name == t"themed" && layers.stdlib == scala.List(t"footer")
+            && signature == themedFooterSignature
+          case _ => false
+
+      test(m"A decoded signature composes exactly the layers it names"):
+        TelServer.diagnose
+          ( t"tel 1.0 $themedFooterSignature\n\ntitle Hello\nfooter Bye\n", resolver )
+        . stdlib.count(_.severity == Lsp.DiagnosticSeverity.Error)
+      . assert(_ == 0)
+
+      test(m"A decoded signature admits no member of a layer it does not name"):
+        TelServer.diagnose
+          ( t"tel 1.0 $themedFooterSignature\n\ntitle Hello\nsubtitle World\n", resolver )
+        . stdlib.count(_.severity == Lsp.DiagnosticSeverity.Error)
+      . assert(_ > 0)
+
+      test(m"A signature that agrees with the layer selections resolves"):
+        TelServer.diagnose
+          ( t"tel 1.0 example.org/themed +extras $themedExtrasSignature\n\ntitle Hello\n",
+            resolver )
+        . stdlib.length
+      . assert(_ == 0)
+
+      test(m"A signature that disagrees with the layer selections is reported"):
+        TelServer.diagnose
+          ( t"tel 1.0 example.org/themed +extras $themedFooterSignature\n\ntitle Hello\n",
+            resolver )
+        . stdlib.map(_.code)
+      . assert(_ == scala.List(t"signature-disagrees"))
+
+      test(m"A signature belonging to another schema than the reference is reported"):
+        TelServer.diagnose(t"tel 1.0 example.org/themed $signature\n\ntitle Hello\n", resolver)
+        . stdlib.map(_.code)
+      . assert(_.contains(t"signature-disagrees"))
 
     suite(m"Outline"):
       def kinds(text: Text): scala.collection.immutable.Map[Text, Lsp.SymbolKind] =
@@ -524,7 +705,7 @@ field looks-like-a-compound
 
       test(m"Hovering a built-in validator name shows its blurb"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:1.0.0\nname x\nscalar Foo\n  validate identifier\n"
+          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nscalar Foo\n  validate identifier\n"
 
         TelServer.hoverAt(schemaDocument, Lsp.Position(3, 12), resolver)
       . assert(_.let(_.contents.value.s.contains("built-in validator")).or(false))
@@ -546,7 +727,7 @@ field looks-like-a-compound
 
       test(m"A member declaration in a schema document completes its flags"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:1.0.0\nname x\nrecord Foo\n  field name Identifier \n"
+          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nrecord Foo\n  field name Identifier \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 24), resolver)
         . items.stdlib.map(_.label)
@@ -556,7 +737,7 @@ field looks-like-a-compound
 
       test(m"A validate line completes the built-in validators"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:1.0.0\nname x\nscalar Foo\n  validate \n"
+          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nscalar Foo\n  validate \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 11), resolver)
         . items.stdlib.map(_.label)
@@ -564,7 +745,7 @@ field looks-like-a-compound
 
       test(m"The type-name slot in a schema document offers definitions and built-ins"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:1.0.0\nname x\nrecord Foo\ndocument\n  field a \n"
+          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nrecord Foo\ndocument\n  field a \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(4, 10), resolver)
         . items.stdlib.map(_.label)
