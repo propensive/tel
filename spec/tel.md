@@ -2120,8 +2120,10 @@ A schema is invalid if any of the following holds:
   E210. Same-name Definitions across layers trigger Definition merge per §20.3 rather than
   E210.
 - an `Exclude(K)` operation in a layer SelectDefinition body names a keyword K that does not
-  identify any variant of the SelectDefinition being merged — the base's variants less any
-  variants already excluded by earlier operations (**E211**)
+  identify any variant of the base SelectDefinition, as declared before any layer is applied
+  (**E211**). An `Exclude(K)` naming a variant of the base which an earlier operation has
+  already excluded is not an error, and has no effect, so that layers excluding the same
+  variant compose
 - a `SelectDefinition` of the composed schema has no variants while some `SelectRef` of the
   composed schema whose effective `required` is `true` references it — whether an `Exclude(K)`
   emptied it or a required `SelectRef` was added to an already-emptied one (**E212**; checked on
@@ -2168,7 +2170,7 @@ A schema is invalid if any of the following holds:
 | E208 | The keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or `SelectDefinition` (also §8)       | The keyword definition containing `tel`        |
 | E209 | A `Reference` or `SelectRef` names a `TypeName` that resolves neither to a built-in (§20.5) nor to a Definition in the composed schema | The `TypeName` atom                            |
 | E210 | Two or more Definitions in the *base* `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name`, or a Definition uses a predefined built-in name (§20.5) (any cross-kind name collision is also E210; same-name Definitions across layers merge instead) | The second Definition with the duplicate name |
-| E211 | `Exclude(K)` in a layer's SelectDefinition names a variant K not present in the SelectDefinition being merged             | The `Exclude` operation's variant keyword      |
+| E211 | `Exclude(K)` in a layer's SelectDefinition names a variant K absent from the base SelectDefinition, before any layer       | The `Exclude` operation's variant keyword      |
 | E212 | A `SelectDefinition` of the composed schema referenced by a `required` `SelectRef` has no variants                      | The `Exclude` that emptied it, or the `required` `SelectRef` declaration when that came later |
 | E213 | A layer's SelectDefinition introduces a variant whose keyword is absent from the base SelectDefinition (variant addition widens the sum) | The offending variant declaration |
 | E214 | A layer declares `optional` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `required`) | The offending field/select declaration         |
@@ -2381,7 +2383,8 @@ list is organised by the structural duality between records and selects.
 
 - **Exclude a variant** from a SelectDefinition. Inside a layer's `select N` body, an
   `Exclude(K)` operation removes the variant with keyword K from the merged SelectDefinition.
-  K MUST identify a variant of the base SelectDefinition (**E211**); the exclusion MUST leave
+  K MUST identify a variant of the base SelectDefinition (**E211**); if an earlier operation has
+  already excluded it, the operation has no effect. The exclusion MUST leave
   at least one variant present if any composed-schema `SelectRef` whose effective `required` is
   `true` references the SelectDefinition (**E212**).
 - **Refine a SelectDefinition in place** (SelectDefinition merge). When a layer declares a
@@ -2626,8 +2629,9 @@ base SelectDefinition:
      base variant's type, the operation is a no-op restatement (permitted); a type mismatch is
      **E206**.
    - If L is an exclusion `Exclude(W)` (an entry W in the layer SelectDefinition's `excludes`):
-     W MUST identify an existing variant in the current variant list; if not, the layer is
-     invalid (**E211**). Remove the variant from the list.
+     W MUST identify a variant of the base SelectDefinition as declared before any layer was
+     applied; if not, the layer is invalid (**E211**). Remove the variant from the current
+     variant list if it is present; if an earlier exclusion already removed it, do nothing.
 3. In the **composed** schema, the variant list MUST be non-empty *if* any SelectRef whose
    effective `required` is `true` references this SelectDefinition; otherwise **E212**. This is
    a constraint on the composed schema, not on the individual merge: a later component that

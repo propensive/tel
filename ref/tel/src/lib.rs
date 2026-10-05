@@ -2589,7 +2589,8 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
             }
             if let Some(pos) = selects.iter().position(|x| x.name == sl.name) {
                 // Existing SelectDefinition → MergeSelect.
-                let merged = merge_select_def(&selects[pos], sl, &layer.name, &mut errors);
+                let origin = s.selects.iter().find(|x| x.name == sl.name);
+                let merged = merge_select_def(&selects[pos], sl, origin, &layer.name, &mut errors);
                 selects[pos] = merged;
             } else {
                 // Brand-new SelectDefinition introduced by the layer; only
@@ -2637,13 +2638,16 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
 
 /// Merge a layer's SelectDefinition into the base SelectDefinition with the
 /// same name. Variant addition by the layer is E213; an Exclude that names
-/// a non-existent variant is E211; emptying a SelectDefinition referenced
+/// a variant the base (`origin`, before any layer) never declared is E211,
+/// while one naming a variant an earlier layer already excluded is a no-op;
+/// emptying a SelectDefinition referenced
 /// by any required SelectRef would be E212 (deferred: we don't know the
 /// referencing SelectRefs at this layer; the validity check is left to
 /// downstream schema validation that observes the composed schema).
 fn merge_select_def(
     base: &SelectDefinition,
     layer: &SelectDefinition,
+    origin: Option<&SelectDefinition>,
     layer_name: &str,
     errors: &mut Vec<SchemaError>,
 ) -> SelectDefinition {
@@ -2666,7 +2670,8 @@ fn merge_select_def(
     for kw in &layer.layer_excludes {
         let before = variants.len();
         variants.retain(|v| v.keyword != *kw);
-        if variants.len() == before {
+        let declared = origin.map_or(false, |o| o.variants.iter().any(|v| v.keyword == *kw));
+        if variants.len() == before && !declared {
             errors.push(SchemaError {
                 code: ErrorCode::E211,
                 detail: format!(
@@ -5896,6 +5901,44 @@ mod tests {
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E211),
                 "expected E211, got: {:?}", errs);
+    }
+
+    #[test]
+    fn compose_two_layers_excluding_one_variant() {
+        // Two layers exclude the same variant: the second exclude names a
+        // variant of the base which the first already removed, a no-op.
+        let base_status = SelectDefinition { description: None,
+            name: "Status".to_string(),
+            variants: vec![
+                Variant { description: None, keyword: "active".to_string(), r#type: Type::Flag },
+                Variant { description: None, keyword: "retired".to_string(), r#type: Type::Flag },
+            ],
+            validators: Vec::new(),
+            layer_excludes: Vec::new(),
+        };
+        let excluding = |name: &str| Layer {
+            name: name.to_string(),
+            overlay: Struct { members: vec![], validators: vec![] },
+            records: vec![], scalars: Vec::new(),
+            selects: vec![SelectDefinition { description: None,
+                name: "Status".to_string(),
+                variants: vec![],
+                validators: Vec::new(),
+                layer_excludes: vec!["retired".to_string()],
+            }],
+        };
+        let base = Schema {
+            name: "x".to_string(),
+            document: Struct { members: vec![], validators: Vec::new() },
+            layers: vec![excluding("current"), excluding("lean")],
+            sigil: None,
+            records: vec![], scalars: Vec::new(), selects: vec![base_status],
+        };
+        let (composed, errs) = compose_schema(&base);
+        assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
+        let composed_status = composed.selects.iter().find(|s| s.name == "Status").unwrap();
+        assert_eq!(composed_status.variants.len(), 1);
+        assert_eq!(composed_status.variants[0].keyword, "active");
     }
 
     #[test]
