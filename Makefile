@@ -13,11 +13,18 @@ assembly: publishLocal
 	./mill clean tel.launcher
 	./mill tel.launcher.assembly
 
-# Publish tel to GitHub Releases: the tel-core jar first, then — once its digest is indexed — the
-# repackaged `tel` executables, added to the same release. See release-launcher.sh in
-# propensive/.github (run through etc/shared) for the two-step ordering and its verification.
+# Releases are cut by tagging, not by make. Tag a commit CI has passed, with `git tag -s X.Y.Z &&
+# git push origin X.Y.Z`: the tag fires .github/workflows/release.yml, which runs the shared
+# release.sh in propensive/.github. That publishes the tel-core jar, then the repackaged and
+# signed `tel` executables, the dispatcher, the installers and the upgrade manifest. What this
+# repository needs beyond the common path is declared in etc/release. This target survives only to
+# say so.
 release:
-	./etc/shared release-launcher.sh tel "tel-core" $(VERSION)
+	@echo "Releases are triggered by tags, not by make. Once CI has passed on the commit:" >&2
+	@echo "" >&2
+	@echo "    git tag -s X.Y.Z && git push origin X.Y.Z" >&2
+	@echo "" >&2
+	@false
 
 # Repackage the launcher assembly into a self-fetching launcher with Burdock. The
 # `burdock.externalize` macro wrapping `TelServer.run()` (in src/launcher/tel_launcher.scala) has
@@ -30,21 +37,21 @@ release:
 # Soundness and proscala repositories, whose per-jar SHA-256 digests the repackager matches against
 # the classpath. The Soundness jars synced into ~/.ivy2/local are the release assets byte-for-byte,
 # and the proscala release publishes the same jars its tarball carries, so both the components and
-# the fork toolchain externalize; tel-core externalizes only once released (`make release`), and is
+# the fork toolchain externalize; tel-core externalizes only once released, by a tag, and is
 # inlined otherwise. Pyrocosm is deliberately NOT among the hints: tel does not depend on it. Set
 # GITHUB_TOKEN to lift the API rate limit.
 tel.jar: assembly
 	cp out/tel/launcher/assembly.dest/out.jar tel.jar
 	java -cp tel.jar soundness.repackage --github propensive/tel,propensive/soundness,propensive/proscala
 
-# Package the repackaged JAR as a native executable for this machine with the pinned `xeq` builder
-# script (fetched into dist/xeq and verified against etc/xeq.tsv).
-tel: tel.jar xeq-fetch
-	dist/xeq build --jar tel.jar --out tel
+# Package the repackaged JAR as a native executable for this machine with the pinned `xek` builder
+# (fetched into dist/xek and verified against etc/xek.tsv), requiring Java 25 as releases do.
+tel: tel.jar xek-fetch
+	dist/xek build --java-min 25 --java 25 tel.jar tel
 
-# Fetch the pinned `xeq` builder script into dist/xeq.
-xeq-fetch:
-	./etc/shared xeq-fetch.sh
+# Fetch the pinned `xek` builder into dist/xek.
+xek-fetch:
+	./etc/shared xek-fetch.sh
 
 # Install the launcher onto the PATH so the Zed extension can find it via `worktree.which`.
 # Remove-then-copy, NOT a bare `cp`: overwriting the existing file reuses its inode, and macOS
@@ -92,11 +99,11 @@ tools:
 	./etc/shared tools.sh
 
 # Publish HEAD's library as a snapshot — a `snapshot-<hex>` pre-release named by the filtered tree
-# of the commit, at version `<telVersion>-<hex>` — for a dependent repository to pin in its
+# of the commit, at version `<next version>-<hex>` — for a dependent repository to pin in its
 # etc/refs before the next release. `LOCAL=1` stages and installs without publishing. The last line
 # printed is the pin. See snapshot.sh in propensive/.github.
 snapshot:
-	./etc/shared snapshot.sh tel "$$(sed -n 's/.*val telVersion = "\(.*\)".*/\1/p' build.mill)"
+	./etc/shared snapshot.sh tel "$$(./mill show tel.core.publishVersion | tr -d '"')"
 
 # Delete snapshot pre-releases older than DAYS (default 60) days.
 snapshot-prune:
@@ -105,4 +112,4 @@ snapshot-prune:
 dev:
 	./mill -w tel.core.compile
 
-.PHONY: publishLocal assembly release xeq-fetch install run test test-plain sync-deps check tools snapshot snapshot-prune dev
+.PHONY: publishLocal assembly release xek-fetch install run test test-plain sync-deps check tools snapshot snapshot-prune dev
