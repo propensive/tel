@@ -33,8 +33,8 @@ object settings:
   // is evaluated, and neither a fresh daemon nor `--no-daemon` propagates the variable. To switch
   // toolchains, edit the defaults here. The `SOUNDNESS_SCALA_RELEASE", "…"` literal must stay on
   // one line: the shared `scala-ci.yml` (propensive/.github) `sed`s it to key the toolchain cache.
-  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.0-p16")
-  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.0-p16")
+  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION", "3.9.1-dev-p17")
+  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "3.9.1-dev-p17")
 
   // Empty by default → download `scalaRelease`.
   val scalaHome = sys.env.getOrElse("SOUNDNESS_SCALA_HOME", "")
@@ -145,8 +145,7 @@ object settings:
     mvn"dev.propensive:hieroglyph-core:$soundness",          // charEncoders/charDecoders
     mvn"dev.propensive:iridescence-core:$soundness",         // the palette
     mvn"dev.propensive:stratiform-base256:$soundness",       // BASE-256 tokens
-    mvn"dev.propensive:stratiform-binary:$soundness",        // BinTEL signatures and palimpsests
-    mvn"dev.propensive:stratiform-core:$soundness")          // read[Tel], Tel.Error, Tels, Telp
+    mvn"dev.propensive:stratiform-core:$soundness")          // read[Tel], Tels, Telp, BinTEL
 
   // The test module's extra surface: a `Suite` and the BinTEL event stream a host reads.
   def testDeps(soundness: String) = soundnessDeps(soundness) ++ Seq(
