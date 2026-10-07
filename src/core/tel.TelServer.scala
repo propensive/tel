@@ -15,7 +15,7 @@ import proscenium.{List, Nil, Chain, Map, Set, `::`}
 // is not a concern here.
 import dysasymptotics.linearSize
 import backstops.stackTraceBackstop
-import charEncoders.utf8Encoder
+import codepages.utf8Codepage
 import errorDiagnostics.emptyDiagnostics
 import executives.completionsExecutive
 import interpreters.posixInterpreter
@@ -350,7 +350,7 @@ object TelServer:
           // When the document parses, validate it against its schema. A schema *document* (its
           // pragma names TELS) is checked two ways: conformance to the built-in TELS meta-schema
           // (`assign`), catching malformed schema syntax, and construction of the `Tels` from it
-          // (`Reconstructor.fromTel`), catching schema-validity errors (E2xx). Any other pragma
+          // (`tel.as[Tels]`), catching schema-validity errors (E2xx). Any other pragma
           // schema — a LIRA reference or BASE-256 signature — is resolved against the local registry
           // populated by `tel schema add`. The two meta-schema passes are ventured separately so
           // that a failure in the first still lets the second contribute its errors.
@@ -365,7 +365,7 @@ object TelServer:
                 // Reconstruction alone checks only the document's shape; `Validation.validate`
                 // composes the layers and runs the §20.1 schema-validity battery (E201-E221)
                 // over the result. The composed schema feeds the reference-coherence pass.
-                val validated = venture(Tels.Validation.validate(Tels.Reconstructor.fromTel(tel)))
+                val validated = venture(Tels.Validation.validate(tel.as[Tels]))
                 guard:
                   composed = validated()
 
@@ -400,7 +400,7 @@ object TelServer:
     val entries = resolution match
       case Resolution.Meta(_, _) if !document.absent =>
         if composed.absent then composed = document.let: tel =>
-          safely(Tels.Layers.compose(Tels.Reconstructor.fromTel(tel)))
+          safely(Tels.Layers.compose(tel.as[Tels]))
 
         collapsed.filter((_, error) => !coherenceReasons.contains(error.reason))
 
@@ -1409,7 +1409,7 @@ object TelServer:
   //   2. `focus.span`, which `Tel.Type.assign` fills in (via `Tel.supplementPositions`) for every
   //      accrued schema-validation focus, from the document's `PositionIndex` — hence the
   //      load-bearing `import parsing.trackPositions`. It spans the offending compound's keyword.
-  //   3. Failing both — an error accrued outside `assign`, e.g. from `Tels.Reconstructor.fromTel` —
+  //   3. Failing both — an error accrued outside `assign`, e.g. from `tel.as[Tels]` —
   //      the focus's keyword path is located against the position-tracked document here.
   //
   // An error with no span at all (nothing in the source to point at) falls back to the first line.
@@ -2207,7 +2207,7 @@ object TelServer:
     val help = HelpFlag().present
 
     if help then execute:
-      Out.println(service.help())
+      Out.println(resident.help())
       Exit.Ok
 
     else arguments match
@@ -2341,13 +2341,13 @@ object TelServer:
       // who just runs the command discovers what it offers.
       case Nil =>
         execute:
-          Out.println(service.help())
+          Out.println(resident.help())
           Exit.Ok
 
       case _ =>
         execute:
           Err.println(t"tel: unrecognised command")
-          Out.println(service.help())
+          Out.println(resident.help())
           UsageError
 
   // A malformed invocation reports the one command's synopsis on stderr, leaving stdout clean for
@@ -2359,10 +2359,11 @@ object TelServer:
   // Ethereal installs shell completions from the launcher stub it already knows about, so this
   // needs no knowledge of the shell: `ensure` locates each installed shell's completion directory
   // and writes (or refreshes) the entry, reporting the paths it wrote.
-  private def installCompletions()(using Stdio, DaemonService[?], Diagnostics): Exit =
+  private def installCompletions()(using Stdio, Resident, Diagnostics, Cli): Exit =
     import workingDirectories.javaBaseWorkingDirectory
+    import environments.daemonClientEnvironment
     import logging.silentLogging
-    given Entrypoint = scala.caps.unsafe.unsafeAssumePure(summon[DaemonService[?]])
+    given Entrypoint = scala.caps.unsafe.unsafeAssumePure(summon[Resident])
 
     Out.println(t"Installed tab-completions at:")
     Completions.ensure(force = true).each(Out.println(_))

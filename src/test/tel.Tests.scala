@@ -7,7 +7,7 @@ import proscenium.{List, Nil}
 
 import strategies.throwUnsafely
 import pathInterfaces.pathOnLinux
-import charEncoders.utf8Encoder
+import codepages.utf8Codepage
 
 // Tests for the LSP server's pure handler functions: no JSON-RPC transport is involved, and the
 // schema registry is a throwaway temporary directory, so the suite exercises exactly the logic the

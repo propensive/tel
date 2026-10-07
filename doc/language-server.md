@@ -2,8 +2,8 @@
 
 The `tel` executable, built in Scala with the Soundness ecosystem and packaged in the same style as
 [fume](https://github.com/propensive/fume) and [flame](https://github.com/propensive/flame):
-Mill, a Burdock-repackaged self-fetching launcher, and an `xeq` native executable published to
-GitHub Releases by `make release`.
+Mill, a Burdock-repackaged self-fetching launcher, and an `xek` native executable published to
+GitHub Releases by a signed tag.
 
 > **Build note:** Soundness publishes one jar per *component* (Soundness #1929), as the assets of
 > each tagged GitHub release, so this build names the components it needs directly — Stratiform,
@@ -231,14 +231,15 @@ tel lsp         # run the language server on stdio (Ctrl-C to stop)
 ```
 
 Other targets: `make assembly` (the launcher JAR), `make tel.jar` (that JAR, Burdock-repackaged so
-its dependencies become on-demand downloads), `make tel` (the `xeq` native executable), `make run`
+its dependencies become on-demand downloads), `make tel` (the `xek` native executable), `make run`
 (runs `tel lsp` via the launcher for a manual JSON-RPC smoke test), `make test` / `make test-plain`,
 `make check` (flair), and `make dev` (watch-compile).
 
-`make release VERSION=X.Y.Z` publishes to GitHub Releases: the `tel-core` jar first, then — once
-GitHub has indexed its digest — the repackaged executables for five platforms, the polyglot `tel`
-bootstrap and an `install.sh`, exactly as fume, flame and flair are released. It requires an
-authenticated `gh`, a clean tree, and `val telVersion` in `build.mill` to agree with `VERSION`.
+A release is cut by a signed tag on a commit CI has passed, `git tag -s X.Y.Z && git push origin
+X.Y.Z`, exactly as fume, flame and flair are released; the tag is the only place the version is
+declared. It publishes the `tel-core` jar, then — once GitHub has indexed its digest — the
+repackaged executables for five platforms, signed so that `tel upgrade` can replace them, the
+polyglot `tel` bootstrap, the installers and the upgrade manifest.
 
 The tool runs as an [Ethereal](https://github.com/propensive/ethereal) resident daemon: the first
 launch starts a background JVM and later launches reconnect to it, so editor restarts are fast. After

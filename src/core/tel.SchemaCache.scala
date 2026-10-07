@@ -14,8 +14,8 @@ import filesystemBackends.javaBaseFilesystem
 import filesystemOptions.overwritePreexisting
 import textSanitizers.skipSanitizer
 import logging.silentLogging
-import charEncoders.utf8Encoder
-import charDecoders.utf8Decoder
+import codepages.utf8Codepage
+import charsets.utf8Charset
 
 // A per-user registry of TEL schemas, shared by the `tel schema …` subcommands and the LSP. Schemas
 // live as `<name>.tel` files under `$XDG_CACHE_HOME/tel/schemas` (or `~/.cache/tel/schemas`). A schema
@@ -38,7 +38,7 @@ object SchemaCache:
   // base schema alone). Unknown layer names are ignored.
   def signature(tel: Tel, layers: List[Text])(using Tactic[Bintel.Error], Tactic[Tel.Error]): Text =
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
+    val names = tel.as[Tels].layers.readable.to(scala.List).map(_.name)
     val byName = names.zip(layerHashes.stdlib).toMap
     Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
 
@@ -48,7 +48,7 @@ object SchemaCache:
   :   (Data, List[(Text, Data)]) =
 
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = Tels.Reconstructor.fromTel(tel).layers.readable.to(scala.List).map(_.name)
+    val names = tel.as[Tels].layers.readable.to(scala.List).map(_.name)
     (baseHash, names.zip(layerHashes.stdlib).to(List))
 
   // `Data` carries no structural equality, so hashes are compared by their BASE-256 rendering.
@@ -56,7 +56,7 @@ object SchemaCache:
 
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
   private def entryOf(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error]): Entry =
-    val tels = Tels.Reconstructor.fromTel(tel)
+    val tels = tel.as[Tels]
     Entry(tels.name, signature(tel, Nil), tels.layers.readable.to(List).map(_.name).join(t", "))
 
   // The §20.1 checks Stratiform's `Tels.Validation` does not yet perform: every type reference
@@ -168,19 +168,9 @@ object SchemaCache:
     markReadOnly(target)                   // keep the registry copy read-only
     entry
 
-  // Stratiform's §20.1 validity battery over the composed schema. E224 (a scalar declaring neither
-  // `validate` nor `pattern`) was withdrawn from the specification — an unconstrained scalar is
-  // valid — but Stratiform 0.67 still raises it, aborting the battery at that point; such a schema
-  // is composed without the battery instead, until Stratiform catches up.
+  // Stratiform's §20.1 validity battery over the composed schema.
   def validated(tel: Tel)(using Tactic[Tel.Error]): Tels =
-    recover:
-      case error: Tel.Error =>
-        if error.reason == Tel.Error.Reason.UnconstrainedScalar
-        then Tels.Layers.compose(Tels.Reconstructor.fromTel(tel))
-        else abort(error)
-
-    . protect:
-        Tels.Validation.validate(Tels.Reconstructor.fromTel(tel))
+    Tels.Validation.validate(tel.as[Tels])
 
   // The declared layer names of the schema cached under `name`, in declaration order. Used to
   // tab-complete the layer operands of `tel schema signature <name> [layer…]`, where the
@@ -188,7 +178,7 @@ object SchemaCache:
   def layerNames(directory: Path on Linux, name: Text): List[Text] =
     load(directory, name) match
       case tel: Tel =>
-        safely(Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name)).or(Nil)
+        safely(tel.as[Tels].layers.readable.to(List).map(_.name)).or(Nil)
 
       case _ =>
         Nil
@@ -253,7 +243,7 @@ object SchemaCache:
       case error: Bintel.Error => Lookup.Missing
 
     . protect:
-        val base = Tels.Reconstructor.fromTel(tel)
+        val base = tel.as[Tels]
         val schema = if selection.nil then base else Tels.Layers.compose(base, selection)
         Lookup.Found(file, schema, selection, signature(tel, selection))
 

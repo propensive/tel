@@ -1,0 +1,15 @@
+# What this repository's release needs that another's does not. See propensive/.github, which
+# holds the workflow and the script; a release is cut by `git tag -s X.Y.Z && git push --tags`.
+# One `key value` line each; the library list is not declared, because release.sh derives it
+# from `release.stage`, and the version is the tag's alone.
+
+name       tel
+title      tel
+
+build      tel.core.compile
+launcher   tel.launcher
+
+# The publication homes Burdock matches the classpath against by SHA-256, so that a library on
+# it becomes an on-demand `Burdock-Require` URL rather than being inlined into the executable.
+# Tel depends on Soundness alone, not on Pyrocosm.
+hints      propensive/tel,propensive/soundness,propensive/proscala
