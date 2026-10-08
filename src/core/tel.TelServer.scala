@@ -2132,6 +2132,17 @@ object TelServer:
   private val InstallCommand =
     Subcommand(t"install", t"install tab-completions into the shell", group = ServerGroup)
 
+  // `upgrade` is always accepted, but suggested only while a newer release is known: the hidden
+  // twin is what the dispatch matches against otherwise (see `SelfUpgrade`).
+  private val UpgradeCommand =
+    Subcommand
+     (t"upgrade", t"replace this executable with the newest release", group = ServerGroup)
+
+  private val HiddenUpgrade =
+    Subcommand
+     (t"upgrade", t"replace this executable with the newest release", group = ServerGroup,
+      hidden = true)
+
   private val SchemaCommand =
     Subcommand(t"schema", t"manage the schema registry", group = SchemaGroup)
 
@@ -2203,6 +2214,20 @@ object TelServer:
   // PUBLISHED coordinate — so `externalize` records the released jar's hash and the repackager turns
   // it into an on-demand `Burdock-Require` download instead of inlining it.
   def run(): Unit = cli:
+    import environments.daemonClientEnvironment
+
+    // What the launcher did with an upgrade staged earlier, and the daily check for a newer
+    // release: for a real invocation only, never for a tab-completion.
+    summon[Cli] match
+      case _: Invocation =>
+        SelfUpgrade.report()
+        SelfUpgrade.check()
+
+      case _ =>
+        ()
+
+    val upgrade = if SelfUpgrade.available.present then UpgradeCommand else HiddenUpgrade
+
     // Read at the top level, so `--help` is offered (and honoured) for every subcommand.
     val help = HelpFlag().present
 
@@ -2336,6 +2361,9 @@ object TelServer:
 
       case InstallCommand() :: _ =>
         execute(installCompletions())
+
+      case upgrade() :: _ =>
+        execute(SelfUpgrade.upgrade())
 
       // A bare `tel` is not an error: it prints the generated help and succeeds, so that a user
       // who just runs the command discovers what it offers.
