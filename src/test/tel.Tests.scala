@@ -167,6 +167,40 @@ field looks-like-a-compound
     val themedExtrasSignature: Text =
       safely(SchemaCache.signature(themedSchemaText.read[Tel], List(t"extras"))).or(t"")
 
+    suite(m"Self-upgrade"):
+      val manifest: Text =
+        t"version\t0.1.0\nbuild\t1000\nsigned-by\tabc123\n"
+        + t"macos-arm64\thttps://example.com/tel-macos-arm64\tDEADBEEF\n"
+        + t"linux-x64\thttps://example.com/tel-linux-x64\t0123\n"
+
+      test(m"A manifest's version and build are read"):
+        UpgradeManifest.parse(manifest).let { release => t"${release.version} ${release.build}" }
+      . assert(_ == t"0.1.0 1000")
+
+      test(m"A manifest's executable for a platform is read"):
+        UpgradeManifest.parse(manifest).let(_.executable(t"macos-arm64")).let(_.sha256)
+      . assert(_ == t"DEADBEEF")
+
+      test(m"A platform the manifest does not name has no executable"):
+        UpgradeManifest.parse(manifest).let(_.executable(t"windows-x64")).absent
+      . assert(_ == true)
+
+      test(m"An empty signed-by is no signing key"):
+        UpgradeManifest.parse(t"version\t0.1.0\nbuild\t1000\nsigned-by\t\n").let(_.signedBy).absent
+      . assert(_ == true)
+
+      test(m"A manifest without a build is not a release"):
+        UpgradeManifest.parse(t"version\t0.1.0\n").absent
+      . assert(_ == true)
+
+      test(m"A manifest with a non-numeric build is not a release"):
+        UpgradeManifest.parse(t"version\t0.1.0\nbuild\tone\n").absent
+      . assert(_ == true)
+
+      test(m"A build id stands for its version"):
+        scala.List(SelfUpgrade.version(1000), SelfUpgrade.version(1002003))
+      . assert(_ == scala.List(t"0.1.0", t"1.2.3"))
+
     suite(m"Schema resolution"):
       test(m"The registered schema's signature resolves"):
         resolver(signature)

@@ -148,6 +148,7 @@ object settings:
   // Note what is absent: Pyrocosm. tel is not a Pyrocosm application — nothing here compiles
   // against pyrocosm-model or its frontends. See etc/refs.
   def soundnessDeps(soundness: String) = Seq(
+    mvn"dev.propensive:aviation-core:$soundness",           // the daily upgrade check
     mvn"dev.propensive:burdock-core:$soundness",            // externalize + the repackager
     mvn"dev.propensive:digression-ansi:$soundness",          // stack-trace diagnostics
     mvn"dev.propensive:escapade-io:$soundness",              // Teletype <-> Stdio writables
@@ -157,11 +158,15 @@ object settings:
     mvn"dev.propensive:exegesis-core:$soundness",            // Lsp.listen and the LSP protocol
     mvn"dev.propensive:exoskeleton-completions:$soundness",  // cli + tab-completion
     mvn"dev.propensive:exoskeleton-manpage:$soundness",      // `tel install`'s manpage
+    mvn"dev.propensive:gastronomy-core:$soundness",          // the upgrade's digest check
     mvn"dev.propensive:galilei-jvm:$soundness",              // the filesystem
     mvn"dev.propensive:hieroglyph-core:$soundness",          // charEncoders/charDecoders
     mvn"dev.propensive:iridescence-core:$soundness",         // the palette
     mvn"dev.propensive:stratiform-base256:$soundness",       // BASE-256 tokens
-    mvn"dev.propensive:stratiform-core:$soundness")          // read[Tel], Tels, Telp, BinTEL
+    mvn"dev.propensive:stratiform-core:$soundness",          // read[Tel], Tels, Telp, BinTEL
+    mvn"dev.propensive:telekinesis-core:$soundness",         // fetching the upgrade manifest
+    mvn"dev.propensive:telekinesis-jvm:$soundness",          // httpBackends.javaNetHttp
+    mvn"dev.propensive:urticose-core:$soundness")            // HttpUrl
 
   // The test module's extra surface: a `Suite` and the BinTEL event stream a host reads.
   def testDeps(soundness: String) = soundnessDeps(soundness) ++ Seq(
