@@ -38,7 +38,7 @@ object SchemaCache:
   // base schema alone). Unknown layer names are ignored.
   def signature(tel: Tel, layers: List[Text])(using Tactic[Bintel.Error], Tactic[Tel.Error]): Text =
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = tel.as[Tels].layers.readable.to(scala.List).map(_.name)
+    val names = tel.as[Tels].layers.stdlib.to(scala.List).map(_.name)
     val byName = names.zip(layerHashes.stdlib).toMap
     Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
 
@@ -48,7 +48,7 @@ object SchemaCache:
   :   (Data, List[(Text, Data)]) =
 
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = tel.as[Tels].layers.readable.to(scala.List).map(_.name)
+    val names = tel.as[Tels].layers.stdlib.to(scala.List).map(_.name)
     (baseHash, names.zip(layerHashes.stdlib).to(List))
 
   // `Data` carries no structural equality, so hashes are compared by their BASE-256 rendering.
@@ -57,7 +57,7 @@ object SchemaCache:
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
   private def entryOf(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error]): Entry =
     val tels = tel.as[Tels]
-    Entry(tels.name, signature(tel, Nil), tels.layers.readable.to(List).map(_.name).join(t", "))
+    Entry(tels.name, signature(tel, Nil), tels.layers.stdlib.to(List).map(_.name).join(t", "))
 
   // The §20.1 checks Stratiform's `Tels.Validation` does not yet perform: every type reference
   // must resolve within the composed namespace, and to a Definition of the right kind. A `Field`
@@ -69,9 +69,9 @@ object SchemaCache:
   // references are both in scope.
   def incoherences(schema: Tels): scala.List[(Text, Tel.Error.Reason)] =
     def kindOf(name: Text): Optional[Text] =
-      if schema.records.readable.exists(_.name == name) then t"record"
-      else if schema.scalars.readable.exists(_.name == name) then t"scalar"
-      else if schema.selects.readable.exists(_.name == name) then t"select"
+      if schema.records.stdlib.exists(_.name == name) then t"record"
+      else if schema.scalars.stdlib.exists(_.name == name) then t"scalar"
+      else if schema.selects.stdlib.exists(_.name == name) then t"select"
       else Unset
 
     def checkType(fieldType: Tels.Type): scala.List[(Text, Tel.Error.Reason)] = fieldType match
@@ -80,7 +80,7 @@ object SchemaCache:
         case t"select"             => scala.List((name, Tel.Error.Reason.ReferenceKindMismatch))
         case _                     => scala.List((name, Tel.Error.Reason.UnresolvedReference))
 
-      case struct: Tels.Struct => checkMembers(struct.members.readable.to(scala.List))
+      case struct: Tels.Struct => checkMembers(struct.members.stdlib.to(scala.List))
       case _                   => scala.Nil
 
     def checkMembers(members: scala.List[Tels.Member]): scala.List[(Text, Tel.Error.Reason)] =
@@ -94,11 +94,11 @@ object SchemaCache:
 
         case _ => scala.Nil
 
-    checkMembers(schema.document.members.readable.to(scala.List))
-    ++ schema.records.readable.to(scala.List)
-       . flatMap(record => checkMembers(record.members.readable.to(scala.List)))
-    ++ schema.selects.readable.to(scala.List).flatMap: select =>
-         select.variants.readable.to(scala.List).flatMap(variant => checkType(variant.variantType))
+    checkMembers(schema.document.members.stdlib.to(scala.List))
+    ++ schema.records.stdlib.to(scala.List)
+       . flatMap(record => checkMembers(record.members.stdlib.to(scala.List)))
+    ++ schema.selects.stdlib.to(scala.List).flatMap: select =>
+         select.variants.stdlib.to(scala.List).flatMap(variant => checkType(variant.variantType))
 
   private def read(file: Path on Linux)
       (using Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error])
@@ -178,7 +178,7 @@ object SchemaCache:
   def layerNames(directory: Path on Linux, name: Text): List[Text] =
     load(directory, name) match
       case tel: Tel =>
-        safely(tel.as[Tels].layers.readable.to(List).map(_.name)).or(Nil)
+        safely(tel.as[Tels].layers.stdlib.to(List).map(_.name)).or(Nil)
 
       case _ =>
         Nil
