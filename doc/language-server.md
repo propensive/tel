@@ -11,7 +11,7 @@ GitHub Releases by a signed tag.
 > aggregate. The version is pinned in [`etc/refs`](../etc/refs), which the `deps` object in
 > `build.mill` reads; `make sync-deps` installs exactly what it names into `~/.ivy2/local`, from
 > which coursier resolves them. The tools the repository *runs* rather than compiles against —
-> `fume`, which runs the test suites, and `flair`, which checks the sources — are pinned separately
+> `fume`, which runs the test suites, and `flare`, which checks the sources — are pinned separately
 > in [`etc/tools`](../etc/tools) and installed by `make tools`. See
 > [propensive/.github](https://github.com/propensive/.github) for the whole flow. Tel is not a
 > Pyrocosm application: it depends on Soundness alone.
@@ -224,7 +224,7 @@ the repository root.
 
 ```sh
 make sync-deps  # install the Soundness release pinned in etc/refs into ~/.ivy2/local
-make tools      # install fume (and flair) from the releases pinned in etc/tools
+make tools      # install fume (and flare) from the releases pinned in etc/tools
 make install    # build the `tel` executable and copy it to ~/.local/bin
 which tel       # sanity check that it is on your PATH
 tel lsp         # run the language server on stdio (Ctrl-C to stop)
@@ -233,10 +233,10 @@ tel lsp         # run the language server on stdio (Ctrl-C to stop)
 Other targets: `make assembly` (the launcher JAR), `make tel.jar` (that JAR, Burdock-repackaged so
 its dependencies become on-demand downloads), `make tel` (the `xek` native executable), `make run`
 (runs `tel lsp` via the launcher for a manual JSON-RPC smoke test), `make test` / `make test-plain`,
-`make check` (flair), and `make dev` (watch-compile).
+`make check` (flare), and `make dev` (watch-compile).
 
 A release is cut by a signed tag on a commit CI has passed, `git tag -s X.Y.Z && git push origin
-X.Y.Z`, exactly as fume, flame and flair are released; the tag is the only place the version is
+X.Y.Z`, exactly as fume, flame and flare are released; the tag is the only place the version is
 declared. It publishes the `tel-core` jar, then — once GitHub has indexed its digest — the
 repackaged executables for five platforms, signed so that `tel upgrade` can replace them, the
 polyglot `tel` bootstrap, the installers and the upgrade manifest.

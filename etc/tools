@@ -2,7 +2,7 @@
 # `repository  version`. A tool is always a release (never a snapshot), is not a dependency —
 # it appears in no POM — and does not gate a release; that is what keeps the release graph free
 # of cycles. `make tools` installs each command through its release's installer: fume runs the
-# test suites, flair checks the sources.
+# test suites, flare checks the sources.
 # See propensive/.github.
 propensive/fume	0.8.3
-propensive/flair	0.8.0
+propensive/flare	0.10.0
