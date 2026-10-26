@@ -6,6 +6,6 @@
 # See propensive/.github for the whole flow.
 #
 # Tel depends on Soundness alone. It is NOT a Pyrocosm application: nothing here compiles against
-# pyrocosm-model or its frontends, and nothing should. The flair plugin and fume, which this
+# pyrocosm-model or its frontends, and nothing should. The flare plugin and fume, which this
 # repository merely runs, are tools rather than dependencies: see etc/tools.
 propensive/soundness	0.72.0

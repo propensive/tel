@@ -87,14 +87,14 @@ test-plain:
 sync-deps:
 	./etc/shared sync-deps.sh
 
-# Check every source against Consequent Style and the project's own rules with flair (the release
-# pinned in etc/tools; `make tools` installs it), as configured in .pyrocosm/flair/config.tel.
+# Check every source against Consequent Style and the project's own rules with flare (the release
+# pinned in etc/tools; `make tools` installs it), as configured in .pyrocosm/flare/config.tel.
 # Findings are warnings and the count is not yet zero, so CI does not run this; PATHS restricts the
 # check to files beneath them.
 check:
-	flair check $(PATHS)
+	flare check $(PATHS)
 
-# Install the commands pinned in etc/tools (fume, flair) through their releases' installers.
+# Install the commands pinned in etc/tools (fume, flare) through their releases' installers.
 tools:
 	./etc/shared tools.sh
 
