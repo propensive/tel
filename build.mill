@@ -1,6 +1,7 @@
 //| mill-version: 1.1.5
 //| mill-jvm-version: temurin:25
 //| mill-jvm-opts: ["-Xss16m", "-XX:NonProfiledCodeHeapSize=250m", "-XX:ReservedCodeCacheSize=500m"]
+//| mvnDeps: ["dev.propensive:crux-mill:0.1.1"]
 
 package build
 
@@ -9,52 +10,16 @@ import scalalib.*
 // `PomSettings`, `License`, `Developer`, `VersionControl`, `PublishModule` — the Maven publishing
 // vocabulary, imported exactly as the Soundness build does (`scalalib.publish.*`).
 import publish.*
+// crux (propensive/crux): the pinned releases on GitHub, read directly as Coursier repositories.
+import crux.*
 
 object settings:
-  // Soundness is built with the propensive Scala fork, and its published TASTy is only readable by
-  // that compiler, so this build uses it too (see the `toolchain` module below). The fork is
-  // consumed in one of two modes, exactly as the Soundness build consumes it:
-  //
-  //   1. Released (the default). Each release at https://github.com/propensive/proscala/releases
-  //      ships a single `proscala-<version>.tar.gz` asset whose contents are a `lib` directory. The
-  //      `toolchain` module downloads `SOUNDNESS_SCALA_RELEASE` and extracts it into a shared
-  //      cache — no local compiler build and no publishing step needed.
-  //
-  //   2. Local (fork developers). Point `SOUNDNESS_SCALA_HOME` at a `make`-built `release`
-  //      directory to use its `release/lib` jars directly instead of downloading.
-  //
-  // These must match the values the Soundness build used, since the fork's TASTy is only readable
-  // by the compiler that wrote it: `scalaVersion` is the coordinate every artifact is
-  // force-versioned to, `scalaRelease` the release tag whose tarball supplies the jars.
-  //
-  // NOTE these `sys.env` overrides do NOT work under Mill: the value is read when the build script
-  // is evaluated, and neither a fresh daemon nor `--no-daemon` propagates the variable. To switch
-  // toolchains, edit the defaults here. The `SOUNDNESS_SCALA_RELEASE", "…"` literal must stay on
-  // one line: the shared `scala-ci.yml` (propensive/.github) `sed`s it to key the toolchain cache.
-  //
-  // A Proscala release from 1.0.0 (`SOUNDNESS_SCALA_RELEASE`) is built for several upstream Scala
-  // versions, each shipped as `proscala-<scala version>.tar.gz` and versioned
-  // `<scala version>-pro-<release>`; `SOUNDNESS_SCALA_BASE` selects the Scala version, so the
-  // default is `3.10.0-pro-1.0.2`, the stream Soundness 0.72.0 is compiled on.
-  // `SOUNDNESS_SCALA_VERSION` overrides the composed version; a release from before 1.0.0 is a
-  // single build, named by its tag, and is still accepted.
-  val scalaRelease = sys.env.getOrElse("SOUNDNESS_SCALA_RELEASE", "1.0.2")
-  val scalaBase = sys.env.getOrElse("SOUNDNESS_SCALA_BASE", "3.10.0")
-  val scalaVersion = sys.env.getOrElse("SOUNDNESS_SCALA_VERSION",
-    if scalaRelease.matches("[0-9]+\\.[0-9]+\\.[0-9]+") then s"$scalaBase-pro-$scalaRelease"
-    else scalaRelease)
-
-  // The compiler's ASM flavour is per-stream, matching the fork's published POMs: up to 3.9 the
-  // backend uses the shaded scala-asm; from 3.10 upstream imports org.objectweb.asm directly, so
-  // the compiler depends on the org.ow2.asm jars. Without the right flavour the compiler itself
-  // fails at runtime, with `ClassNotFoundException: org.objectweb.asm.tree.ClassNode`.
-  val asm: Seq[(String, String, String)] =
-    if scalaVersion.startsWith("3.10") then
-      Seq(("org.ow2.asm", "asm-util", "9.10.1"), ("org.ow2.asm", "asm-commons", "9.10.1"))
-    else Seq(("org.scala-lang.modules", "scala-asm", "9.9.0-scala-1"))
-
-  // Empty by default → download `scalaRelease`.
-  val scalaHome = sys.env.getOrElse("SOUNDNESS_SCALA_HOME", "")
+  // The compiler is the propensive Scala fork, Proscala, at this version: pinned in `deps` below
+  // like the libraries and resolved from its GitHub release by crux, which also forces every
+  // `org.scala-lang` artifact to it, since the pinned libraries name the release each was built
+  // with. The fork stays TASTy-compatible across its patch releases, which is what every such
+  // pin assumes.
+  val scalaVersion = "3.10.0-pro-1.0.2"
 
   // This build's version. A release's version is declared once, by its tag: the release
   // (release.sh in propensive/.github) and a snapshot (snapshot.sh) both name it in
@@ -191,175 +156,22 @@ object settings:
     mvn"dev.propensive:probably-cli:$soundness",
     mvn"dev.propensive:probably-events:$soundness")
 
-// Exposes the fork compiler's jars (from a local build via `settings.scalaHome`, or downloaded from
-// the `settings.scalaRelease` GitHub release) as a Maven-layout repository, generated on demand: the
-// unversioned jars are copied to versioned coordinates with minimal POMs. (Mirrors the `toolchain`
-// module in the Soundness build, minus the Scala.js artifacts this build has no use for.)
-object toolchain extends Module:
-  // Downloads and extracts the `settings.scalaRelease` tarball from propensive/proscala into a
-  // *shared* cache dir outside the Mill `out/` tree — the same location the Soundness build uses, so
-  // a machine that has built Soundness already has this and stays offline. A `.complete` sentinel
-  // makes a fully-populated cache a no-op: no network, no GitHub API call. Returns the `lib` dir.
-  def downloadRelease(tag: String, version: String): os.Path =
-    val root = os.home / ".cache" / "soundness" / "proscala" / version
-    val lib = root / "lib"
-    val sentinel = lib / ".complete"
-    if os.exists(sentinel) then lib else
-      os.makeDir.all(root)
-      val api = s"https://api.github.com/repos/propensive/proscala/releases/tags/$tag"
-      val json = ujson.read(os.proc("curl", "-fsSL", api).call().out.text())
-      val tarballs = json("assets").arr.filter(_("name").str.endsWith(".tar.gz"))
-      val asset = tarballs.find(_("name").str == s"proscala-$version.tar.gz")
-        .orElse(if tarballs.length == 1 then tarballs.headOption else None)
-        .getOrElse:
-          throw new Exception(s"no build of Scala $version on proscala release $tag")
-      val name = asset("name").str
-      val url = asset("browser_download_url").str
-      val tarball = root / name
-      if !os.exists(tarball) then os.proc("curl", "-fsSL", "-o", tarball.toString, url).call()
-
-      // Verify against the published digest when the API supplies one ("sha256:<hex>").
-      asset.obj.get("digest").flatMap(_.strOpt).foreach: digest =>
-        if digest.startsWith("sha256:") then
-          val md = java.security.MessageDigest.getInstance("SHA-256")
-          val hex = md.digest(os.read.bytes(tarball)).map("%02x".format(_)).mkString
-          if hex != digest.stripPrefix("sha256:") then
-            os.remove(tarball)
-            throw new Exception(s"checksum mismatch for $name (expected $digest, got sha256:$hex)")
-
-      // The tarball carries a `lib/` prefix, so extracting into `<version>` lands the jars at
-      // `<version>/lib/*.jar`. Clear any partial extract first (we only get here without the sentinel).
-      os.remove.all(lib)
-      os.proc("tar", "-xzf", tarball.toString, "-C", root.toString).call()
-      os.remove(tarball) // reclaim ~43 MB; the sentinel guards against re-fetching
-      os.write(sentinel, "")
-      lib
-
-  // Content-fingerprints the fork's jars so a rebuilt or re-released compiler regenerates the
-  // repository.
-  def distribution: T[PathRef] = Task.Input:
-    if settings.scalaHome.nonEmpty then PathRef(os.Path(settings.scalaHome) / "lib")
-    else PathRef(downloadRelease(settings.scalaRelease, settings.scalaVersion))
-
-  def repo: T[PathRef] = Task:
-    val lib = distribution().path
-    val v = settings.scalaVersion
-    val sl = "org.scala-lang"
-
-    val artifacts = Seq(
-      // The fork's supplementary runtime (since 3.9.0-p16): shipped as its own jar so
-      // `scala-library` stays byte-identical to upstream's build, and declared as a
-      // dependency of `scala-library` so it rides along wherever the stdlib goes —
-      // exactly as in the Soundness build's toolchain repository.
-      (sl, "proscala-library_3", "proscala-library.jar", Seq()),
-      (sl, "scala-library", "scala-library.jar", Seq((sl, "proscala-library_3", v))),
-      (sl, "scala3-library_3", "scala3-library.jar", Seq((sl, "scala-library", v))),
-      (sl, "scala3-interfaces", "scala3-interfaces.jar", Seq()),
-      (sl, "tasty-core_3", "tasty-core.jar", Seq((sl, "scala-library", v))),
-      (sl, "scala3-compiler_3", "scala3-compiler.jar", Seq(
-        (sl, "scala3-interfaces", v),
-        (sl, "tasty-core_3", v),
-        (sl, "scala3-library_3", v))
-        ++ settings.asm
-        ++ Seq(
-        ("org.scala-sbt", "compiler-interface", "1.12.0"),
-        ("org.scala-sbt", "util-interface", "1.11.5"))),
-      (sl, "scala3-repl_3", "scala3-repl.jar", Seq(
-        (sl, "scala3-compiler_3", v),
-        ("org.jline", "jline-reader", "4.0.14"),
-        ("org.jline", "jline-terminal", "4.0.14"),
-        ("org.jline", "jline-terminal-jni", "4.0.14"),
-        ("io.get-coursier", "interface", "1.0.29-M4"),
-        ("org.virtuslab", "using_directives", "1.1.4"),
-        ("com.lihaoyi", "pprint_3", "0.9.3"))),
-      (sl, "scala3-sbt-bridge", "scala3-sbt-bridge.jar", Seq(
-        (sl, "scala3-compiler_3", v),
-        (sl, "scala3-repl_3", v))),
-      (sl, "scala3-staging_3", "scala3-staging.jar", Seq((sl, "scala3-compiler_3", v))),
-      (sl, "scala3-tasty-inspector_3", "scala3-tasty-inspector.jar", Seq(
-        (sl, "scala3-compiler_3", v))))
-
-    artifacts.map: (group, id, jar, dependencies) =>
-      val dir = Task.dest / os.SubPath(group.replace('.', '/')) / id / v
-      os.makeDir.all(dir)
-      os.copy(lib / jar, dir / s"$id-$v.jar", replaceExisting = true)
-
-      val deps = dependencies.map: (dGroup, dId, dVersion) =>
-        s"<dependency><groupId>$dGroup</groupId><artifactId>$dId</artifactId>" +
-          s"<version>$dVersion</version></dependency>"
-      . mkString
-
-      os.write.over(dir / s"$id-$v.pom",
-        s"""<?xml version="1.0" encoding="UTF-8"?>
-           |<project xmlns="http://maven.apache.org/POM/4.0.0">
-           |  <modelVersion>4.0.0</modelVersion>
-           |  <groupId>$group</groupId>
-           |  <artifactId>$id</artifactId>
-           |  <version>$v</version>
-           |  <dependencies>$deps</dependencies>
-           |</project>
-           |""".stripMargin)
-
-    PathRef(Task.dest)
-
-// Routes a Scala module through the fork toolchain: the generated repository for all coursier
-// resolutions, plus direct paths to the compiler classpath and the compiled sbt bridge.
-trait Toolchain extends ScalaModule:
-  override def repositories: T[Seq[String]] = Task:
-    super.repositories() :+ s"file://${toolchain.repo().path}"
-
-  // The Soundness bundle POMs name the fork toolchain at the version Soundness itself was built
-  // with. The synthetic repository above only ever contains `settings.scalaVersion`, and no fork
-  // version exists on Central, so any pin that differs from ours is unresolvable: forcing them all
-  // to `settings.scalaVersion` lets a later Proscala release build against the Soundness jars.
-  override def depManagement: T[Seq[Dep]] = Task:
-    super.depManagement() ++ Seq(
-      mvn"org.scala-lang:proscala-library_3:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala-library:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala3-library_3:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala3-interfaces:${settings.scalaVersion}",
-      mvn"org.scala-lang:tasty-core_3:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala3-compiler_3:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala3-staging_3:${settings.scalaVersion}",
-      mvn"org.scala-lang:scala3-tasty-inspector_3:${settings.scalaVersion}")
-
-  override def scalaCompilerClasspath: T[Seq[PathRef]] = Task:
-    // The fork-built jars come from the repository view because Zinc locates the standard library
-    // within this classpath BY FILENAME (`scala-library-<version>*.jar`), and the distribution's own
-    // filenames are unversioned. The compiler's own third-party runtime dependencies (scala-asm for
-    // bytecode, the sbt compiler/util interfaces for the bridge) are not shipped in the release, so
-    // they are resolved from the ordinary repositories.
-    val versioned = os.walk(toolchain.repo().path).filter(_.ext == "jar").map(PathRef(_))
-
-    val asm = settings.asm.map { (group, id, version) => mvn"$group:$id:$version" }
-    val thirdParty = defaultResolver().classpath(asm ++ Seq(
-      mvn"org.scala-sbt:compiler-interface:1.12.0",
-      mvn"org.scala-sbt:util-interface:1.11.5"))
-
-    versioned ++ thirdParty
-
-  override def scalaCompilerBridge: T[Option[PathRef]] = Task:
-    Some(PathRef(toolchain.distribution().path / "scala3-sbt-bridge.jar"))
-
 // The propensive libraries this build depends on, pinned in etc/refs (the format, the snapshot flow
 // and the shared scripts are documented in propensive/.github): each is a release `X.Y.Z`, or a
-// snapshot `X.Y.Z-<12 hex>` of an unreleased upstream build, published there by `make snapshot` and
-// installed here — transitively — by `make sync-deps`, which the shared CI workflow runs too. Read
-// through a `Task.Source`, not a `val`: the Mill daemon evaluates the build script once and keeps
-// the module tree until build.mill itself changes, so a value read at evaluation time would not see
-// the file edited.
-object deps extends Module:
-  def file = Task.Source(mill.api.BuildCtx.workspaceRoot / "etc" / "refs")
-
-  def pins: T[Map[String, String]] = Task:
-    os.read.lines(file().path).map(_.trim).filter(line => line.nonEmpty && !line.startsWith("#"))
-      .map(_.split("\t").map(_.trim).filter(_.nonEmpty))
-      .map(columns => columns(0).stripPrefix("propensive/") -> columns(1)).toMap
-
-  def version(name: String): Task[String] = Task.Anon:
-    pins().getOrElse(name, sys.error(s"etc/refs has no pin for $name"))
+// snapshot `X.Y.Z-<12 hex>` of an unreleased upstream build, published there by `make snapshot`.
+// crux resolves each — and, transitively, what each was built against — from its GitHub release;
+// nothing is installed locally. The Proscala pin is declared here rather than in etc/refs, which
+// deps.py (propensive/.github) also reads and which does not yet know the form of a Proscala
+// version. The file is read as a source, so editing it invalidates every resolution.
+object deps extends CruxModule:
+  def refsFiles = Task.Sources(mill.api.BuildCtx.workspaceRoot / "etc" / "refs")
+  def declared = Seq(Pin("propensive/proscala", settings.scalaVersion))
 
   def soundness: T[String] = Task(version("soundness")())
+
+// A module compiled with the pinned fork, against the pinned libraries.
+trait Fork extends CruxScalaModule:
+  def crux = deps
 
 trait Project extends Module:
   def moduleDir = super.moduleDir / os.up / "src"
@@ -367,8 +179,7 @@ trait Project extends Module:
 // Dependencies are typed `PublishModule*` (as in the Soundness build) so that `moduleDeps` can
 // return `Seq[PublishModule]` — the type `SonatypeCentralPublishModule` requires of the modules that
 // mix in `Publishing`. This costs the unpublished modules (`launcher`, `test`) nothing.
-trait Component(dependencies: PublishModule*) extends Toolchain:
-  override def scalaVersion = settings.scalaVersion
+trait Component(dependencies: PublishModule*) extends Fork:
   override def scalacOptions = settings.scalaOptions ++ settings.predef
   def moduleId: String = moduleDir.last
   def moduleDeps: Seq[PublishModule] = dependencies
@@ -391,7 +202,7 @@ trait Component(dependencies: PublishModule*) extends Toolchain:
 // retained only for its POM machinery. Every setting mirrors the Soundness build: the same
 // `dev.propensive` organization, URL, Apache-2.0 licence, GitHub SCM and developer, plus the empty
 // `-javadoc.jar`.
-trait Publishing extends Toolchain, SonatypeCentralPublishModule:
+trait Publishing extends Fork, SonatypeCentralPublishModule:
   // A `Task.Input` reading `Task.env`, not a plain value: `TEL_RELEASE_VERSION` is how a release
   // and `make snapshot` (release.sh and snapshot.sh in propensive/.github) drive the version
   // through a Mill daemon that is already running — the daemon freezes `sys.env` at its own start,
