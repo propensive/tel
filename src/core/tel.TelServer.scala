@@ -2348,7 +2348,7 @@ object TelServer:
 
           case _ =>
             // No schema named yet: the cursor is on the name operand, so suggest the registry.
-            rest.prim.let(_.select(entries))
+            rest.head.let(_.select(entries))
             execute(usage(t"tel schema signature <name> [layer…]"))
 
       case ValidateCommand() :: rest =>
