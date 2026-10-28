@@ -49,7 +49,7 @@ object UpgradeManifest:
       . map(_.cut(t"\t"))
 
     def field(key: Text): Optional[Text] =
-      rows.filter(_.prim == key).prim.let:
+      rows.filter(_.head == key).head.let:
         case _ :: value :: _ => value
         case _               => t""
 
