@@ -9,7 +9,7 @@ implementors can verify against their own tooling.
 ## 1. Schema
 
 ```tel
-tel 1.0 specification.tel/tels:2.0.0
+tel 1.0 specification.tel/tels:2.1.0
 
 name greeting
 

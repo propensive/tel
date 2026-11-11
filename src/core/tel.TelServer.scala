@@ -181,8 +181,10 @@ object TelServer:
         Pragma(index, false, Unset, Nil, Unset, '#')
 
   // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? The meta-schema's
-  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.0.0`;
-  // Stratiform's `Reference.isTels` accepts the coordinate with or without its version pin.
+  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.1.0`;
+  // Stratiform's `Reference.isTels` matches the module alone, with or without — and whatever — its
+  // version pin, so `:2.1.0` resolves to `Tels.Axiom.tels` even while Stratiform's own
+  // `Reference.tels` still names `:2.0.0`.
   private[tel] def namesTels(identifier: Text): Boolean =
     Tel.Pragma.Reference.parse(identifier).lay(false)(_.isTels)
 
@@ -2100,7 +2102,7 @@ object TelServer:
     logSubscribers.synchronized(logSubscribers.add(spool))
     try
       Out.println(t"Streaming messages sent/received by the tel language server. Press Ctrl-C to stop.")
-      spool.chain.stdlib.iterator.each: message =>
+      spool.chain.each: message =>
         Out.println(message)
     // Deliberately a `catch`, not a `recover`: `InterruptedException` is the JVM's thread-interrupt
     // signal (Ctrl-C, here), not a `Tactic` obligation, so there is nothing for a statically-checked
@@ -2248,14 +2250,24 @@ object TelServer:
           val registry: Registry = safely(SchemaCache.directory)
           val resolver = PragmaResolver(registry)
 
-          // The server loop runs under `supervise`, whose `Async.Error` is the one obligation this
-          // file does not discharge locally. It is handled here rather than by a blanket
+          // The server loop runs under `supervise`, whose `Async.Error` — with the transport's
+          // `Framing.Error` (a malformed JSON-RPC frame) and `Truncation.Error` (a standard stream
+          // cut short), which `Lsp.listen` reports rather than throws — are the obligations this
+          // file does not discharge locally. They are handled here rather than by a blanket
           // `throwUnsafely` so that every other raising call in this file stays statically checked.
           // The report goes to `Err`: stdout is the LSP transport, and writing to it would corrupt
           // the message stream.
           recover:
             case error: Async.Error =>
               Err.println(t"tel: the language server terminated abnormally: ${error.message.text}")
+              ServerFailed
+
+            case error: Framing.Error =>
+              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
+              ServerFailed
+
+            case error: Truncation.Error =>
+              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
               ServerFailed
 
           . protect:

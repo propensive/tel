@@ -68,7 +68,7 @@ pub enum ErrorCode {
     // Schema validity errors (§20.1)
     E201, E202, E203, E204, E205, E206, E207, E208, E209, E210,
     E211, E212, E213, E214, E215, E216, E217, E218, E219, E220, E221,
-    E222, E223,
+    E222, E223, E225, E226, E227, E228, E229, E230, E231,
     // Validation errors (§20.2 + §21)
     E301, E302, E303, E304, E305, E306, E307, E308, E309, E310, E311,
     E312, E313, E314, E315,
@@ -123,6 +123,13 @@ impl ErrorCode {
             Self::E221 => "More than one key field in a Struct",
             Self::E222 => "Invalid RE2 pattern",
             Self::E223 => "Layer pattern replacement is not contained in the inherited patterns",
+            Self::E225 => "Scalar `width` is not a positive decimal byte count",
+            Self::E226 => "Layer declares a conflicting width for an existing scalar, or the width contradicts the encoding's fixed width",
+            Self::E227 => "Scalar declares a `width` but no `encoding`",
+            Self::E228 => "Field with an index is not repeatable, or its type is neither a Struct nor a Scalar, or a Scalar-typed field's index path is not the root path",
+            Self::E229 => "Index path is not a syntactically valid TELP, or is the root path on a non-Scalar field",
+            Self::E230 => "Index path does not resolve statically to a non-repeatable Scalar through non-repeatable Field members",
+            Self::E231 => "Scalar declares both `width` and `intern`",
             Self::E301 => "Compound's type is not a Struct",
             Self::E302 => "More atoms than assignable member positions",
             Self::E303 => "Atom appears at a member position that is not atom-assignable",
@@ -283,6 +290,20 @@ pub struct ScalarDefinition {
     /// Optional human-readable description of this type. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
     pub description: Option<String>,
+    /// RaTEL storage-layout annotation: the fixed byte width of this
+    /// scalar's encoded values (`width <n>`, `[1-9][0-9]*`). Meaningful
+    /// only with an `encoding` (E227); must agree with a standard codec's
+    /// fixed width and across layers (E226); exclusive with `intern`
+    /// (E231). Layout only: never affects validation or canonical form.
+    pub width: Option<u64>,
+    /// The raw `width` text when it failed to parse as `[1-9][0-9]*`
+    /// (E225, reported by `validate_schema`); `None` otherwise. Kept so
+    /// that construction stays permissive and the validator reports.
+    pub invalid_width: Option<String>,
+    /// RaTEL storage-layout annotation: values of this scalar are
+    /// interned (`intern` flag). Monotone across layers (OR); exclusive
+    /// with `width` (E231). Layout only.
+    pub intern: bool,
 }
 
 /// A named sum type declared via `select <Name>` at schema or layer scope.
@@ -343,6 +364,12 @@ pub struct Scalar {
     /// Optional codec name (§21.7), copied from the resolved
     /// `ScalarDefinition.encoding`. Null on the built-in scalars.
     pub encoding: Option<String>,
+    /// RaTEL fixed byte width, copied from the resolved
+    /// `ScalarDefinition.width`. Null on the built-in scalars.
+    pub width: Option<u64>,
+    /// RaTEL interning flag, copied from the resolved
+    /// `ScalarDefinition.intern`. False on the built-in scalars.
+    pub intern: bool,
 }
 
 /// Per-axis declaration state for `Field` and `SelectRef`. The tristate is
@@ -408,6 +435,35 @@ pub struct Field {
     /// Optional human-readable description of this field. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
     pub description: Option<String>,
+    /// RaTEL secondary indexes (`index` children), in declaration order.
+    /// Valid only on an effectively repeatable field whose type resolves
+    /// to a Struct or a Scalar (E228); every path must be a syntactically
+    /// valid TELP (E229) that resolves statically (E230). Layers may add
+    /// indexes (deduplicated by path identity), never remove them. Layout
+    /// only: ignored by subtyping and by validation.
+    pub indexes: Vec<Index>,
+}
+
+/// One RaTEL secondary index over a repeatable field: an ordered tuple of
+/// static TELPs, each relative to one element of the field's type. Written
+/// `index /country /city`; the paths are the `path` members in order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Index {
+    pub paths: Vec<String>,
+}
+
+impl Index {
+    /// Two indexes are the same index iff their path tuples agree by TELP
+    /// identity — component sequences, delimiter-insensitively (telp.md §3).
+    pub fn same_paths_as(&self, other: &Index) -> bool {
+        self.paths.len() == other.paths.len()
+            && self.paths.iter().zip(&other.paths).all(|(a, b)| {
+                match (telp::Telp::parse(a), telp::Telp::parse(b)) {
+                    (Ok(x), Ok(y)) => x == y,
+                    _ => a == b,
+                }
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -877,7 +933,7 @@ pub fn builtin_tels() -> Schema {
     // a loosening flag was explicitly chosen.
     let field = |req: Polarity, rep: Polarity, kw: &str, t: Type| Member::Field(Field {
         required: req, repeatable: rep, key: false, keyword: kw.to_string(),
-        r#type: t, default: None, description: None,
+        r#type: t, default: None, description: None, indexes: Vec::new(),
     });
     // SelectRef-construction helper.
     let selref = |req: Polarity, rep: Polarity, name: &str| Member::SelectRef(SelectRef {
@@ -902,8 +958,18 @@ pub fn builtin_tels() -> Schema {
             field(loose, dflt, "key", flag_type()),
             field(loose, dflt, "default", str_type()),
             field(loose, dflt, "description", str_type()),
+            field(loose, loose, "index", refn("Index")),
         ], validators: Vec::new(),
         description: Some("A field declaration at a member position.".to_string()),
+    };
+
+    // One secondary index (RaTEL): an ordered tuple of static TELPs.
+    let r_index = RecordDefinition {
+        name: "Index".to_string(),
+        members: vec![
+            field(dflt, loose, "path", str_type()),
+        ], validators: Vec::new(),
+        description: Some("A secondary index over a repeatable field: an ordered tuple of static paths.".to_string()),
     };
 
     // A `select` declaration at a member position — a SelectRef.
@@ -942,7 +1008,8 @@ pub fn builtin_tels() -> Schema {
     };
 
     // A `scalar` declaration: name + optional validators and/or RE2
-    // pattern constraints + optional encoding. A scalar with none of them
+    // pattern constraints + optional encoding + optional RaTEL layout
+    // annotations (`width`, `intern`). A scalar with no constraints
     // accepts every value, like the built-in `String`.
     let r_scalar = RecordDefinition {
         name: "Scalar".to_string(),
@@ -952,8 +1019,10 @@ pub fn builtin_tels() -> Schema {
             field(loose, loose, "pattern", str_type()),
             field(loose, dflt, "encoding", id_type()),
             field(loose, dflt, "description", str_type()),
+            field(loose, dflt, "width", str_type()),
+            field(loose, dflt, "intern", flag_type()),
         ], validators: Vec::new(),
-        description: Some("A scalar declaration: a named scalar definition constrained by validators and/or RE2 patterns, with an optional encoding.".to_string()),
+        description: Some("A scalar declaration: a named scalar definition constrained by validators and/or RE2 patterns, with an optional encoding and optional storage-layout annotations.".to_string()),
     };
 
     // A top-level `select` declaration.
@@ -1040,7 +1109,7 @@ pub fn builtin_tels() -> Schema {
         layers: vec![],
         sigil: None,
         records: vec![
-            r_field, r_select_ref, r_variant, r_record, r_scalar,
+            r_field, r_index, r_select_ref, r_variant, r_record, r_scalar,
             r_select, r_body, r_layer,
         ],
         scalars: Vec::new(),
@@ -1117,21 +1186,29 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
             validators: vec!["string".to_string()],
             patterns: Vec::new(),
             encoding: None,
+            width: None,
+            intern: false,
         })),
         "Identifier" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["identifier".to_string()],
             patterns: Vec::new(),
             encoding: None,
+            width: None,
+            intern: false,
         })),
         "Sigil" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["sigil".to_string()],
             patterns: Vec::new(),
             encoding: None,
+            width: None,
+            intern: false,
         })),
         "TypeName" => return ResolvedType::Scalar(Cow::Owned(Scalar {
             validators: vec!["type-name".to_string()],
             patterns: Vec::new(),
             encoding: None,
+            width: None,
+            intern: false,
         })),
         _ => {}
     }
@@ -1148,6 +1225,8 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
                 validators: s.validators.clone(),
                 patterns: s.patterns.clone(),
                 encoding: s.encoding.clone(),
+                width: s.width,
+                intern: s.intern,
             }));
         }
     }
@@ -1852,18 +1931,56 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
     let mut validators: Vec<String> = Vec::new();
     let mut patterns: Vec<String> = Vec::new();
     let mut encoding: Option<String> = None;
+    let mut width: Option<u64> = None;
+    let mut invalid_width: Option<String> = None;
+    let mut intern = false;
     for block in &c.children {
         for child in &block.compounds {
             match child.keyword.as_str() {
                 "validate" => validators.push(scalar_value_text(child)),
                 "pattern" => patterns.push(scalar_value_text(child)),
                 "encoding" => encoding = Some(scalar_value_text(child)),
+                // `width <n>`: a positive decimal byte count, `[1-9][0-9]*`.
+                // Anything else is E225, reported by `validate_schema`.
+                "width" => {
+                    let text = scalar_value_text(child);
+                    match parse_width(&text) {
+                        Some(n) => { width = Some(n); invalid_width = None; }
+                        None => { width = None; invalid_width = Some(text); }
+                    }
+                }
+                "intern" => intern = true,
                 _ => {}
             }
         }
     }
     let description = description_of(c);
-    ScalarDefinition { name, validators, patterns, encoding, description }
+    ScalarDefinition {
+        name, validators, patterns, encoding, description, width, invalid_width, intern,
+    }
+}
+
+/// Parse a scalar `width` value: `[1-9][0-9]*`, fitting in a `u64`.
+fn parse_width(text: &str) -> Option<u64> {
+    let b = text.as_bytes();
+    if b.is_empty() || !(b'1'..=b'9').contains(&b[0]) || !b.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    text.parse::<u64>().ok()
+}
+
+/// The fixed byte width of each standard codec (§21.7) whose values have
+/// one; a declared `width` must agree with it (E226).
+pub fn standard_codec_width(encoding: &str) -> Option<u64> {
+    match encoding {
+        "u8" | "i8" => Some(1),
+        "u16" | "i16" => Some(2),
+        "u32" | "i32" => Some(4),
+        "u64" | "i64" | "f64" => Some(8),
+        "uuid" => Some(16),
+        "blake3-256" => Some(32),
+        _ => None,
+    }
 }
 
 /// Construct a `SelectDefinition` from a top-level `select <Name>` compound
@@ -2008,6 +2125,7 @@ fn construct_field(c: &Compound) -> Field {
     let mut keyword = String::new();
     let mut type_name = String::new();
     let mut default: Option<String> = None;
+    let mut indexes: Vec<Index> = Vec::new();
     let mut iter = c.atoms.iter();
     // First atom = keyword (required).
     if let Some(a) = iter.next() {
@@ -2046,6 +2164,7 @@ fn construct_field(c: &Compound) -> Field {
                 "key" => key_flag = true,
                 "type" => type_name = scalar_value_text(child),
                 "default" => default = Some(scalar_value_text(child)),
+                "index" => indexes.push(construct_index(child)),
                 _ => {}
             }
         }
@@ -2054,7 +2173,24 @@ fn construct_field(c: &Compound) -> Field {
     let repeatable = polarity_of(repeatable_flag, irrepeatable_flag);
     let r#type = Type::Reference(type_name);
     let description = description_of(c);
-    Field { required, repeatable, key: key_flag, keyword, r#type, default, description }
+    Field {
+        required, repeatable, key: key_flag, keyword, r#type, default, description, indexes,
+    }
+}
+
+/// Construct an `Index` from an `index` child of a `field`: its paths are
+/// the inline atoms (`index /country /city`) followed by any explicit
+/// `path` children (the BinTEL-decoded form, §20.6), in order.
+fn construct_index(c: &Compound) -> Index {
+    let mut paths: Vec<String> = c.atoms.iter().map(atom_text).collect();
+    for block in &c.children {
+        for child in &block.compounds {
+            if child.keyword == "path" {
+                paths.push(scalar_value_text(child));
+            }
+        }
+    }
+    Index { paths }
 }
 
 /// Construct a `SelectRef` at a member position. The first inline atom is
@@ -2325,7 +2461,218 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     // composition.
     check_key_constraints(s, &mut errors);
 
+    // E225–E231: RaTEL storage-layout annotations (`width`, `intern`,
+    // `index`), checked against the composed schema for the same reason.
+    check_layout_annotations(s, &mut errors);
+
     errors
+}
+
+/// E225–E231: the RaTEL storage-layout annotations. `width`/`intern` are
+/// checked per scalar of the composed schema (E226 against a standard
+/// codec's fixed width is deferred to here because the encoding may arrive
+/// from a later layer than the width); `index` is checked per Field of the
+/// composed schema, where effective polarity and the merged index list are
+/// final. E225 is checked on every source scalar, base and layer alike,
+/// because an unparseable width never reaches the composed model.
+fn check_layout_annotations(s: &Schema, errors: &mut Vec<SchemaError>) {
+    // E225: `width` text must be `[1-9][0-9]*`.
+    for sd in s.scalars.iter().chain(s.layers.iter().flat_map(|l| l.scalars.iter())) {
+        if let Some(text) = &sd.invalid_width {
+            errors.push(SchemaError {
+                code: ErrorCode::E225,
+                detail: format!(
+                    "scalar `{}` declares width `{}`, which is not a positive decimal byte count",
+                    sd.name, text),
+            });
+        }
+    }
+
+    let composed_storage;
+    let target = if s.layers.is_empty() {
+        s
+    } else {
+        composed_storage = compose_schema(s).0;
+        &composed_storage
+    };
+
+    for sd in &target.scalars {
+        if let Some(width) = sd.width {
+            match &sd.encoding {
+                // E227: a width is meaningful only alongside an encoding.
+                None => errors.push(SchemaError {
+                    code: ErrorCode::E227,
+                    detail: format!(
+                        "scalar `{}` declares width `{}` but no encoding", sd.name, width),
+                }),
+                // E226: a width must agree with a standard codec's fixed width.
+                Some(enc) => if let Some(fixed) = standard_codec_width(enc) {
+                    if fixed != width {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E226,
+                            detail: format!(
+                                "scalar `{}` declares width `{}` but its encoding `{}` has fixed width {}",
+                                sd.name, width, enc, fixed),
+                        });
+                    }
+                },
+            }
+            // E231: `width` and `intern` are mutually exclusive.
+            if sd.intern {
+                errors.push(SchemaError {
+                    code: ErrorCode::E231,
+                    detail: format!(
+                        "scalar `{}` declares both width `{}` and intern", sd.name, width),
+                });
+            }
+        }
+    }
+
+    check_indexes_in_members(&target.document.members, "document", target, errors);
+    for d in &target.records {
+        check_indexes_in_members(
+            &d.members, &format!("record `{}`", d.name), target, errors);
+    }
+}
+
+/// E228–E230 for every indexed Field in one Struct's member list, recursing
+/// into merge-produced nested `Type::Struct`s.
+fn check_indexes_in_members(
+    members: &[Member],
+    where_: &str,
+    schema: &Schema,
+    errors: &mut Vec<SchemaError>,
+) {
+    for m in members {
+        let f = match m {
+            Member::Field(f) => f,
+            Member::SelectRef(_) | Member::Exclude(_) => continue,
+        };
+        if let Type::Struct(st) = &f.r#type {
+            check_indexes_in_members(
+                &st.members, &format!("{} → field `{}`", where_, f.keyword), schema, errors);
+        }
+        if f.indexes.is_empty() { continue; }
+        let site = format!("field `{}` in {}", f.keyword, where_);
+        // E228: an indexed field must be effectively repeatable.
+        if !f.repeatable.effective_repeatable() {
+            errors.push(SchemaError {
+                code: ErrorCode::E228,
+                detail: format!("{} declares an index but is not repeatable", site),
+            });
+        }
+        // E228: ... and its type must resolve to a Struct or a Scalar.
+        let element_members: Option<&[Member]> = match resolve(&f.r#type, schema) {
+            ResolvedType::Struct(members) => Some(members),
+            ResolvedType::Scalar(_) => None,
+            _ => {
+                errors.push(SchemaError {
+                    code: ErrorCode::E228,
+                    detail: format!(
+                        "{} declares an index but its type resolves to neither a Struct nor a Scalar",
+                        site),
+                });
+                continue;
+            }
+        };
+        for ix in &f.indexes {
+            for path in &ix.paths {
+                // E229: syntactically valid TELP.
+                let telp = match telp::Telp::parse(path) {
+                    Ok(t) => t,
+                    Err(telp::Failure::Syntax(reason)) => {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E229,
+                            detail: format!(
+                                "{} has index path `{}` which is not a valid TELP: {}",
+                                site, path, reason),
+                        });
+                        continue;
+                    }
+                    Err(_) => unreachable!("Telp::parse only fails with Failure::Syntax"),
+                };
+                match element_members {
+                    // Scalar-typed field: the root path, and only the root path.
+                    None => if !telp.components().is_empty() {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E228,
+                            detail: format!(
+                                "{} is Scalar-typed, so its index path must be the root path, not `{}`",
+                                site, path),
+                        });
+                    },
+                    // Struct-typed field: the root path is not allowed (E229);
+                    // every other path must resolve statically (E230).
+                    Some(members) => if telp.components().is_empty() {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E229,
+                            detail: format!(
+                                "{} is Struct-typed, so the root index path `{}` is not permitted",
+                                site, path),
+                        });
+                    } else if let Err(reason) = resolve_index_path(telp.components(), members, schema) {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E230,
+                            detail: format!(
+                                "{} has index path `{}` which does not resolve statically: {}",
+                                site, path, reason),
+                        });
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Static resolution of an index path (E230) from a Struct's members: each
+/// component must name a `Field` member (never a Select variant) whose
+/// effective `repeatable` is false; every non-final component must resolve
+/// to a Struct, and the final one to a Scalar.
+fn resolve_index_path(
+    components: &[String],
+    start: &[Member],
+    schema: &Schema,
+) -> Result<(), String> {
+    let mut members = start;
+    let last = components.len() - 1;
+    for (i, component) in components.iter().enumerate() {
+        let field = members.iter().find_map(|m| match m {
+            Member::Field(f) if &f.keyword == component => Some(f),
+            _ => None,
+        });
+        let f = match field {
+            Some(f) => f,
+            None => {
+                let is_variant = members.iter().any(|m| match m {
+                    Member::SelectRef(sr) => resolve_select_ref(&sr.reference, schema)
+                        .is_some_and(|vs| vs.iter().any(|v| &v.keyword == component)),
+                    _ => false,
+                });
+                return Err(if is_variant {
+                    format!("component {} `{}` is a Select variant keyword, not a Field", i, component)
+                } else {
+                    format!("component {} `{}` matches no Field keyword", i, component)
+                });
+            }
+        };
+        if f.repeatable.effective_repeatable() {
+            return Err(format!("component {} `{}` is a repeatable Field", i, component));
+        }
+        match resolve(&f.r#type, schema) {
+            ResolvedType::Struct(inner) if i < last => members = inner,
+            ResolvedType::Struct(_) => {
+                return Err(format!("final component `{}` resolves to a Struct, not a Scalar", component));
+            }
+            ResolvedType::Scalar(_) if i == last => {}
+            ResolvedType::Scalar(_) => {
+                return Err(format!("component {} `{}` resolves to a Scalar but is not the final component", i, component));
+            }
+            _ => {
+                return Err(format!("component {} `{}` resolves to neither a Struct nor a Scalar", i, component));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// E219–E221 (§20.1): key-field constraints over every Struct of the
@@ -2426,7 +2773,7 @@ fn collect_all_keywords(s: &Schema) -> Vec<String> {
 /// Apply every `Layer` in `s.layers` to produce a fully composed schema
 /// per §20.3. Returns the composed `Schema` (with empty `layers`) plus
 /// any `SchemaError`s raised during composition (E205, E206, E210, E211,
-/// E212, E213, E218). The returned schema is always a best-effort result.
+/// E212, E213, E218, E226). The returned schema is always a best-effort result.
 pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
     let mut errors: Vec<SchemaError> = Vec::new();
     let mut records: Vec<RecordDefinition> = s.records.clone();
@@ -2556,6 +2903,26 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                         Some(base_enc.clone()) // best-effort: keep the base's
                     }
                 };
+                // MergeScalar's width rule: a layer MAY add a width where
+                // the base has none, MAY restate the base's, MUST NOT
+                // change it (E226). Disagreement with a standard codec's
+                // fixed width is checked on the composed schema by
+                // `validate_schema`, where the encoding is finally known.
+                let merged_width = match (scalars[pos].width, sd.width) {
+                    (base, None) => base,
+                    (None, layer_w @ Some(_)) => layer_w,
+                    (Some(base_w), Some(layer_w)) if base_w == layer_w => Some(base_w),
+                    (Some(base_w), Some(layer_w)) => {
+                        errors.push(SchemaError {
+                            code: ErrorCode::E226,
+                            detail: format!(
+                                "layer `{}` declares width `{}` for scalar `{}`, conflicting with the base's width `{}`",
+                                layer.name, layer_w, sd.name, base_w,
+                            ),
+                        });
+                        Some(base_w) // best-effort: keep the base's
+                    }
+                };
                 scalars[pos] = ScalarDefinition {
                     name: sd.name.clone(),
                     validators: merged,
@@ -2564,6 +2931,11 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                     // Layer description overrides base; else inherit base.
                     description: sd.description.clone()
                         .or_else(|| scalars[pos].description.clone()),
+                    width: merged_width,
+                    invalid_width: scalars[pos].invalid_width.clone()
+                        .or_else(|| sd.invalid_width.clone()),
+                    // Monotone OR: a layer may intern, never un-intern.
+                    intern: scalars[pos].intern || sd.intern,
                 };
             } else {
                 scalars.push(sd.clone());
@@ -2782,7 +3154,23 @@ fn merge_field_with(
         // by design — descriptions deliberately differ, being overridable.)
         description: layer.description.clone()
             .or_else(|| base.description.clone()),
+        // Indexes: base's in order, then the layer's not already present
+        // by path identity (a restated index is a benign no-op). A layer
+        // may add indexes, never remove them.
+        indexes: merge_indexes(&base.indexes, &layer.indexes),
     })
+}
+
+/// Append-and-deduplicate merge of two index lists, compared by TELP
+/// identity of their path tuples.
+fn merge_indexes(base: &[Index], layer: &[Index]) -> Vec<Index> {
+    let mut out: Vec<Index> = base.to_vec();
+    for ix in layer {
+        if !out.iter().any(|b| b.same_paths_as(ix)) {
+            out.push(ix.clone());
+        }
+    }
+    out
 }
 
 /// Append-and-deduplicate merge of two validator lists, per §20.3. The base
@@ -4783,7 +5171,7 @@ mod tests {
     /// Two test conventions:
     ///
     /// (1) Pragma names tels (via its pinned LIRA coordinate,
-    ///     `specification.tel/tels:2.0.0`): type-assign against the
+    ///     `specification.tel/tels:2.1.0`, or the earlier `2.0.0` pin): type-assign against the
     ///     built-in tels, and if that passes, construct a Schema and
     ///     validate it.
     ///
@@ -4797,7 +5185,7 @@ mod tests {
         let mut all_errors: Vec<TelError> = result.errors.clone();
         if let Some(ref pr) = result.document.pragma {
             if let Some(schema_ref) = pr.reference.as_deref() {
-                if schema_ref == crate::resolver::BUILTIN_TELS_REFERENCE {
+                if crate::resolver::is_builtin_tels_reference(schema_ref) {
                     let builtin = builtin_tels();
                     let ta = type_assign(&result.document, &builtin, None);
                     let had_ta_errors = !ta.errors.is_empty();
@@ -5198,7 +5586,7 @@ mod tests {
         let s = builtin_tels();
         let record_names: Vec<&str> = s.records.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(record_names, vec![
-            "Field", "SelectRef", "Variant", "Record", "Scalar",
+            "Field", "Index", "SelectRef", "Variant", "Record", "Scalar",
             "Select", "Body", "Layer",
         ]);
         let select_names: Vec<&str> = s.selects.iter().map(|d| d.name.as_str()).collect();
@@ -5271,12 +5659,12 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
                     }),
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Flag, default: None,
@@ -5318,11 +5706,11 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, // not required, so default is illegal
                         repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()] }),
+                        r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()] }),
                         default: Some("bar".to_string()),
                     }),
                 ],
@@ -5355,7 +5743,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "tel".to_string(),
                         r#type: Type::Flag, default: None,
@@ -5375,7 +5763,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "foo".to_string(),
                         r#type: Type::Reference("missing".to_string()), default: None,
@@ -5520,7 +5908,7 @@ mod tests {
     }
 
     fn field(req: bool, rep: bool, kw: &str, t: Type) -> Member {
-        Member::Field(Field { key: false, description: None,
+        Member::Field(Field { key: false, description: None, indexes: Vec::new(),
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: if rep { Polarity::Loose } else { Polarity::Default },
             keyword: kw.to_string(), r#type: t, default: None,
@@ -5541,7 +5929,7 @@ mod tests {
     }
 
     fn scalar_string() -> Type {
-        Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]})
+        Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]})
     }
 
     #[test]
@@ -5582,10 +5970,10 @@ mod tests {
         // Required Scalar Field with a Field.default — the default is
         // substituted when the field is absent from the document.
         let s = schema_with_root(vec![
-            Member::Field(Field { key: false, description: None,
+            Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "name".to_string(),
-                r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()] }),
+                r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()] }),
                 default: Some("Anonymous".to_string()),
             }),
         ]);
@@ -5609,10 +5997,10 @@ mod tests {
     fn type_assign_catches_e310_validator_failure() {
         // schema with identifier validator on `id` field
         let s = schema_with_root(vec![
-            Member::Field(Field { key: false, description: None,
+            Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                 required: Polarity::Default, repeatable: Polarity::Default,
                 keyword: "id".to_string(),
-                r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["identifier".to_string()]}), default: None,
+                r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["identifier".to_string()]}), default: None,
             }),
         ]);
         // "FOO" is not a valid identifier (uppercase)
@@ -5661,7 +6049,7 @@ mod tests {
             name: "test".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -5766,7 +6154,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn flag_field(req: bool, kw: &str) -> Member {
-        Member::Field(Field { key: false, description: None,
+        Member::Field(Field { key: false, description: None, indexes: Vec::new(),
             required: if req { Polarity::Default } else { Polarity::Loose },
             repeatable: Polarity::Default,
             keyword: kw.to_string(), r#type: Type::Flag, default: None,
@@ -5779,13 +6167,13 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct { members: vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default, keyword: "name".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
             ], validators: Vec::new()},
             layers: vec![layer("with-email", vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Loose, repeatable: Polarity::Default, keyword: "email".to_string(),
                     r#type: scalar_string(), default: None,
                 }),
@@ -5808,7 +6196,7 @@ mod tests {
             layers: vec![layer("ext", vec![], vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default, keyword: "postcode".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
@@ -5818,7 +6206,7 @@ mod tests {
             records: vec![RecordDefinition { description: None,
                 name: "Address".to_string(),
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default, keyword: "street".to_string(),
                         r#type: scalar_string(), default: None,
                     }),
@@ -6041,7 +6429,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6049,7 +6437,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Tight, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6075,7 +6463,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6083,7 +6471,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("tighten", vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Tight,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6107,7 +6495,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6115,7 +6503,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6135,7 +6523,7 @@ mod tests {
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6143,7 +6531,7 @@ mod tests {
                 validators: vec![],
             },
             layers: vec![layer("loosen", vec![
-                Member::Field(Field { key: false, description: None,
+                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Loose,
                     keyword: "foo".to_string(),
                     r#type: scalar_string(), default: None,
@@ -6413,13 +6801,13 @@ layer fancy
             name: "round-trip".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
                         r#type: Type::Reference("String".to_string()),
                         default: None,
                     }),
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Reference("Flag".to_string()),
@@ -6541,10 +6929,10 @@ layer fancy
                    bytes.len(), pinned_bytes.len());
 
         // Both specifications state the byte count in prose.
-        assert_eq!(bytes.len(), 1741,
+        assert_eq!(bytes.len(), 1939,
                    "§20.5 of the TEL Specification and §3 of the BinTEL \
                    Specification both state that the BinTEL document-root \
-                   encoding of tels.tel is 1741 bytes");
+                   encoding of tels.tel is 1939 bytes");
 
         // demo/tels.hash also carries the BASE-256 form of the same digest;
         // only the blake3 line was previously checked.
@@ -6557,6 +6945,47 @@ layer fancy
                    "the base256: line of demo/tels.hash does not encode the blake3: line");
         assert_eq!(b256.chars().count(), 32,
                    "BASE-256 is character-per-byte, so a 32-byte digest is 32 characters");
+    }
+
+    /// tels 2.1.0 only APPENDS members to `Field` and `Scalar` (and adds a
+    /// new `Index` record), so every keyword index that existed under tels
+    /// 2.0.0 is unchanged. Consequently the BinTEL encoding of any schema
+    /// written against 2.0.0 is byte-identical under the new axiom, and the
+    /// value hash of the acceptance schema (pinned in demo/acceptance.hash)
+    /// is unchanged. Both constants were captured under tels 2.0.0 before
+    /// the 2.1.0 members were added. Set DUMP_SCHEMA_BINTEL=1 to print
+    /// the current values instead of asserting.
+    #[test]
+    fn appending_tels_members_leaves_existing_schema_encodings_unchanged() {
+        const CONTACT_SCHEMA_HEX: &str = "050007636f6e746163740203000b50686f6e654e756d6265720102000c636f756e7472792d636f64650106537472696e67010200066e756d6265720106537472696e670204000741646472657373010200067374726565740106537472696e6701020004636974790106537472696e6701030007636f756e7472790106537472696e670707756e6b6e6f776e04030006537461747573010200066163746976650104466c61670102000861726368697665640104466c61670506000200046e616d650106537472696e6700030005656d61696c0106537472696e67020004000570686f6e65010b50686f6e654e756d626572020400030004686f6d650107416464726573730200030004776f726b010741646472657373020102000653746174757301";
+        const ACCEPTANCE_HASH_HEX: &str = "ed8e981cd770b7d75067e05dfd87d8b5c37e97763872febf513c125ab1a8b245";
+        let schema = builtin_tels();
+        let contact = fs::read_to_string("../../demo/contact-schema.tel")
+            .expect("demo/contact-schema.tel must exist");
+        let contact_doc = parse(&contact);
+        assert!(contact_doc.errors.is_empty(), "contact-schema.tel must parse cleanly");
+        let contact_bytes = bintel::encode_root(&contact_doc.document, &schema);
+        let acceptance = fs::read_to_string("../../acceptance.tel")
+            .expect("acceptance.tel must exist at the project root");
+        let acceptance_doc = parse(&acceptance);
+        assert!(acceptance_doc.errors.is_empty(), "acceptance.tel must parse cleanly");
+        let acceptance_hash = bintel::value_hash(&acceptance_doc.document, &schema);
+        let contact_hex: String = contact_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        let acceptance_hex: String = acceptance_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        if std::env::var("DUMP_SCHEMA_BINTEL").is_ok() {
+            eprintln!("contact-schema bintel ({} bytes): {}", contact_bytes.len(), contact_hex);
+            eprintln!("acceptance value hash: {}", acceptance_hex);
+            return;
+        }
+        assert_eq!(contact_hex, CONTACT_SCHEMA_HEX,
+                   "BinTEL encoding of demo/contact-schema.tel changed under the new tels");
+        assert_eq!(acceptance_hex, ACCEPTANCE_HASH_HEX,
+                   "acceptance.tel value hash changed under the new tels");
+        // The committed pin must agree too.
+        let pinned = fs::read_to_string("../../demo/acceptance.hash").unwrap();
+        let pinned_hex = pinned.lines().find(|l| l.starts_with("blake3:")).unwrap()
+            .trim_start_matches("blake3:").trim().to_string();
+        assert_eq!(acceptance_hex, pinned_hex, "demo/acceptance.hash disagrees");
     }
 
     /// Every `demo/*.tel` file is a worked example cited from the demo README
@@ -6701,7 +7130,7 @@ layer fancy
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "outer".to_string(),
@@ -6714,7 +7143,7 @@ layer fancy
             sigil: None,
             records: vec![RecordDefinition { description: None,
                 name: "Outer".to_string(),
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default,
                     repeatable: Polarity::Default,
                     keyword: "inner".to_string(),
@@ -6762,7 +7191,7 @@ layer fancy
         let schema = Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "a".to_string(),
                     r#type: Type::Reference("A".to_string()),
@@ -6775,7 +7204,7 @@ layer fancy
             records: vec![
                 RecordDefinition { description: None,
                     name: "A".to_string(),
-                    members: vec![Member::Field(Field { key: false, description: None,
+                    members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
                         r#type: Type::Reference("B".to_string()),
@@ -6786,13 +7215,13 @@ layer fancy
                 RecordDefinition { description: None,
                     name: "B".to_string(),
                     members: vec![
-                        Member::Field(Field { key: false, description: None,
+                        Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                             required: Polarity::Loose, repeatable: Polarity::Default,
                             keyword: "shared".to_string(),
                             r#type: Type::Reference("String".to_string()),
                             default: None,
                         }),
-                        Member::Field(Field { key: false, description: None,
+                        Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                             required: Polarity::Default, repeatable: Polarity::Default,
                             keyword: "c".to_string(),
                             r#type: Type::Reference("C".to_string()),
@@ -6803,7 +7232,7 @@ layer fancy
                 },
                 RecordDefinition { description: None,
                     name: "C".to_string(),
-                    members: vec![Member::Field(Field { key: false, description: None,
+                    members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "shared".to_string(),
                         r#type: Type::Reference("String".to_string()),
@@ -6994,21 +7423,21 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "address".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field { key: false, description: None,
+                                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "street".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
+                                    r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field { key: false, description: None,
+                                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "country".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
+                                    r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                                         validators: vec!["string".to_string()]}), default: None,
                                 }),
                             ],
@@ -7061,12 +7490,12 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "name".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "active".to_string(),
                         r#type: Type::Flag, default: None,
@@ -7103,17 +7532,17 @@ layer fancy
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "record".to_string(),
                         r#type: Type::Struct(Struct {
                             members: vec![
-                                Member::Field(Field { key: false, description: None,
+                                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                                     required: Polarity::Default, repeatable: Polarity::Default,
                                     keyword: "id".to_string(),
-                                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                                    r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                                 }),
-                                Member::Field(Field { key: false, description: None,
+                                Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                                     required: Polarity::Loose, repeatable: Polarity::Default,
                                     keyword: "active".to_string(),
                                     r#type: Type::Flag, default: None,
@@ -7147,12 +7576,12 @@ layer fancy
             name: "greeting".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "text".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                        r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Loose, repeatable: Polarity::Default,
                         keyword: "bold".to_string(),
                         r#type: Type::Flag, default: None,
@@ -7253,6 +7682,71 @@ layer fancy
     }
 
     #[test]
+    fn layer_merge_adopts_width_ors_intern_and_appends_indexes_by_identity() {
+        // §20.3 for the tels 2.1.0 layout annotations: a layer may add a
+        // width where the base has none, may set `intern`, and may add
+        // indexes; a restated index (compared by TELP identity, so
+        // delimiter-insensitively) is a benign no-op.
+        let src = concat!(
+            "tel 1.0 specification.tel/tels:2.1.0\n\nname merge\n\n",
+            "scalar Token\n  validate hex\n  encoding blake3-256\n\n",
+            "scalar Tag\n  validate identifier\n\n",
+            "record Address\n  field city String\n  field country String\n\n",
+            "document\n  field token Token\n  field tag Tag repeatable\n",
+            "  field address Address repeatable\n    index /country\n\n",
+            "layer\n  name indexed\n  scalar Token\n    width 32\n  scalar Tag\n    intern\n  overlay\n",
+            "    field address Address\n      index .country\n      index /city /country\n",
+        );
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let ta = type_assign(&parsed.document, &builtin_tels(), None);
+        assert!(ta.errors.is_empty(), "{:?}", ta.errors);
+        let schema = construct_schema(&parsed.document);
+        assert!(validate_schema(&schema).is_empty(), "{:?}", validate_schema(&schema));
+        let (composed, errs) = compose_schema(&schema);
+        assert!(errs.is_empty(), "{:?}", errs);
+        let token = composed.scalars.iter().find(|s| s.name == "Token").unwrap();
+        assert_eq!(token.width, Some(32));
+        assert_eq!(token.encoding.as_deref(), Some("blake3-256"));
+        assert!(!token.intern);
+        let tag = composed.scalars.iter().find(|s| s.name == "Tag").unwrap();
+        assert!(tag.intern);
+        assert_eq!(tag.width, None);
+        let address = composed.document.members.iter().find_map(|m| match m {
+            Member::Field(f) if f.keyword == "address" => Some(f),
+            _ => None,
+        }).unwrap();
+        assert_eq!(address.indexes, vec![
+            Index { paths: vec!["/country".to_string()] },
+            Index { paths: vec!["/city".to_string(), "/country".to_string()] },
+        ]);
+        // The composed scalars resolve with the layout annotations attached.
+        match resolve_name("Token", &composed) {
+            ResolvedType::Scalar(sc) => { assert_eq!(sc.width, Some(32)); assert!(!sc.intern); }
+            _ => panic!("Token should resolve to a Scalar"),
+        }
+        match resolve_name("Tag", &composed) {
+            ResolvedType::Scalar(sc) => { assert_eq!(sc.width, None); assert!(sc.intern); }
+            _ => panic!("Tag should resolve to a Scalar"),
+        }
+    }
+
+    #[test]
+    fn width_parses_only_positive_decimal() {
+        assert_eq!(parse_width("1"), Some(1));
+        assert_eq!(parse_width("16"), Some(16));
+        assert_eq!(parse_width("0"), None);
+        assert_eq!(parse_width("016"), None);
+        assert_eq!(parse_width(""), None);
+        assert_eq!(parse_width("0x10"), None);
+        assert_eq!(parse_width("16 "), None);
+        assert_eq!(parse_width("-1"), None);
+        assert_eq!(standard_codec_width("uuid"), Some(16));
+        assert_eq!(standard_codec_width("blake3-256"), Some(32));
+        assert_eq!(standard_codec_width("hex-bytes"), None);
+    }
+
+    #[test]
     fn construct_scalar_definition_reads_encoding() {
         let schema = codec_demo_schema();
         assert_eq!(schema.scalars.len(), 1);
@@ -7270,14 +7764,18 @@ layer fancy
     #[test]
     fn builtin_scalar_record_keyword_order_includes_encoding() {
         // Guards the keyword-index layout of tels's `Scalar` record:
-        // name=0, validate=1, encoding=2, description=3.
+        // name=0, validate=1, pattern=2, encoding=3, description=4,
+        // width=5, intern=6 (the 2.1.0 members are appended, so the
+        // earlier indices are unchanged).
         let tel = builtin_tels();
         let scalar_rec = tel.records.iter().find(|r| r.name == "Scalar").unwrap();
         let keywords: Vec<&str> = scalar_rec.members.iter().map(|m| match m {
             Member::Field(f) => f.keyword.as_str(),
             _ => panic!("Scalar record has only Field members"),
         }).collect();
-        assert_eq!(keywords, vec!["name", "validate", "pattern", "encoding", "description"]);
+        assert_eq!(keywords, vec![
+            "name", "validate", "pattern", "encoding", "description", "width", "intern",
+        ]);
     }
 
     #[test]

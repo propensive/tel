@@ -18,7 +18,7 @@
 
 use crate::{
     Atom, Block, Compound, Document, Member, Schema, Type,
-    atom_text, resolve, ResolvedType, scalar_value_text,
+    resolve, ResolvedType, scalar_value_text,
 };
 
 /// Canonicalize a `Document` against a `Schema` (§22.3). The schema
@@ -78,21 +78,38 @@ fn emit_pragma(doc: &Document, signature: Option<&str>, out: &mut String) {
 /// children. `members` is the parent's member list. `indent` is the
 /// column at which compound children should appear.
 fn emit_struct_body(
-    _atoms: &[Atom],
+    atoms: &[Atom],
     blocks: &[Block],
     members: &[Member],
     schema: &Schema,
     indent: usize,
     out: &mut String,
 ) {
-    // Group children by member index in member order.
-    let children: Vec<&Compound> = blocks.iter()
-        .flat_map(|b| b.compounds.iter()).collect();
-    let by_member = group_by_member(&children, members, schema);
-
-    for (i, m) in members.iter().enumerate() {
-        for c in &by_member[i] {
-            emit_member_child(c, m, schema, indent, out);
+    // Enumerate the semantic children in canonical order (§7.2 of the BinTEL
+    // Specification / §22.3): member order, atom-derived elements before
+    // compound-derived ones. Every element is emitted as a child line, so an
+    // inline atom (`field city String`, `index /country /city`) reappears
+    // as an explicit `keyword value` line (`keyword city`, `path /country`).
+    // Default substitutions are not materialized: an absent member stays
+    // absent, and the default is re-applied on re-parse.
+    for element in crate::bintel::enumerate_children(atoms, blocks, members, schema) {
+        match element {
+            crate::bintel::Element::Compound(c) => {
+                if let Some(i) = member_index_for_keyword(members, &c.keyword, schema) {
+                    emit_member_child(c, &members[i], schema, indent, out);
+                }
+            }
+            crate::bintel::Element::AtomScalar { keyword, text } => {
+                push_indent(out, indent);
+                out.push_str(keyword);
+                emit_scalar_payload(&text, indent, out);
+            }
+            crate::bintel::Element::AtomFlag { keyword } => {
+                push_indent(out, indent);
+                out.push_str(keyword);
+                out.push('\n');
+            }
+            crate::bintel::Element::DefaultScalar { .. } => {}
         }
     }
 }
@@ -141,17 +158,17 @@ fn emit_compound_line(
             // of an initial run of non-repeatable Scalar Fields, then
             // optionally either an all-Flag Select's present variants or
             // a single repeatable Scalar Field's values (§22.2 `construct`).
-            // For simplicity we emit all children as compound children;
-            // this preserves the semantic model (P1) and is canonical.
+            // Every element — atom-derived or compound-derived — is emitted
+            // as a compound child; this preserves the semantic model (P1)
+            // and is canonical.
             out.push('\n');
-            emit_struct_body(&[], &c.children, child_members, schema, indent + 2, out);
+            emit_struct_body(&c.atoms, &c.children, child_members, schema, indent + 2, out);
         }
         ResolvedType::Unresolved | ResolvedType::KindMismatch => {
             // Schema invalid; emit just the keyword line.
             out.push('\n');
         }
     }
-    let _ = atom_text;  // keep import alive for future inline-atom support
 }
 
 // ── Scalar value emission with atom-form escalation (§22.2) ─────────────────
@@ -269,16 +286,6 @@ pub(crate) fn choose_literal_delim_any_indent(payload: &str) -> String {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn group_by_member<'a>(children: &[&'a Compound], members: &[Member], schema: &Schema) -> Vec<Vec<&'a Compound>> {
-    let mut buckets: Vec<Vec<&Compound>> = vec![Vec::new(); members.len()];
-    for c in children {
-        if let Some(i) = member_index_for_keyword(members, &c.keyword, schema) {
-            buckets[i].push(c);
-        }
-    }
-    buckets
-}
-
 fn member_index_for_keyword(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
     for (i, m) in members.iter().enumerate() {
         match m {
@@ -309,11 +316,11 @@ mod tests {
         Schema {
             name: "demo".to_string(),
             document: Struct {
-                members: vec![Member::Field(Field { key: false, description: None,
+                members: vec![Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                     required: if required { Polarity::Default } else { Polarity::Loose },
                     repeatable: Polarity::Default,
                     keyword: keyword.to_string(),
-                    r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
+                    r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
@@ -453,6 +460,53 @@ mod tests {
     }
 
     #[test]
+    fn canonical_round_trips_width_intern_and_index() {
+        // tels 2.1.0's layout annotations are ordinary members, emitted in
+        // member order: `width`/`intern` after `description` on a Scalar,
+        // `index` (with its `path` atoms) last on a Field. Canonicalizing a
+        // schema document under the built-in tels and re-parsing it must
+        // construct the identical Schema, and canonicalization must be
+        // idempotent.
+        let tels = crate::builtin_tels();
+        let src = concat!(
+            "tel 1.0 specification.tel/tels:2.1.0\n\nname layout\n\n",
+            "scalar Uuid\n  validate uuid\n  encoding uuid\n  width 16\n\n",
+            "scalar Tag\n  intern\n\n",
+            "record Address\n  field city String\n  field country String\n\n",
+            "document\n  field id Uuid\n  field tag Tag repeatable\n    index /\n",
+            "  field address Address repeatable\n    index /country /city\n    index .city\n",
+        );
+        let orig = parse(src).document;
+        let ta = type_assign(&orig, &tels, None);
+        assert!(ta.errors.is_empty(), "source must type-check against tels: {:?}", ta.errors);
+        let canon = canonicalize(&orig, &tels);
+        assert!(canon.contains("\n  width 16\n"), "width must be emitted as a child line:\n{}", canon);
+        assert!(canon.contains("\n  intern\n"), "intern must be emitted as a child line:\n{}", canon);
+        assert!(canon.contains("\n    index\n      path /country\n      path /city\n"),
+                "index paths are emitted as `path` child lines in order:\n{}", canon);
+        assert!(canon.contains("\n    index\n      path .city\n"),
+                "a path's delimiter is preserved verbatim:\n{}", canon);
+        let reparsed = parse(&canon);
+        assert!(reparsed.errors.is_empty(), "canonical form must parse: {:?}\n{}", reparsed.errors, canon);
+        let ta2 = type_assign(&reparsed.document, &tels, None);
+        assert!(ta2.errors.is_empty(), "canonical form must type-check: {:?}", ta2.errors);
+        let a = crate::construct_schema(&orig);
+        let b = crate::construct_schema(&reparsed.document);
+        assert_eq!(a, b, "canonicalization must preserve the constructed Schema");
+        assert_eq!(a.scalars[0].width, Some(16));
+        assert!(a.scalars[1].intern);
+        match &a.document.members[2] {
+            Member::Field(f) => assert_eq!(
+                f.indexes,
+                vec![crate::Index { paths: vec!["/country".into(), "/city".into()] },
+                     crate::Index { paths: vec![".city".into()] }]),
+            _ => panic!("expected a Field"),
+        }
+        assert!(crate::validate_schema(&a).is_empty());
+        assert_eq!(canonicalize(&reparsed.document, &tels), canon, "canonicalization must be idempotent");
+    }
+
+    #[test]
     fn canonical_source_form_for_multiline_value() {
         let schema = schema_string_field("note", true);
         let src = "tel 1.0\n\nnote\n    first line\n    second line\n";
@@ -493,16 +547,16 @@ mod tests {
             name: "demo".to_string(),
             document: Struct {
                 members: vec![
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "a".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
+                        r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                             validators: vec!["string".to_string()]}), default: None,
                     }),
-                    Member::Field(Field { key: false, description: None,
+                    Member::Field(Field { key: false, description: None, indexes: Vec::new(),
                         required: Polarity::Default, repeatable: Polarity::Default,
                         keyword: "b".to_string(),
-                        r#type: Type::Scalar(Scalar { encoding: None, patterns: Vec::new(),
+                        r#type: Type::Scalar(Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                             validators: vec!["string".to_string()]}), default: None,
                     }),
                 ],

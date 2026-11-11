@@ -100,7 +100,7 @@ actually use.
 The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
 CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against
 it to validate ordinary documents (see below). The two schemas the specification pins — the built-in
-**TELS** meta-schema (`specification.tel/tels:2.0.0`) and the **acceptance** schema of BinTEL §8.4
+**TELS** meta-schema (`specification.tel/tels:2.1.0`) and the **acceptance** schema of BinTEL §8.4
 (`specification.tel/acceptance:1.0.0`) — are always preloaded, so they appear in `list` (and are
 resolvable) even on a fresh cache, and a copy that has drifted from the embedded source is refreshed.
 
@@ -293,7 +293,7 @@ signature is matched against each cached schema's base, selected, or fully-compo
 (memoized per identification, invalidated when the registry directory changes). `+layer`
 selections compose exactly the named layers, in the schema's declaration order; an unknown or
 out-of-order selection is reported as `E124`. Schema *documents* (pragma references the pinned
-meta-schema coordinate, `specification.tel/tels:2.0.0`) are validated against the built-in
+meta-schema coordinate, `specification.tel/tels:2.1.0`) are validated against the built-in
 meta-schema. When the pragma names a schema that matches nothing in the registry, the LSP says so:
 an `Information` diagnostic (`schema-unresolved`) underlines the identifier, and hovering the
 pragma explains the resolution status (resolved schema name, signature and registry path;

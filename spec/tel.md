@@ -9,8 +9,11 @@ TEL defines a **presentation model**, which preserves the document as written, a
 schema-driven **semantic model**, which ascribes a type to every element of the tree; the two
 are connected by a deterministic type-assignment algorithm (§20.2). A companion specification,
 [BinTEL](bintel.md), defines a compact binary encoding that provides an unambiguous
-serialization of the semantic model; a second companion, [TELP](telp.md), defines a
-textual path language for addressing elements of the semantic model.
+serialization of the semantic model; a second, [RaTEL](ratel.md), defines a random-access
+encoding of the same model for data read in place from memory-mapped files; a third,
+[TELP](telp.md), defines a textual path language for addressing elements of the semantic model;
+and the [Standard Codecs](codecs.md) specification pins the fixed-width binary encodings on which
+both binary forms may rely.
 
 The design of TEL is motivated by the following goals:
 
@@ -393,8 +396,10 @@ addressable by layer selections. These bindings are enforced at publish time by 
 schema source a reader will find.
 
 The built-in `tels` meta-schema (§20.5) has the canonical, version-pinned coordinate
-`specification.tel/tels:2.0.0`. The pin is fixed until this specification is next revised; a
+`specification.tel/tels:2.1.0`. The pin is fixed until this specification is next revised; a
 later revision publishes a new LIRA release of `tels` and advances the pinned version. The
+earlier pin `specification.tel/tels:2.0.0` remains recognised by the built-in lookup of §8.2,
+since 2.1.0 extends 2.0.0 only by appended optional members (§20.5). The
 `acceptance` schema of §8.4 of the BinTEL Specification, supplied as
 [`acceptance.tel`](../acceptance.tel), is pinned the same way, at
 `specification.tel/acceptance:1.0.0`.
@@ -550,9 +555,13 @@ order:
    inputs, resolution begins at step 1.
 1. **Built-in lookup.** If the document schema's signature equals the built-in `tels`
    schema's signature (§8.1: the 33-byte palimpsest of its value hash, §20.5), or its
-   reference is the pinned coordinate `specification.tel/tels:2.0.0` (§8.1), the parser MUST
-   use the built-in `Schema` and skip the remaining steps. Neither form requires network
-   access. An implementation that supports acceptances (§8.4 of the BinTEL Specification)
+   reference is the pinned coordinate `specification.tel/tels:2.1.0` (§8.1), the parser MUST
+   use the built-in `Schema` and skip the remaining steps. The parser MUST likewise recognise
+   the earlier pin `specification.tel/tels:2.0.0` and the signature of that revision of `tels`
+   as naming the built-in: revision 2.1.0 only appends optional members to the TELS records
+   (§20.5), so every schema document valid under 2.0.0 is valid under 2.1.0 and encodes
+   byte-identically under either (§5 of the BinTEL Specification). Neither form requires
+   network access. An implementation that supports acceptances (§8.4 of the BinTEL Specification)
    holds the `acceptance` schema built in as well, and this step recognises its signature and
    its pinned coordinate `specification.tel/acceptance:1.0.0` in the same way.
 2. **Cache lookup.** A parser MAY maintain an in-memory or on-disk cache keyed by schema
@@ -1669,6 +1678,12 @@ interface ScalarDefinition {
   // (intersection).
   patterns: string[];
   encoding: string | null;
+  // Storage-layout annotations read by RaTEL (ratel.md) and by nothing
+  // else: `width` asserts that every value's codec bytes have exactly this
+  // length; `intern` asks that values be stored in RaTEL's shared string
+  // table. Neither constrains documents nor takes part in subtyping (§24.3).
+  width: number | null;
+  intern: boolean;
   description: string | null;
 }
 
@@ -1695,6 +1710,8 @@ interface Scalar {
   validators: string[];
   patterns: string[];
   encoding: string | null;
+  width: number | null;     // from the ScalarDefinition; null for the built-ins
+  intern: boolean;          // from the ScalarDefinition; false for the built-ins
 }
 
 interface Flag {}
@@ -1726,6 +1743,14 @@ interface Field {
   type: Type;
   default: string | null;
   description: string | null;
+  // Secondary indexes for RaTEL (ratel.md §9), one per `index` child: each
+  // is an ordered tuple of static TELP paths relative to an element of this
+  // field. Layout only; see the Layout annotations paragraph below.
+  indexes: Index[];
+}
+
+interface Index {
+  paths: string[];
 }
 
 // References a SelectDefinition at a member position. The named Select's
@@ -1992,6 +2017,40 @@ constructs (§20.5) do not admit it. A sum instance is identified by its variant
 variant's *type* may itself be a key-carrying Struct, in which case instances of that variant
 are keyed like any other.
 
+**Layout annotations.** Three further declarations describe not what a document may contain
+but how the [RaTEL Specification](ratel.md) stores it. They are **semantically neutral**: they
+add no document constraint, play no part in type assignment or validation, do not appear in the
+subtype relation (§24.3), and leave the BinTEL encoding and the value hash of every document
+unchanged. They are nevertheless part of the schema — atoms like any other (§20.3), carried by
+signatures — so that a layer can tune the storage of a schema it does not own.
+
+- `ScalarDefinition.width` (`width w`, a positive decimal, **E225** otherwise) asserts that
+  every value of the scalar encodes, under its `encoding`, to exactly `w` bytes, so that RaTEL
+  may store values inline in a fixed slot. It is meaningful only with an `encoding` (**E227** on
+  the composed schema otherwise). It is a statement about the codec, whose behaviour is fixed by
+  its name (law C4, §21.7): a value whose bytes have another length is a configuration failure
+  of the RaTEL writer, which MUST refuse to encode (RaTEL §6.1), never a document error — text
+  validation does not consult `width`. The standard codecs ([Standard Codecs](codecs.md)) have
+  fixed widths of their own; restating one is a benign no-op and contradicting one is **E226**.
+- `ScalarDefinition.intern` (`intern`) asks that values be stored once in RaTEL's shared string
+  table, so that equal values may be compared by reference. A scalar cannot be both `intern`
+  and of fixed `width` (**E231**).
+- `Field.indexes` (`index ‹path› …`, one `Index` per `index` child) declares **secondary
+  indexes** over the occurrences of an effectively `repeatable` Field (**E228** otherwise): each
+  `Index` is an ordered tuple of paths, every path a [TELP](telp.md) (**E229** if not
+  syntactically one) resolved *statically* against the Field's type. When the type is a
+  `Struct`, each component MUST name a `Field` member of the current Struct — not a Select
+  variant — whose effective `repeatable` is false; non-final components MUST resolve to a
+  `Struct` and the final one to a `Scalar`, any of which MAY be optional (**E230** otherwise).
+  When the type is a `Scalar`, the only admissible path is the root path (`/`), denoting the
+  values themselves (**E228** otherwise). A secondary index implies **no** uniqueness; only
+  `key` does, and a `key` field needs no `index` — RaTEL indexes it automatically. The term
+  *secondary index* is used throughout for these declarations, to keep them distinct from the
+  *keyword index* of §20.2.
+
+In TELS (§20.5) the three are always written as child lines (`width 16`, `intern`,
+`index /country /city`); see the member-order discussion there.
+
 A `Struct` type MAY likewise carry a `validators` list. A struct validator inspects the entire
 struct element (its members' values), enabling cross-field constraints such as "postcode is
 required when country is UK". Multiple struct validators apply in AND-conjunction. Struct
@@ -2155,6 +2214,26 @@ A schema is invalid if any of the following holds:
   `patterns` list that is not contained in the inherited list under the rule of §20.3
   (`L(⋂new) ⊆ L(⋂old)`), or the containment was not provable within the implementation's
   documented resource budget (**E223**; fail closed)
+- a `ScalarDefinition`'s `width` is not a canonical positive decimal (`[1-9][0-9]*`) (**E225**)
+- during layer composition, a layer's same-name `ScalarDefinition` declares a `width` differing
+  from the merged ScalarDefinition's non-null `width`, or a `ScalarDefinition` of the composed
+  schema declares a `width` differing from the fixed width of the standard codec
+  ([Standard Codecs](codecs.md)) its `encoding` names (**E226**). Restating an equal width is a
+  benign no-op; removal has no syntax.
+- a `ScalarDefinition` of the composed schema has a non-null `width` but a null `encoding`
+  (**E227**; checked on the composed schema, since a later component may supply the encoding)
+- a `Field` declares one or more `index` children but, on the composed member, its effective
+  `repeatable` is `false`, or its type resolves to neither a `Struct` nor a `Scalar`, or it
+  resolves to a `Scalar` and some path is not the root path (**E228**)
+- an `index` path is not a syntactically valid TELP (§3 of the TELP Specification), or is the
+  root path on a Struct-typed `Field` (a Struct is not indexable; **E229**)
+- an `index` path on a Struct-typed `Field` does not resolve statically within the composed
+  type: a component matches no `Field` keyword of the current Struct, or matches a Select
+  variant keyword, or matches a member whose effective `repeatable` is `true`, or a non-final
+  component resolves to a non-`Struct`, or the final component does not resolve to a `Scalar`
+  (**E230**; checked on the composed schema)
+- a `ScalarDefinition` of the composed schema has both a non-null `width` and `intern`
+  (**E231**)
 
 #### Schema Errors (E2xx)
 
@@ -2184,6 +2263,13 @@ A schema is invalid if any of the following holds:
 | E222 | A `pattern` value is not a valid RE2 pattern (§21.8) | The offending `pattern` value |
 | E223 | A layer's replacing `patterns` set is not contained in the inherited set (`L(⋂new) ⊆ L(⋂old)` fails or is not provable within the implementation's documented budget; §20.3) | The layer's first `pattern` value |
 | E224 | Reserved. Formerly "a `ScalarDefinition` declares neither `validate` nor `pattern`", withdrawn: an unconstrained scalar is valid (§20) | — |
+| E225 | A `ScalarDefinition`'s `width` is not a canonical positive decimal `[1-9][0-9]*` | The `width` value |
+| E226 | A layer's same-name `scalar` declares a `width` differing from the merged non-null `width`, or a composed `ScalarDefinition`'s `width` differs from the fixed width of the standard codec its `encoding` names | The later `width` field (the layer's, when layer-introduced) |
+| E227 | A `ScalarDefinition` of the composed schema has a non-null `width` but a null `encoding` | The `width` field of the declaration that introduced it |
+| E228 | A `Field` declares `index` children but its composed effective `repeatable` is `false`, or its type resolves to neither a `Struct` nor a `Scalar`, or it is a `Scalar` and a path is not the root path | The `index` keyword of the field's first `index` child (the layer's, when layer-introduced) |
+| E229 | An `index` path is not a syntactically valid TELP, or is the root path on a Struct-typed field | The offending `path` value |
+| E230 | An `index` path does not resolve statically within the field's composed Struct type (unknown or variant keyword, repeatable member, non-Struct intermediate, or non-Scalar final component) | The offending `path` value |
+| E231 | A `ScalarDefinition` of the composed schema has both a non-null `width` and `intern` | The `intern` flag (or the `width` field, whichever was composed later) |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -2194,13 +2280,13 @@ by the schema.
 **Reference resolution.** Wherever this algorithm asks "is T a Struct?", "is T a Scalar?", etc.,
 the question is asked of the type T after **reference resolution**: if T is a `Reference(N)`, T
 is replaced by the `Struct` formed from the `members` of the matching `RecordDefinition`, or by
-the `Scalar` formed from the `validators`, `patterns`, and `encoding` of the matching
-`ScalarDefinition`. If
+the `Scalar` formed from the `validators`, `patterns`, `encoding`, `width` and `intern` of the
+matching `ScalarDefinition`. If
 `N` is one of
 the predefined built-in type names (§20.5), the Reference resolves directly to the built-in:
 `Flag` resolves to the `Flag` type, and `String`, `Identifier`, `Sigil`, and `TypeName` each
 resolve to a `Scalar` whose single validator is the corresponding built-in validator (§21.5)
-and whose `encoding` is null.
+and whose `encoding` is null, `width` null and `intern` false.
 A `Reference(N)` resolving to a `SelectDefinition` is **E217** (a sum cannot inhabit a
 single-typed position).
 
@@ -2415,6 +2501,12 @@ list is organised by the structural duality between records and selects.
   `validate K` lines at any such position are appended (in source order, deduplicated) to the
   base's `validators` list; validators apply in declaration order and AND-conjuncted (§21.1),
   so any layer-added validator runs *after* the base's validators.
+- **Add layout annotations** (§20, *Layout annotations*). A same-name `scalar` in a layer MAY
+  declare `width` when the base has none, or restate the base's (**E226** on conflict), and MAY
+  declare `intern`; a same-keyword `field` MAY add `index` children, which are appended to the
+  merged Field's `indexes` (an index whose path tuple is already present, by TELP path identity,
+  is a benign no-op). These operations change no type: the composed schema is the same type as
+  before them (§24.4), and only RaTEL reads them.
 
 The duality is: record-side adds members (extension; subtype-producing for products);
 select-side excludes variants (narrowing; subtype-producing for sums). Both refine the
@@ -2444,6 +2536,9 @@ detecting any of them MUST report the corresponding error:
   has no syntax; addition where the base has none is permitted.)
 - Change a `Field`'s `default`, or a `Field`'s declared `Type` to a structurally different
   type that is not a Struct-to-Struct refinement.
+- Change a `ScalarDefinition`'s non-null `width` (**E226**), or remove `width`, `intern` or an
+  `index` (no syntax — structurally prevented; `intern` merges as a monotone OR and `indexes`
+  append).
 
 #### Composed Schema Identity
 
@@ -2490,14 +2585,16 @@ sequence of atoms:
 - **Base head.** The base schema's `name` and `sigil` form its head atom, always first. Layers
   have no head: a layer's `name` is not an atom.
 - **`overlay` and `document` bodies.** Each `field`, `select` (SelectRef), and `validate` line is
-  one atom. A `field`'s `description` child is part of the field's atom.
+  one atom. A `field`'s `description` and `index` children are part of the field's atom, so a
+  layer that adds a secondary index to an existing field restates the field (`field K T` with
+  an `index` child) as one atom.
 - **`record N`.** Each `field`, `select`, `validate`, and `description` line is one atom at path
   `record N`. A `record N` with no children is itself one atom, so that a fresh, empty
   RecordDefinition is not lost.
 - **`scalar N`.** Each `validate` line is one atom; all `pattern` lines together are **one** atom
   (a replacement is decided by a single containment check, E223); the `encoding` line is one
-  atom; `description` is one atom. A `scalar N` with no children is itself one atom, so that a
-  fresh, unconstrained ScalarDefinition is not lost.
+  atom; `description` is one atom; `width` is one atom; `intern` is one atom. A `scalar N` with
+  no children is itself one atom, so that a fresh, unconstrained ScalarDefinition is not lost.
 - **`select N`.** All `variant` lines together are **one** atom (a variant set can only be
   introduced whole, E213; against an existing SelectDefinition it is a restatement, a no-op);
   each `exclude` and `validate` line is one atom; `description` is one atom.
@@ -2506,7 +2603,7 @@ The **canonical order** of a group's atoms is the order in which composition app
 mirroring *Composing Layers* below: the head (base only); then the atoms of each `record`, in
 source order of the records and, within a record, `description` first and then members and
 `validate` lines in source order; then the atoms of each `scalar` (`validate` lines in source
-order, the pattern set, `encoding`, `description`); then the atoms of each `select` (variant
+order, the pattern set, `encoding`, `description`, `width`, `intern`); then the atoms of each `select` (variant
 set, `exclude` lines, `validate` lines, `description`); then the `overlay` (or `document`) atoms
 in source order. An atom that occurs twice within one group is retained once.
 
@@ -2523,8 +2620,8 @@ canonical order and leaves atoms as they are. Two component sequences denote the
 schema** iff their expansions are equal. **Composition of a component sequence** applies `A(S)`
 from left to right, treating each atom as a layer containing exactly that atom under the merge
 algorithm below. The validity constraints of §20.1 that concern the composed schema as a whole
-(E205, E209, E210, E212, E217, E219–E221) are checked once on the final result, never
-after an individual component (*Layer Validity Constraints* below). E204 does not apply to
+(E205, E209, E210, E212, E217, E219–E221, E227, E228, E230, E231) are checked once on the final
+result, never after an individual component (*Layer Validity Constraints* below). E204 does not apply to
 atoms, which carry no name; an atom listed twice in a sequence applies once.
 
 **Equivalence.** For any valid group `G` with atoms `a₁ … aₖ` and any prefix `P`, composing
@@ -2565,7 +2662,9 @@ incorporates the layer's members into the base:
           `MergePolarity(M.repeatable, L.repeatable)`;
         - `key` = `M.key ∨ L.key` (monotone: a layer may set `key`, never clear it);
         - `default` = base's default (a layer may not change the default; see Forbidden
-          Operations).
+          Operations);
+        - `indexes` = `M.indexes` followed by each `Index` of `L.indexes` whose path tuple is
+          not already present (paths compared by TELP identity, §3 of the TELP Specification).
       - **Not found:** Append L as a new member at the end of the member list. Add W → (new
         index, L) to K. (Polarity merge does not apply: a freshly-introduced Field carries its
         declared polarity directly.)
@@ -2616,7 +2715,10 @@ both are non-null and equal, the restatement is a benign no-op; if both are non-
 different, the schema is invalid (**E218**). A layer-added `encoding` changes the BinTEL representation of the
 affected scalar's values; this is sound because a BinTEL document is always encoded and decoded
 under its full composed schema (identified by its signature, BinTEL §8), never under a prefix
-of the composition.
+of the composition. `width` merges as `encoding` does: null and null give null, one null adopts
+the other, equal values are a benign no-op, and different values are **E226**; `intern` merges
+as `base.intern ∨ layer.intern`. E227 and E231 are checked on the composed schema (*Layer
+Validity Constraints*), since the `encoding` a `width` needs may arrive from a later component.
 
 **`MergeSelect(base, layer): SelectDefinition`** merges a layer's SelectDefinition body into the
 base SelectDefinition:
@@ -2678,8 +2780,9 @@ The schema validity constraints, including those detected while a component is m
 the algorithms above define where in composition each is detected. The constraints that concern
 the composed schema as a whole — keyword collisions (**E205**), reference resolution (**E209**,
 **E217**), the Definition namespace (**E210**), non-empty required Selects (**E212**), and the
-key-field constraints (**E219**–**E221**) — are checked once after all components have been
-applied, never after an individual component: a
+key-field constraints (**E219**–**E221**), and the layout-annotation constraints that depend on
+the composed member or namespace (**E227**, **E228**, **E230**, **E231**) — are checked once
+after all components have been applied, never after an individual component: a
 component may both key a field and tighten its polarity, may reference a Definition that a later
 component introduces, or may add a required SelectRef to a Select that an earlier component
 emptied. Checking on the composed schema is also what makes a layer and its atoms
@@ -2699,6 +2802,15 @@ When a BinTEL document is to be carried in a text-oriented context, it MAY be en
 text using [BASE-256](base256.md), defined as a companion specification. The BASE-256 textual
 form is character-for-byte with the BinTEL byte sequence and is recovered losslessly by the BASE-256
 decoder.
+
+A third encoding of the semantic model, **RaTEL**, is defined in the companion
+[RaTEL Specification](ratel.md): a random-access layout for memory-mapped files, in which every
+struct type has a fixed-width row, instances form tables, and keyed and `index`-declared members
+have sorted indexes. RaTEL reuses the schema signature, the value hash and the self-contained
+schema carriage of BinTEL; the layout annotations of §20 (`width`, `intern`, `index`) are its
+inputs. Conversion among text TEL, BinTEL and RaTEL is lossless (§22.4, P5). The fixed-width
+codecs both binary encodings may rely on are pinned in the [Standard Codecs](codecs.md)
+specification.
 
 ### 20.5 TELS: the Schema of Schemas
 
@@ -2745,6 +2857,10 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
 | `pattern`       | One entry of `ScalarDefinition.patterns` — an RE2 pattern constraint (§21.8) matched against the entire value text. A `String`-typed repeatable member, permitted only inside a `scalar` body; multiple `pattern` lines AND-conjoin (intersection). Written as a compound child line (`pattern [A-Z]{2}-[0-9]{4}`, or with a source atom, §14, for patterns containing doubled spaces); because it follows the repeatable `validate` member it can never be filled by an inline atom. Invalid patterns are E222; layer replacement is containment-checked (E223, §20.3). |
 | `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is E308 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` and `pattern` members it can never be filled by an inline atom. |
+| `width`         | `ScalarDefinition.width` — a positive decimal byte count asserting that every value of the scalar encodes, under its `encoding`, to exactly that many bytes (§20, *Layout annotations*; E225–E227, E231). Read only by RaTEL. Permitted only inside a `scalar` body; written as a compound child line (`width 16`) — it follows the repeatable `validate` member, which the atom phase never skips, so it can never be filled by an inline atom. |
+| `intern`        | `ScalarDefinition.intern` — asks RaTEL to store the scalar's values once in its shared string table (§20; E231). A Flag, permitted only inside a `scalar` body, and for the same reason as `width` written only as a child line (`intern`): written inline, `scalar Name intern` declares a *validator* named `intern`, which fails at document validation as any unknown validator does (§21.4). |
+| `index`         | One `Field.indexes` entry — a secondary index for RaTEL over the occurrences of a repeatable field (§20, *Layout annotations*; E228–E230). Permitted only inside a `field` body, as a compound child whose inline atoms are the index's `path`s (`index /country /city`). It follows `default`, an optional Scalar, so it can never be filled inline; conversely `field foo String index` declares a default of `index` (see the corollary below). |
+| `path`          | `Index.paths[i]` — one TELP (§3 of the TELP Specification) of a secondary index, relative to an element of the enclosing field. Carried as the inline atoms of the `index` compound, or as explicit `path ‹telp›` child compounds. `/` is RECOMMENDED as the delimiter. |
 | `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E203 otherwise). |
 | `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
 | `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E216 otherwise). |
@@ -2767,7 +2883,8 @@ not against the schema-language vocabulary.
 required Scalars; `type` carries a `TypeName`), then the five flags (`optional`, `required`,
 `repeatable`, `irrepeatable`, `key`), then `default` (optional Scalar), then `description`
 (a second optional Scalar which, being a non-first non-required Scalar, is always written as a
-compound child per §20.8). The atom-phase
+compound child per §20.8), then `index` (optional, repeatable, Struct-typed, so likewise only
+ever a compound child). The atom-phase
 rules of §20.2 / §20.8 let a typical field declaration fit a single line: the first atom is the
 keyword, the second atom is the type-name, each subsequent flag-matching atom toggles its flag,
 and any remaining non-flag atom fills `default`. For example,
@@ -2815,10 +2932,19 @@ introduces a non-required SelectRef referencing the `Status` SelectDefinition.
 
 Member order in `Scalar` (the TELS record for `scalar` declarations) is `name`,
 `validate` (optional, repeatable), `pattern` (optional, repeatable), `encoding` (optional),
-`description` (optional). Only `name` and `validate` are
-inline-atom-fillable; `pattern`, `encoding`, and `description` are always compound children —
-which also keeps regex text clear of the phrase-separation rules of §10.3 (a pattern containing
-a hard-space run uses a source atom, §14).
+`description` (optional), `width` (optional), `intern` (optional Flag). Only `name` and
+`validate` are inline-atom-fillable; `pattern`, `encoding`, `description`, `width` and `intern`
+are always compound children — which also keeps regex text clear of the phrase-separation rules
+of §10.3 (a pattern containing a hard-space run uses a source atom, §14). The `Index` record has
+the single member `path` (required, repeatable), filled by the `index` compound's inline atoms.
+
+**Appending keeps signatures stable.** `width`, `intern` and `index` were added in revision
+2.1.0 of `tels` at the *end* of their records, and `Index` is a new Definition. A BinTEL encoding
+emits only the keyword indices of members actually present (§5 and §7.2 of the BinTEL
+Specification), so every schema document that uses none of the new vocabulary encodes
+byte-identically under 2.0.0 and 2.1.0, and every existing schema signature — including that of
+the `acceptance` schema (§8.4 of the BinTEL Specification) — is unchanged. Only the value hash
+of `tels` itself moves. Any future addition to TELS MUST follow the same discipline.
 
 **References.** A `Field.type`, `Variant.type`, or `SelectRef.reference` resolves through the
 composed namespace described above. If the name is `Flag`, `String`, `Identifier`, `Sigil`, or
@@ -2845,10 +2971,10 @@ The pinned value, computed against the canonical
 
 | Form       | Value                                                                |
 | ---------- | -------------------------------------------------------------------- |
-| BLAKE3-256 | `d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3`   |
-| BASE-256   | `ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ`                                  |
+| BLAKE3-256 | `5fe9b009b90872af76f39b273773a85f2f21999d56a91785257deb8a7f6c9ae6`   |
+| BASE-256   | `şῩưȉιȈrίvỳқȧ7sƨşįḡẙƝVΩЗẅĥṽӫΊſlҚæ`                                  |
 
-The BinTEL document root encoding of `tels.tel` is 1741 bytes; the raw bytes are recorded
+The BinTEL document root encoding of `tels.tel` is 1939 bytes; the raw bytes are recorded
 in [`demo/tels.bintel.hex`](../demo/tels.bintel.hex) and the hash in
 [`demo/tels.hash`](../demo/tels.hash). The same value is pinned in §3 of the BinTEL
 Specification.
@@ -2904,7 +3030,9 @@ fields of the `Schema` model:
    order; for each `pattern` child, append its text to `ScalarDefinition.patterns`, in source
    order (§21.8); set `ScalarDefinition.encoding` from the optional `encoding` child's text, or
    `null` if absent; set `ScalarDefinition.description` from the optional `description` child's
-   text, or `null` if absent.
+   text, or `null` if absent; set `ScalarDefinition.width` from the optional `width` child's
+   text parsed as a canonical positive decimal (**E225** otherwise), or `null` if absent; set
+   `ScalarDefinition.intern` to `true` iff an `intern` child is present.
 4. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
    (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
    append a `Variant` to `SelectDefinition.variants` per step 5; for each `validate` child,
@@ -2940,6 +3068,9 @@ fields of the `Schema` model:
      absent.
    - The optional `description` Scalar child → `Field.description` (a string), or `null` if
      absent.
+   - Each `index` child → one `Index` appended to `Field.indexes`, its `paths` being the
+     child's inline atoms (or explicit `path` children) in order, each checked to be a
+     syntactically valid TELP (**E229**).
 
    Within a `SelectRef`:
    - The four loosen/tighten Flag children compute `SelectRef.required` and
@@ -3330,12 +3461,22 @@ exactly two effects:
   invalid (**E312**). A valid value is therefore *valid by construction of its binary
   representation*: the encoder is total on valid values, while the decoder is partial.
 
-Codec names are kebab-case identifiers in the shared helper namespace of §21.1. Every codec is
-application-defined; this specification defines only the interface, the laws, and the binding
-mechanism. `tels` itself declares no encodings. Two names are defined by a companion
-specification: `base-256` and `schema-signature`, the codecs of the `acceptance` schema (§8.4
-of the BinTEL Specification), which an implementation supporting acceptances MUST bind with
-the behaviour defined there.
+Codec names are kebab-case identifiers in the shared helper namespace of §21.1. This
+specification defines only the interface, the laws, and the binding mechanism, and `tels` itself
+declares no encodings. Two companion documents pin codecs by name: the
+[Standard Codecs Specification](codecs.md) defines a registry of fixed-width, order-preserving
+codecs (`u8`–`u64`, `i8`–`i64`, `f64`, `uuid`, `blake3-256`), which an implementation that binds
+any of those names MUST bind with the behaviour defined there, SHOULD bind in full, and a RaTEL
+implementation MUST bind in full; and §8.4 of the BinTEL Specification defines `base-256` and
+`schema-signature`, the codecs of the `acceptance` schema, which an implementation supporting
+acceptances MUST bind. Every other codec is application-defined.
+
+A `ScalarDefinition` MAY additionally declare a `width` (§20, *Layout annotations*): an assertion
+that the codec's bytes for every accepted text have exactly that length. It is a statement about
+the codec, not a constraint on documents — validation never consults it — and a value whose bytes
+have another length is a configuration failure of a RaTEL writer, which MUST refuse to encode
+(§6.1 of the RaTEL Specification), exactly as an unresolved encoding is a configuration failure
+of a BinTEL encoder (below).
 
 #### Codec Interface
 
@@ -3922,7 +4063,18 @@ additionally requires law C4 of §21.7 — two implementations binding the same 
 the same schema MUST bind codecs with identical text-to-byte mappings, or their value hashes
 diverge. Under C1–C4 the value hash remains a function of the semantic model and schema alone.
 
-A conforming implementation that fails any of P1–P4 is non-conforming. A test suite for a TEL
+**P5. RaTEL losslessness.** For every well-typed semantic model M, schema S and codec binding B
+as in P2, and every conforming RaTEL writer,
+
+```
+ratel-materialise(ratel-encode(M, S, B), B)  ≡  M
+```
+
+(§8 and §12 of the RaTEL Specification). RaTEL bytes are *not* deterministic — two conforming
+writers may lay the same model out differently — so no analogue of P3/P4 holds for them; a RaTEL
+document's identity is the value hash of its BinTEL encoding, which P5 makes well defined.
+
+A conforming implementation that fails any of P1–P5 is non-conforming. A test suite for a TEL
 implementation SHOULD include cases that exercise each property over a representative set of
 documents (including pathological cases: multi-line scalar values requiring source/literal
 form, repeatable Fields with multiple atoms, layered schemas, exclude operations, Reference
@@ -4255,6 +4407,9 @@ assumption set of Definition-name pairs and terminates.
 - **`key` is tightenable.** Going from un-keyed to keyed is the subtype direction: marking
   a field as key only adds constraints (E221 at schema level, E314 at instance level), so
   every element valid under the keyed type is valid under the un-keyed one.
+- **Layout annotations are not premises.** `width`, `intern` and `indexes` (§20, *Layout
+  annotations*), like `description` and `default`, constrain no document and appear in no rule:
+  two types differing only in them are each a subtype of the other.
 
 On recursive Definitions, [Sub-Ref-L] and [Sub-Ref-R] unfold references without bound; the
 relation is interpreted **coinductively** (equivalently, with an assumption set of pairs of
@@ -4318,6 +4473,8 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
     premise), the type is a subtype. This is the one layer operation whose
     subtype-productivity rests on a semantic decision rather than a syntactic discipline;
     RE2's decidable containment (§21.8) is what makes it sound to admit.
+11. **Add a layout annotation** (`width`, `intern`, `index`) — no premise of any rule mentions
+    them, so `D_1` and `D_0` are the same type and `D_1 <: D_0` by [Sub-Refl].
 
 §20.3 forbids the supertype-producing operations: removing a Field, adding a variant to
 an existing Select, loosening `required` from true to false (E214), loosening
@@ -4468,7 +4625,7 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E224** (schema;
+taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E231** (schema;
 E224 is reserved, §20.1),
 and **E301–E315** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
@@ -4477,4 +4634,6 @@ including TEL documents shown with their presentation model, semantic model, and
 sequence — are recorded in [`demo/`](../demo/). Round-trip properties (P1–P4) are stated in §22.4.
 Concurrent-edit composition is stated in §22.5. Schema compatibility is defined by the subtype
 relation of §24 and decided on signatures per §8.2. Addressing elements of the semantic model
-by textual path is defined by the companion [TELP Specification](telp.md).
+by textual path is defined by the companion [TELP Specification](telp.md); the random-access
+encoding and its layout annotations by the companion [RaTEL Specification](ratel.md); and the
+standard fixed-width codecs by the companion [Standard Codecs Specification](codecs.md).

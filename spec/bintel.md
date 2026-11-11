@@ -12,6 +12,11 @@ transmission, and schema identification. It also defines the **acceptance** (§8
 document by which a reader tells a writer which composed schemas it can consume, so that peers
 whose schema libraries differ can agree on a composition without a transport-specific handshake.
 
+BinTEL is one of two binary encodings of the semantic model. The other, defined in the companion
+[RaTEL Specification](ratel.md), lays the same model out for random access from memory-mapped
+files; it reuses the value hash, the schema signature and the self-contained schema carriage
+defined here, and differs only in physical layout, so the two convert losslessly.
+
 A BinTEL document is defined here as a byte sequence. Where a text-oriented carrier is required —
 embedding in a TEL document, transmission over a textual channel, display, or copy-and-paste — a
 BinTEL byte sequence MAY be encoded as Unicode text using BASE-256 (see
@@ -68,11 +73,11 @@ The value hash of [`tels.tel`](../tels.tel) — the schema-for-schemas defined i
 of the TEL Specification — is:
 
 ```
-BLAKE3-256: d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3
-BASE-256:   ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ
+BLAKE3-256: 5fe9b009b90872af76f39b273773a85f2f21999d56a91785257deb8a7f6c9ae6
+BASE-256:   şῩưȉιȈrίvỳқȧ7sƨşįḡẙƝVΩЗẅĥṽӫΊſlҚæ
 ```
 
-A conforming implementation that encodes the canonical `tels.tel` (1741 BinTEL bytes; raw
+A conforming implementation that encodes the canonical `tels.tel` (1939 BinTEL bytes; raw
 bytes recorded in [`demo/tels.bintel.hex`](../demo/tels.bintel.hex)) and hashes the
 resulting document-root encoding MUST produce this value byte-for-byte. The same value appears
 in §20.5 of the TEL Specification; the two specifications are pinned to this single vector.
@@ -247,7 +252,11 @@ A BinTEL document in self-contained mode consists of the following fields in ord
 
    The embedded schema body is governed by `tels`, which declares no encodings; decoding
    the embedded body therefore never requires a codec binding, and the bootstrap of §7.8 is
-   unaffected by codecs. Only the document root (field 5) may contain encoded scalars, governed
+   unaffected by codecs. The body is decoded under the receiver's `tels` axiom, so a receiver
+   whose axiom predates a vocabulary addition — the `width`, `intern` and `index` members of
+   `tels` 2.1.0 (§20.5 of the TEL Specification) — cannot decode a body that uses it (B12 at
+   the unknown keyword index), while a body that uses none of it decodes identically under
+   either revision. Only the document root (field 5) may contain encoded scalars, governed
    by the schema the body defines.
 5. **Document root**: encoded using the node encoding (§7.1), under the composed schema
    obtained from field 4. The bytes are identical to those of §6.1 field 4 for the same
@@ -349,7 +358,10 @@ encoded.
 
 The framing of the two forms is identical — a varint byte length followed by exactly that many
 value bytes — so a value's extent in the stream is always determined by the length prefix
-alone, without consulting any codec; only the interpretation of the value bytes differs. An
+alone, without consulting any codec; only the interpretation of the value bytes differs. The
+storage-layout annotations a schema may carry — `width`, `intern` and `index` (§20 of the TEL
+Specification) — have no effect on BinTEL: a `width` scalar is length-prefixed like any other,
+and nothing is interned or indexed. They are read by RaTEL alone. An
 encoder MUST be configured with a codec binding (TEL §21.7) resolving every encoding named by
 the composed schema; if any name is unresolved, or any value is rejected by its codec's encoder
 (the E312 condition — the document is invalid), the encoder MUST fail without emitting a
