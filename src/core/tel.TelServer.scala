@@ -21,7 +21,7 @@ import executives.completionsExecutive
 import interpreters.posixInterpreter
 import parsing.trackPositions
 import probates.awaitProbate
-import threading.virtualThreading
+import threads.virtualThreads
 import systems.javaBaseSystem
 import pathInterfaces.pathOnLinux
 // `Pathname` resolves a command-line path argument against the *invoking shell's* directory, not the
@@ -181,8 +181,10 @@ object TelServer:
         Pragma(index, false, Unset, Nil, Unset, '#')
 
   // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? The meta-schema's
-  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.0.0`;
-  // Stratiform's `Reference.isTels` accepts the coordinate with or without its version pin.
+  // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.1.0`;
+  // Stratiform's `Reference.isTels` matches the module alone, with or without — and whatever — its
+  // version pin, so `:2.1.0` resolves to `Tels.Axiom.tels` even while Stratiform's own
+  // `Reference.tels` still names `:2.0.0`.
   private[tel] def namesTels(identifier: Text): Boolean =
     Tel.Pragma.Reference.parse(identifier).lay(false)(_.isTels)
 
@@ -543,7 +545,7 @@ object TelServer:
   private def structOf(fieldType: Tels.Type, schema: Tels): Optional[Tels.Struct] =
     fieldType match
       case struct: Tels.Struct  => struct
-      case Tels.Reference(name) => schema.records.readable.find(_.name == name) match
+      case Tels.Reference(name) => schema.records.stdlib.find(_.name == name) match
         case Some(record) => Tels.Struct(record.members, record.validators)
         case None         => Unset
       case _ => Unset
@@ -552,11 +554,11 @@ object TelServer:
   // a `select` reference is flattened so its variants appear as sibling keywords — the variant
   // type of a matching variant of a referenced select.
   private def memberType(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Type] =
-    struct.members.readable.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
+    struct.members.stdlib.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
     . orElse:
-        struct.members.readable.to(scala.List).collect { case ref: Tels.SelectRef => ref }
-        . flatMap(ref => schema.selects.readable.find(_.name == ref.reference).to(scala.List))
-        . flatMap(_.variants.readable.to(scala.List))
+        struct.members.stdlib.toList.collect { case ref: Tels.SelectRef => ref }
+        . flatMap(ref => schema.selects.stdlib.find(_.name == ref.reference).to(scala.List))
+        . flatMap(_.variants.stdlib.toList)
         . collectFirst { case variant if variant.keyword == keyword => variant.variantType }
     . getOrElse(Unset)
 
@@ -581,10 +583,10 @@ object TelServer:
       // scalar accepts — the codec's encoder and each pattern are further validity constraints —
       // so they belong in the label beside the validators.
       case Tels.Scalar(validators, encoding, patterns) =>
-        val base = if validators.length == 0 then t"scalar" else validators.readable.to(List).join(t"+")
+        val base = if validators.length == 0 then t"scalar" else validators.to[List].join(t"+")
         val constrained =
           if patterns.length == 0 then base
-          else t"$base ~ ${patterns.readable.to(List).map(pattern => t"/$pattern/").join(t" ")}"
+          else t"$base ~ ${patterns.to[List].map(pattern => t"/$pattern/").join(t" ")}"
 
         encoding.let(codec => t"$constrained [$codec]").or(constrained)
 
@@ -615,13 +617,13 @@ object TelServer:
 
   // Hover markup for the member `keyword` of `struct` (a `field`, or a `select` variant).
   private def fieldMarkup(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Text] =
-    val markup = struct.members.readable.to(List).flatMap:
+    val markup = struct.members.to[List].flatMap:
       case field: Tels.Field if field.keyword == keyword =>
         List(fieldMarkdown(field, schema))
 
       case reference: Tels.SelectRef =>
-        schema.selects.readable.find(_.name == reference.reference).toList
-        . flatMap(_.variants.readable.to(scala.List)).filter(_.keyword == keyword)
+        schema.selects.stdlib.find(_.name == reference.reference).toList
+        . flatMap(_.variants.stdlib.toList).filter(_.keyword == keyword)
         . map(variantMarkdown(_, reference.reference, schema)).to(List)
 
       case _ =>
@@ -680,21 +682,21 @@ object TelServer:
 
     memberType match
       case Tels.Reference(name) =>
-        schema.selects.readable.find(_.name == name) match
+        schema.selects.stdlib.find(_.name == name) match
           case Some(select) =>
-            select.variants.readable.to(scala.List).find(_.keyword == atom) match
+            select.variants.stdlib.toList.find(_.keyword == atom) match
               case Some(variant) => variantMarkdown(variant, name, schema)
               case None =>
-                val names = select.variants.readable.to(List).map: (variant: Tels.Variant) =>
+                val names = select.variants.to[List].map: (variant: Tels.Variant) =>
                   t"`${variant.keyword}`"
 
                 t"**$keyword** value — one of ${names.join(t", ")}"
 
-          case None => schema.scalars.readable.find(_.name == name) match
+          case None => schema.scalars.stdlib.find(_.name == name) match
             case Some(scalar) =>
               scalarValueMarkup
-                ( keyword, name, scalar.validators.readable.to(List), default,
-                  scalar.description, scalar.encoding, scalar.patterns.readable.to(List) )
+                ( keyword, name, scalar.validators.to[List], default,
+                  scalar.description, scalar.encoding, scalar.patterns.to[List] )
 
             case None => builtinScalars.stdlib.find(_(0) == name) match
               case Some((_, validator)) =>
@@ -707,8 +709,8 @@ object TelServer:
 
       case Tels.Scalar(validators, encoding, patterns) =>
         scalarValueMarkup
-          ( keyword, Unset, validators.readable.to(List), default, Unset, encoding,
-            patterns.readable.to(List) )
+          ( keyword, Unset, validators.to[List], default, Unset, encoding,
+            patterns.to[List] )
 
       case struct: Tels.Struct =>
         fieldMarkup(struct, atom, schema)
@@ -735,7 +737,7 @@ object TelServer:
       case _                                     => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
-    struct.members.readable.to(List).flatMap:
+    struct.members.to[List].flatMap:
       case field: Tels.Field =>
         List
           ( Lsp.CompletionItem
@@ -746,8 +748,8 @@ object TelServer:
                 insertText    = keywordInsertText(field.keyword, field.fieldType) ) )
 
       case reference: Tels.SelectRef =>
-        schema.selects.readable.find(_.name == reference.reference).toList
-        . flatMap(_.variants.readable.to(scala.List)).map: variant =>
+        schema.selects.stdlib.find(_.name == reference.reference).toList
+        . flatMap(_.variants.stdlib.toList).map: variant =>
             Lsp.CompletionItem
               ( label         = variant.keyword,
                 kind          = Lsp.CompletionItemKind.EnumMember,
@@ -804,12 +806,12 @@ object TelServer:
   private def atomCompletions(atomType: Tels.Type, schema: Tels): List[Lsp.CompletionItem] =
     atomType match
       case Tels.Reference(name) if schema.selects.exists(_.name == name) =>
-        schema.selects.readable.find(_.name == name).map(_.variants.readable.to(List)).getOrElse(Nil)
+        schema.selects.stdlib.find(_.name == name).map(_.variants.to[List]).getOrElse(Nil)
         . map(variantCompletion(_, name))
 
       case other => structOf(other, schema) match
         case struct: Tels.Struct =>
-          struct.members.readable.to(List).flatMap:
+          struct.members.to[List].flatMap:
             case field: Tels.Field => field.fieldType match
               case Tels.Flag =>
                 List(Lsp.CompletionItem
@@ -822,8 +824,8 @@ object TelServer:
               case _ => Nil
 
             case reference: Tels.SelectRef =>
-              schema.selects.readable.find(_.name == reference.reference).toList
-              . flatMap(_.variants.readable.to(scala.List))
+              schema.selects.stdlib.find(_.name == reference.reference).toList
+              . flatMap(_.variants.stdlib.toList)
               . filter: variant =>
                   variant.variantType match
                     case Tels.Flag => true
@@ -872,7 +874,7 @@ object TelServer:
         val present = tokens(content).stdlib.map((token, _, _) => token.tt)
 
         memberStruct(struct, keyword, schema).lay(Nil): member =>
-          member.members.readable.to(List).flatMap:
+          member.members.to[List].flatMap:
             case field: Tels.Field if !present.contains(field.keyword) => field.fieldType match
               case Tels.Flag =>
                 List(Lsp.CompletionItem
@@ -1255,7 +1257,7 @@ object TelServer:
 
     case (Tel.Element.Node(i, _, as), Tel.Element.Node(j, _, bs)) =>
       i == j && as.length == bs.length
-      && as.readable.to(scala.List).zip(bs.readable.to(scala.List)).forall(sameModel(_, _))
+      && as.stdlib.toList.zip(bs.stdlib.toList).forall(sameModel(_, _))
 
     case _ => false
 
@@ -1272,10 +1274,10 @@ object TelServer:
   private def resolvedType(fieldType: Tels.Type, schema: Tels): Optional[Tels.Type] =
     fieldType match
       case Tels.Reference(name) =>
-        schema.records.readable.find(_.name == name)
+        schema.records.stdlib.find(_.name == name)
         . map(record => Tels.Struct(record.members, record.validators): Tels.Type)
         . orElse:
-            schema.scalars.readable.find(_.name == name)
+            schema.scalars.stdlib.find(_.name == name)
             . map: definition =>
                 val scalar: Tels.Type =
                   Tels.Scalar(definition.validators, definition.encoding, definition.patterns)
@@ -1286,7 +1288,7 @@ object TelServer:
       case other => other
 
   private def expansionOf(struct: Tels.Struct, atoms: List[Text], schema: Tels): Optional[Text] =
-    val members = struct.members.readable.to(scala.List).toVector
+    val members = struct.members.stdlib.toList.toVector
 
     def resolved(fieldType: Tels.Type): Optional[Tels.Type] = resolvedType(fieldType, schema)
 
@@ -1301,8 +1303,8 @@ object TelServer:
       case _: Tels.Exclude      => false
 
     def variantsOf(select: Tels.SelectRef): scala.List[Tels.Variant] =
-      schema.selects.readable.find(_.name == select.reference)
-      . map(_.variants.readable.to(scala.List)).getOrElse(scala.Nil)
+      schema.selects.stdlib.find(_.name == select.reference)
+      . map(_.variants.stdlib.toList).getOrElse(scala.Nil)
 
     def atomAssignable(member: Tels.Member): Boolean = member match
       case field: Tels.Field => resolved(field.fieldType) match
@@ -1544,7 +1546,7 @@ object TelServer:
     documentSchema(lines, resolver) match
       case schema: Tels => enclosing(tree, position, schema) match
         case Slot(struct, node) =>
-          val default = struct.members.readable.collectFirst:
+          val default = struct.members.stdlib.collectFirst:
             case field: Tels.Field if field.keyword == node.keyword => field.default
           . getOrElse(Unset)
 
@@ -1723,10 +1725,10 @@ object TelServer:
   private def schemaKind(schema: Tels, path: List[Text], keyword: Text): Lsp.SymbolKind =
     structAt(schema, path) match
       case struct: Tels.Struct =>
-        val isVariant = struct.members.readable.to(scala.List).exists:
+        val isVariant = struct.members.stdlib.toList.exists:
           case reference: Tels.SelectRef =>
-            schema.selects.readable.find(_.name == reference.reference)
-            . exists(_.variants.readable.exists(_.keyword == keyword))
+            schema.selects.stdlib.find(_.name == reference.reference)
+            . exists(_.variants.exists(_.keyword == keyword))
           case _ => false
 
         if isVariant then Lsp.SymbolKind.EnumMember
@@ -1735,8 +1737,8 @@ object TelServer:
           case Tels.Scalar(_, _, _) => Lsp.SymbolKind.String
           case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
           case Tels.Reference(name) =>
-            if schema.records.readable.exists(_.name == name) then Lsp.SymbolKind.Object
-            else if schema.selects.readable.exists(_.name == name) then Lsp.SymbolKind.Enum
+            if schema.records.exists(_.name == name) then Lsp.SymbolKind.Object
+            else if schema.selects.exists(_.name == name) then Lsp.SymbolKind.Enum
             else Lsp.SymbolKind.String
 
           case _ => Lsp.SymbolKind.Field
@@ -2100,7 +2102,7 @@ object TelServer:
     logSubscribers.synchronized(logSubscribers.add(spool))
     try
       Out.println(t"Streaming messages sent/received by the tel language server. Press Ctrl-C to stop.")
-      spool.chain.stdlib.iterator.each: message =>
+      spool.chain.each: message =>
         Out.println(message)
     // Deliberately a `catch`, not a `recover`: `InterruptedException` is the JVM's thread-interrupt
     // signal (Ctrl-C, here), not a `Tactic` obligation, so there is nothing for a statically-checked
@@ -2248,14 +2250,24 @@ object TelServer:
           val registry: Registry = safely(SchemaCache.directory)
           val resolver = PragmaResolver(registry)
 
-          // The server loop runs under `supervise`, whose `Async.Error` is the one obligation this
-          // file does not discharge locally. It is handled here rather than by a blanket
+          // The server loop runs under `supervise`, whose `Async.Error` — with the transport's
+          // `Framing.Error` (a malformed JSON-RPC frame) and `Truncation.Error` (a standard stream
+          // cut short), which `Lsp.listen` reports rather than throws — are the obligations this
+          // file does not discharge locally. They are handled here rather than by a blanket
           // `throwUnsafely` so that every other raising call in this file stays statically checked.
           // The report goes to `Err`: stdout is the LSP transport, and writing to it would corrupt
           // the message stream.
           recover:
             case error: Async.Error =>
               Err.println(t"tel: the language server terminated abnormally: ${error.message.text}")
+              ServerFailed
+
+            case error: Framing.Error =>
+              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
+              ServerFailed
+
+            case error: Truncation.Error =>
+              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
               ServerFailed
 
           . protect:
@@ -2348,7 +2360,7 @@ object TelServer:
 
           case _ =>
             // No schema named yet: the cursor is on the name operand, so suggest the registry.
-            rest.prim.let(_.select(entries))
+            rest.head.let(_.select(entries))
             execute(usage(t"tel schema signature <name> [layer…]"))
 
       case ValidateCommand() :: rest =>

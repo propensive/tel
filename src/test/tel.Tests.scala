@@ -15,7 +15,7 @@ import codepages.utf8Codepage
 object Tests extends Suite(m"TEL LSP server tests"):
 
   // A small contact schema, registered under `contact.tel` in the temporary registry.
-  val schemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+  val schemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name contact
 
@@ -47,7 +47,7 @@ document
 
   // A schema whose repeatable `pet` member is typed by a record with a `key` field (§20), so that
   // sibling pets must have distinct names (§21.6, E314).
-  val keyedSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+  val keyedSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name keyed
 
@@ -65,7 +65,7 @@ document
 
   // A schema whose record leads with a required Flag, so a flag atom's positional and keyword
   // bindings coincide — the meaning-preserving case for the inline/expand code actions.
-  val flagsSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+  val flagsSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name flags
 
@@ -79,7 +79,7 @@ document
 
   // A schema with an optional layer (§8.1): a document opts into `extras` with `+extras` in its
   // pragma; without it, only the base schema's members are admissible.
-  val themedSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+  val themedSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name themed
 
@@ -99,7 +99,7 @@ layer
 
   // A schema whose scalar carries a `pattern` constraint (§21.8), so a value that does not match
   // it is E315.
-  val patternSchemaText: Text = """tel 1.0 specification.tel/tels:2.0.0
+  val patternSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name coded
 
@@ -215,7 +215,7 @@ field looks-like-a-compound
           case _                                  => false
 
       test(m"A tel-schema pragma resolves to the meta-schema"):
-        resolver(t"specification.tel/tels:2.0.0")
+        resolver(t"specification.tel/tels:2.1.0")
       . assert:
           case TelServer.Resolution.Meta(_, _) => true
           case _                               => false
@@ -248,7 +248,7 @@ field looks-like-a-compound
       // declaring one is simply valid — this used to raise a spurious E306 downgraded to a warning.
       test(m"A scalar `encoding` declaration is accepted"):
         val encodingSchema = List
-          ( t"tel 1.0 specification.tel/tels:2.0.0", t"", t"name enc", t"",
+          ( t"tel 1.0 specification.tel/tels:2.1.0", t"", t"name enc", t"",
             t"scalar Code", t"  validate string", t"  encoding hex-bytes", t"",
             t"document", t"  field code Code" )
         . join(t"\n")
@@ -276,7 +276,7 @@ field looks-like-a-compound
 
       test(m"A duplicate definition (E210) is located on the second declaration"):
         val duplicated = List
-          ( t"tel 1.0 specification.tel/tels:2.0.0", t"", t"name dup", t"",
+          ( t"tel 1.0 specification.tel/tels:2.1.0", t"", t"name dup", t"",
             t"record Foo", t"  field a String", t"", t"record Foo", t"  field b String", t"",
             t"document", t"  field foo Foo optional" )
         . join(t"\n")
@@ -309,7 +309,7 @@ field looks-like-a-compound
 
       // E224 was withdrawn: a scalar with no constraint is valid (§20).
       test(m"An unconstrained scalar declaration is valid"):
-        val text = t"tel 1.0 specification.tel/tels:2.0.0\n\nname loose\n\nscalar Loose\n\ndocument\n  field x Loose\n"
+        val text = t"tel 1.0 specification.tel/tels:2.1.0\n\nname loose\n\nscalar Loose\n\ndocument\n  field x Loose\n"
         TelServer.diagnose(text, resolver).stdlib.length
       . assert(_ == 0)
 
@@ -574,7 +574,7 @@ field looks-like-a-compound
       . assert(_ == scala.List("✓ pets.tel: no problems found"))
 
     suite(m"Schema coherence"):
-      def schemaDoc(body: Text): Text = t"tel 1.0 specification.tel/tels:2.0.0\n\n$body"
+      def schemaDoc(body: Text): Text = t"tel 1.0 specification.tel/tels:2.1.0\n\n$body"
 
       test(m"An unresolved type reference is E209, located on the TypeName atom"):
         val text = schemaDoc(t"name x\n\ndocument\n  field foo Widget\n")
@@ -625,7 +625,7 @@ field looks-like-a-compound
           case _                                          => false
 
       test(m"The pinned tels coordinate resolves to the meta-schema"):
-        resolver(t"specification.tel/tels:2.0.0")
+        resolver(t"specification.tel/tels:2.1.0")
       . assert:
           case TelServer.Resolution.Meta(_, _) => true
           case _                               => false
@@ -739,7 +739,7 @@ field looks-like-a-compound
 
       test(m"Hovering a built-in validator name shows its blurb"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nscalar Foo\n  validate identifier\n"
+          t"tel 1.0 specification.tel/tels:2.1.0\nname x\nscalar Foo\n  validate identifier\n"
 
         TelServer.hoverAt(schemaDocument, Lsp.Position(3, 12), resolver)
       . assert(_.let(_.contents.value.s.contains("built-in validator")).or(false))
@@ -761,7 +761,7 @@ field looks-like-a-compound
 
       test(m"A member declaration in a schema document completes its flags"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nrecord Foo\n  field name Identifier \n"
+          t"tel 1.0 specification.tel/tels:2.1.0\nname x\nrecord Foo\n  field name Identifier \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 24), resolver)
         . items.stdlib.map(_.label)
@@ -771,7 +771,7 @@ field looks-like-a-compound
 
       test(m"A validate line completes the built-in validators"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nscalar Foo\n  validate \n"
+          t"tel 1.0 specification.tel/tels:2.1.0\nname x\nscalar Foo\n  validate \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(3, 11), resolver)
         . items.stdlib.map(_.label)
@@ -779,7 +779,7 @@ field looks-like-a-compound
 
       test(m"The type-name slot in a schema document offers definitions and built-ins"):
         val schemaDocument =
-          t"tel 1.0 specification.tel/tels:2.0.0\nname x\nrecord Foo\ndocument\n  field a \n"
+          t"tel 1.0 specification.tel/tels:2.1.0\nname x\nrecord Foo\ndocument\n  field a \n"
 
         TelServer.completions(schemaDocument, Lsp.Position(4, 10), resolver)
         . items.stdlib.map(_.label)

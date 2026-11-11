@@ -1,10 +1,10 @@
 tel 1.0
 
-# Flair checks tel's Scala sources: everything under src/, against Consequent Style. `make check`
+# Flare checks tel's Scala sources: everything under src/, against Consequent Style. `make check`
 # runs the profile; CI does not, since findings are warnings and the count is not yet zero.
 #
 # NOTE: no `header` rule. fume and flame begin every source file with the licence banner in
-# etc/header.txt and have flair enforce it; tel's sources carry no headers yet, so enabling the
+# etc/header.txt and have flare enforce it; tel's sources carry no headers yet, so enabling the
 # rule would flag every file. Add etc/header.txt and the `header` line together when the banners
 # are written.
 
@@ -22,7 +22,7 @@ rule imperative
 profile default
   source src/**/*.scala
 
-  # The `-language` features the build compiles with, so flair parses the sources exactly as the
+  # The `-language` features the build compiles with, so flare parses the sources exactly as the
   # build does. Kept in step with `settings.scalaOptions` in build.mill.
   language implicitConversions
   language experimental.modularity

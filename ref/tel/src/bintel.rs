@@ -1409,10 +1409,10 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
@@ -1449,10 +1449,10 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()] }),
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()] }),
                     default: Some("anon".to_string()),
                 })],
                 validators: vec![],
@@ -1474,10 +1474,10 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
             },
@@ -1516,7 +1516,7 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Loose, repeatable: Polarity::Default,
                     keyword: "ok".to_string(),
                     r#type: crate::Type::Flag, default: None,
@@ -1547,20 +1547,20 @@ mod tests {
         let schema = crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "person".to_string(),
                     r#type: crate::Type::Struct(crate::Struct {
                         members: vec![
-                            crate::Member::Field(crate::Field { key: false, description: None,
+                            crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "first".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                             }),
-                            crate::Member::Field(crate::Field { key: false, description: None,
+                            crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                                 required: Polarity::Default, repeatable: Polarity::Default,
                                 keyword: "last".to_string(),
-                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
+                                r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(), validators: vec!["string".to_string()]}), default: None,
                             }),
                         ],
                         validators: vec![],
@@ -1647,10 +1647,10 @@ mod tests {
         crate::Schema {
             name: "demo".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "name".to_string(),
-                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, patterns: Vec::new(),
+                    r#type: crate::Type::Scalar(crate::Scalar { encoding: None, width: None, intern: false, patterns: Vec::new(),
                         validators: vec!["string".to_string()]}), default: None,
                 })],
                 validators: vec![],
@@ -1956,7 +1956,7 @@ mod tests {
         let bad_schema = crate::Schema {
             name: "bad".to_string(),
             document: crate::Struct {
-                members: vec![crate::Member::Field(crate::Field { key: false, description: None,
+                members: vec![crate::Member::Field(crate::Field { key: false, description: None, indexes: Vec::new(),
                     required: Polarity::Default, repeatable: Polarity::Default,
                     keyword: "child".to_string(),
                     r#type: crate::Type::Reference("missing-definition".to_string()), default: None,

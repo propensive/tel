@@ -293,8 +293,8 @@ BLAKE3-256 digest of the canonical `tels.tel` — provides a realistic 32-byte v
 specifications share:
 
 ```
-bytes:    d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3
-BASE-256: ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ
+bytes:    5fe9b009b90872af76f39b273773a85f2f21999d56a91785257deb8a7f6c9ae6
+BASE-256: şῩưȉιȈrίvỳқȧ7sƨşįḡẙƝVΩЗẅĥṽӫΊſlҚæ
 ```
 
 The encoded form is 32 characters long, matching the 32-byte input, and occupies 64 bytes when

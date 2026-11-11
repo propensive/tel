@@ -40,7 +40,18 @@ fn builtin_tels_signature() -> Vec<u8> {
 /// The canonical, version-pinned LIRA coordinate of the built-in `tels`
 /// meta-schema (§8.1). The pin advances only when the TEL specification
 /// is revised.
-pub const BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:2.0.0";
+pub const BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:2.1.0";
+
+/// The previous pin of the built-in tels. tels 2.1.0 only appended members
+/// to 2.0.0's records, so every 2.0.0 keyword index is unchanged and a
+/// document written against the earlier pin is read by the same built-in.
+pub const EARLIER_BUILTIN_TELS_REFERENCE: &str = "specification.tel/tels:2.0.0";
+
+/// Whether a LIRA coordinate names the built-in tels: the current pin or
+/// the earlier, still-accepted one.
+pub fn is_builtin_tels_reference(reference: &str) -> bool {
+    reference == BUILTIN_TELS_REFERENCE || reference == EARLIER_BUILTIN_TELS_REFERENCE
+}
 
 /// The schema identification carried by a pragma (§8.1): a LIRA
 /// reference, layer selections, and/or a schema signature, which
@@ -302,7 +313,7 @@ impl<F: SchemaFetcher> Resolver<F> {
         // its single-component signature (33 bytes: 32-byte BLAKE3-256 hash
         // of the canonical tels.tel + cadence trailer), or by its pinned
         // LIRA coordinate (§8.1). Neither form requires network access.
-        if identifier.reference.as_deref() == Some(BUILTIN_TELS_REFERENCE) {
+        if identifier.reference.as_deref().is_some_and(is_builtin_tels_reference) {
             return Ok(builtin_tels());
         }
         if let Some(sig) = &identifier.signature {
@@ -590,6 +601,19 @@ mod tests {
         let mut r: Resolver<InMemoryFetcher> = Resolver::new();
         let s = r.resolve(&id).unwrap();
         assert_eq!(s.name, "tels");
+    }
+
+    #[test]
+    fn resolver_returns_builtin_for_earlier_pinned_coordinate() {
+        // tels 2.1.0 appended members only, so the 2.0.0 pin still names
+        // the built-in (and resolves without network access).
+        assert_eq!(EARLIER_BUILTIN_TELS_REFERENCE, "specification.tel/tels:2.0.0");
+        assert_eq!(BUILTIN_TELS_REFERENCE, "specification.tel/tels:2.1.0");
+        let id = SchemaIdentifier::parse(EARLIER_BUILTIN_TELS_REFERENCE).unwrap();
+        let mut r: Resolver<InMemoryFetcher> = Resolver::new();
+        let s = r.resolve(&id).unwrap();
+        assert_eq!(s.name, "tels");
+        assert!(s.records.iter().any(|d| d.name == "Index"));
     }
 
     #[test]

@@ -231,6 +231,23 @@ it accepts, with the further layers or atoms it can resolve and would like inclu
 has them. The message is itself TEL, so it travels as text, as BinTEL, or as a single BASE-256
 word, and the writer replies with the richest composition the reader can read.
 
+## Random-access form (RaTEL)
+
+Where BinTEL is read front to back, **RaTEL** (see [`spec/ratel.md`](spec/ratel.md)) is read in
+place: a file memory-mapped by several processes, in which looking up one record touches that
+record and nothing else. Every struct type gets a fixed-width row with one slot per member at a
+schema-determined offset, instances of a type form a contiguous table, variable-width values live in
+a string table and a variable region addressed by offset, and every keyed repeatable member — plus
+any member a schema declares an `index` on — has a sorted index searched with a single bytewise
+comparison per probe. A RaTEL file begins with the four bytes `B1 C4 B5 BB` (`ᾱτελ` in BASE-256),
+always carries its composed schema, and shares BinTEL's value hash as its identity, so the three
+encodings convert losslessly.
+
+Schemas tune the layout with three annotations — `width` and `intern` on a scalar, `index` on a
+field — which are ordinary schema atoms (a layer can add them) but constrain no document. The
+fixed-width, order-preserving codecs those slots and keys rely on (`u64`, `i64`, `f64`, `uuid`,
+`blake3-256`, …) are pinned in [`spec/codecs.md`](spec/codecs.md) and are equally usable in BinTEL.
+
 ## BASE-256
 
 [`spec/base256.md`](spec/base256.md) describes a binary-to-text encoding that maps every byte to one
@@ -243,6 +260,9 @@ whitespace or punctuation, and decodes losslessly via a single modulo operation.
 - [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system, error
   taxonomy, machine operations, round-trip properties).
 - [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format, schema signatures, and acceptances.
+- [`spec/ratel.md`](spec/ratel.md) — RaTEL, the random-access encoding for memory-mapped files:
+  rows, tables, regions and sorted indexes.
+- [`spec/codecs.md`](spec/codecs.md) — the standard fixed-width, order-preserving codecs.
 - [`spec/telp.md`](spec/telp.md) — TELP, the path language for addressing elements of a document's
   semantic model by keyword and key value.
 - [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed schema
