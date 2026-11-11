@@ -556,9 +556,9 @@ object TelServer:
   private def memberType(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Type] =
     struct.members.stdlib.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
     . orElse:
-        struct.members.stdlib.toList.collect { case ref: Tels.SelectRef => ref }
+        struct.members.stdlib.to(scala.List).collect { case ref: Tels.SelectRef => ref }
         . flatMap(ref => schema.selects.stdlib.find(_.name == ref.reference).to(scala.List))
-        . flatMap(_.variants.stdlib.toList)
+        . flatMap(_.variants.stdlib.to(scala.List))
         . collectFirst { case variant if variant.keyword == keyword => variant.variantType }
     . getOrElse(Unset)
 
@@ -583,10 +583,10 @@ object TelServer:
       // scalar accepts — the codec's encoder and each pattern are further validity constraints —
       // so they belong in the label beside the validators.
       case Tels.Scalar(validators, encoding, patterns) =>
-        val base = if validators.length == 0 then t"scalar" else validators.to[List].join(t"+")
+        val base = if validators.length == 0 then t"scalar" else validators.stdlib.to(List).join(t"+")
         val constrained =
           if patterns.length == 0 then base
-          else t"$base ~ ${patterns.to[List].map(pattern => t"/$pattern/").join(t" ")}"
+          else t"$base ~ ${patterns.stdlib.to(List).map(pattern => t"/$pattern/").join(t" ")}"
 
         encoding.let(codec => t"$constrained [$codec]").or(constrained)
 
@@ -617,13 +617,13 @@ object TelServer:
 
   // Hover markup for the member `keyword` of `struct` (a `field`, or a `select` variant).
   private def fieldMarkup(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Text] =
-    val markup = struct.members.to[List].flatMap:
+    val markup = struct.members.stdlib.to(List).flatMap:
       case field: Tels.Field if field.keyword == keyword =>
         List(fieldMarkdown(field, schema))
 
       case reference: Tels.SelectRef =>
         schema.selects.stdlib.find(_.name == reference.reference).toList
-        . flatMap(_.variants.stdlib.toList).filter(_.keyword == keyword)
+        . flatMap(_.variants.stdlib.to(scala.List)).filter(_.keyword == keyword)
         . map(variantMarkdown(_, reference.reference, schema)).to(List)
 
       case _ =>
@@ -684,10 +684,10 @@ object TelServer:
       case Tels.Reference(name) =>
         schema.selects.stdlib.find(_.name == name) match
           case Some(select) =>
-            select.variants.stdlib.toList.find(_.keyword == atom) match
+            select.variants.stdlib.to(scala.List).find(_.keyword == atom) match
               case Some(variant) => variantMarkdown(variant, name, schema)
               case None =>
-                val names = select.variants.to[List].map: (variant: Tels.Variant) =>
+                val names = select.variants.stdlib.to(List).map: (variant: Tels.Variant) =>
                   t"`${variant.keyword}`"
 
                 t"**$keyword** value — one of ${names.join(t", ")}"
@@ -695,8 +695,8 @@ object TelServer:
           case None => schema.scalars.stdlib.find(_.name == name) match
             case Some(scalar) =>
               scalarValueMarkup
-                ( keyword, name, scalar.validators.to[List], default,
-                  scalar.description, scalar.encoding, scalar.patterns.to[List] )
+                ( keyword, name, scalar.validators.stdlib.to(List), default,
+                  scalar.description, scalar.encoding, scalar.patterns.stdlib.to(List) )
 
             case None => builtinScalars.stdlib.find(_(0) == name) match
               case Some((_, validator)) =>
@@ -709,8 +709,8 @@ object TelServer:
 
       case Tels.Scalar(validators, encoding, patterns) =>
         scalarValueMarkup
-          ( keyword, Unset, validators.to[List], default, Unset, encoding,
-            patterns.to[List] )
+          ( keyword, Unset, validators.stdlib.to(List), default, Unset, encoding,
+            patterns.stdlib.to(List) )
 
       case struct: Tels.Struct =>
         fieldMarkup(struct, atom, schema)
@@ -737,7 +737,7 @@ object TelServer:
       case _                                     => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
-    struct.members.to[List].flatMap:
+    struct.members.stdlib.to(List).flatMap:
       case field: Tels.Field =>
         List
           ( Lsp.CompletionItem
@@ -749,7 +749,7 @@ object TelServer:
 
       case reference: Tels.SelectRef =>
         schema.selects.stdlib.find(_.name == reference.reference).toList
-        . flatMap(_.variants.stdlib.toList).map: variant =>
+        . flatMap(_.variants.stdlib.to(scala.List)).map: variant =>
             Lsp.CompletionItem
               ( label         = variant.keyword,
                 kind          = Lsp.CompletionItemKind.EnumMember,
@@ -806,12 +806,12 @@ object TelServer:
   private def atomCompletions(atomType: Tels.Type, schema: Tels): List[Lsp.CompletionItem] =
     atomType match
       case Tels.Reference(name) if schema.selects.exists(_.name == name) =>
-        schema.selects.stdlib.find(_.name == name).map(_.variants.to[List]).getOrElse(Nil)
+        schema.selects.stdlib.find(_.name == name).map(_.variants.stdlib.to(List)).getOrElse(Nil)
         . map(variantCompletion(_, name))
 
       case other => structOf(other, schema) match
         case struct: Tels.Struct =>
-          struct.members.to[List].flatMap:
+          struct.members.stdlib.to(List).flatMap:
             case field: Tels.Field => field.fieldType match
               case Tels.Flag =>
                 List(Lsp.CompletionItem
@@ -825,7 +825,7 @@ object TelServer:
 
             case reference: Tels.SelectRef =>
               schema.selects.stdlib.find(_.name == reference.reference).toList
-              . flatMap(_.variants.stdlib.toList)
+              . flatMap(_.variants.stdlib.to(scala.List))
               . filter: variant =>
                   variant.variantType match
                     case Tels.Flag => true
@@ -874,7 +874,7 @@ object TelServer:
         val present = tokens(content).stdlib.map((token, _, _) => token.tt)
 
         memberStruct(struct, keyword, schema).lay(Nil): member =>
-          member.members.to[List].flatMap:
+          member.members.stdlib.to(List).flatMap:
             case field: Tels.Field if !present.contains(field.keyword) => field.fieldType match
               case Tels.Flag =>
                 List(Lsp.CompletionItem
@@ -1257,7 +1257,7 @@ object TelServer:
 
     case (Tel.Element.Node(i, _, as), Tel.Element.Node(j, _, bs)) =>
       i == j && as.length == bs.length
-      && as.stdlib.toList.zip(bs.stdlib.toList).forall(sameModel(_, _))
+      && as.stdlib.to(scala.List).zip(bs.stdlib.to(scala.List)).forall(sameModel(_, _))
 
     case _ => false
 
@@ -1288,7 +1288,7 @@ object TelServer:
       case other => other
 
   private def expansionOf(struct: Tels.Struct, atoms: List[Text], schema: Tels): Optional[Text] =
-    val members = struct.members.stdlib.toList.toVector
+    val members = struct.members.stdlib.to(scala.List).toVector
 
     def resolved(fieldType: Tels.Type): Optional[Tels.Type] = resolvedType(fieldType, schema)
 
@@ -1304,7 +1304,7 @@ object TelServer:
 
     def variantsOf(select: Tels.SelectRef): scala.List[Tels.Variant] =
       schema.selects.stdlib.find(_.name == select.reference)
-      . map(_.variants.stdlib.toList).getOrElse(scala.Nil)
+      . map(_.variants.stdlib.to(scala.List)).getOrElse(scala.Nil)
 
     def atomAssignable(member: Tels.Member): Boolean = member match
       case field: Tels.Field => resolved(field.fieldType) match
@@ -1725,10 +1725,10 @@ object TelServer:
   private def schemaKind(schema: Tels, path: List[Text], keyword: Text): Lsp.SymbolKind =
     structAt(schema, path) match
       case struct: Tels.Struct =>
-        val isVariant = struct.members.stdlib.toList.exists:
+        val isVariant = struct.members.stdlib.to(scala.List).exists:
           case reference: Tels.SelectRef =>
             schema.selects.stdlib.find(_.name == reference.reference)
-            . exists(_.variants.exists(_.keyword == keyword))
+            . exists(_.variants.stdlib.exists(_.keyword == keyword))
           case _ => false
 
         if isVariant then Lsp.SymbolKind.EnumMember
@@ -1737,8 +1737,8 @@ object TelServer:
           case Tels.Scalar(_, _, _) => Lsp.SymbolKind.String
           case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
           case Tels.Reference(name) =>
-            if schema.records.exists(_.name == name) then Lsp.SymbolKind.Object
-            else if schema.selects.exists(_.name == name) then Lsp.SymbolKind.Enum
+            if schema.records.stdlib.exists(_.name == name) then Lsp.SymbolKind.Object
+            else if schema.selects.stdlib.exists(_.name == name) then Lsp.SymbolKind.Enum
             else Lsp.SymbolKind.String
 
           case _ => Lsp.SymbolKind.Field
