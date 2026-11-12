@@ -28,7 +28,7 @@ record PhoneNumber
   field country-code String
   field number String
 
-record Organization
+record Playhouse
   field name String
   field role String optional
 
@@ -46,5 +46,5 @@ document
   field email String optional
   field address Address optional
   field phone PhoneNumber optional repeatable
-  field business Organization optional
+  field business Playhouse optional
   select Status optional
