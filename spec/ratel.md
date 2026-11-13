@@ -708,10 +708,13 @@ Document:
 tel 1.0 ‹signature›
 
 entry alpha
-  info First letter
+  info  First letter
 
 entry beta
 ```
+
+The two spaces after `info` are a hard space, which makes `First letter` one atom: with a
+single space, `First` and `letter` would be two.
 
 **Layouts.** Table 0 (root): one member, `entry`, repeatable Struct → `RANGE(Entry)`; no presence
 bits; `start` at offset 0, `count` at 4; `rowSize = 8`. Table 1 (`Entry`): `name` is a required
