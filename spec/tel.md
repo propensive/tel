@@ -420,6 +420,14 @@ selected layer set therefore has exactly one canonical pragma spelling and exact
 composed signature; two documents selecting the same layers can never disagree on order and
 spuriously fail the compatibility check of §8.2.
 
+E124 is a parsing error, because it is a defect in how the pragma is written, but it is the one
+parsing error that cannot be detected from the document alone: the declaration order belongs to
+the referenced schema. It is therefore raised at schema resolution (§8.2), once the referenced
+schema is known, and is reported against the pragma line like any other pragma error. A parse
+which resolves no schema — because the reference cannot be resolved, or because only the
+presentation model is wanted — raises no E124. E124 is raised only when every selected name is
+declared; an undeclared name is the runtime resolution error above, whatever the order.
+
 Layer selections without a schema reference are permitted only alongside a signature, where
 they serve as decomposition hints for library lookup (§8.2, resolution step 3): the names
 guide the match against declared layer names. Atoms (§20.3) have no names and no `+` form; a
@@ -449,12 +457,19 @@ identifies a different schema, which will generally fail the compatibility check
 signatures whose component sequences have the same atomic expansion (§20.3) — one naming a
 layer, the other naming that layer's atoms — identify the same schema.
 
-When a signature follows layer selections, the two MUST agree: the atomic expansion of the
-signature's component sequence MUST be a subsequence of the atomic expansion of *the referenced
-schema's base followed by the selected layers in declaration order*, and the signature's
-components MUST be in canonical order. A document may therefore omit atoms of a selected layer
-that it does not need, but every component it names must belong to the base or to a selected
-layer. Any disagreement is a runtime resolution error (§8.2).
+When a signature accompanies a schema reference, it MUST agree with the reference and with the
+layer selections beside it, of which there may be none: the atomic expansion of the signature's
+component sequence MUST be a subsequence of the atomic expansion of *the referenced schema's base
+followed by the selected layers in declaration order*, and the signature's components MUST be in
+canonical order. A document may therefore omit atoms of a selected layer that it does not need,
+but every component it names must belong to the base or to a selected layer. Any disagreement is
+a runtime resolution error (§8.2).
+
+The signature of a referenced composition thus decomposes into exactly the base hash followed by
+the hashes of the *selected* layers, never those of layers the schema declares but the document
+does not select. In particular, a document which selects no layers composes the base alone, and
+the signature it carries is the one-component, 33-byte signature of the base — not the signature
+of the schema composed with all of its declared layers.
 
 ### 8.2 Schema Resolution
 
@@ -1453,6 +1468,10 @@ schema.
 Each error is referenced by code at the point in the specification where its trigger condition is
 defined.
 
+Every parsing error is detectable from the document alone, with one exception: **E124** depends
+on the declaration order of the referenced schema, and is raised when that schema is resolved
+(§8.1, §8.2).
+
 **Diagnostic spans.** Every diagnostic MUST identify the relevant region of the document as a
 half-open span `[start, end)` of zero-based code-point offsets from the start of the document. A
 zero-width span (where `start = end`) denotes a point location. The span for each error code is
@@ -1485,7 +1504,7 @@ specified in the tables below.
 | E121 | §8, §8.1 | Pragma phrase matches no pragma form (schema reference, layer selection, signature, or sigil)          | The entire pragma line                                                                                                           |
 | E122 | §8       | Pragma phrases violate the positional order or multiplicity (version, reference, layers, signature, sigil) | The entire pragma line                                                                                                       |
 | E123 | §4       | Document is not a well-formed UTF-8 byte sequence (one error per maximal ill-formed subsequence)       | The replacement `U+FFFD` code point in the decoded text                                                                          |
-| E124 | §8.1     | Layer selections are not listed in the schema's declaration order                                      | The entire pragma line                                                                                                           |
+| E124 | §8.1     | Layer selections are not listed in the schema's declaration order (raised at schema resolution, §8.2)  | The entire pragma line                                                                                                           |
 
 A document separator (§6.1) is always well-formed and carries no error code; it simply ends the
 current document and begins the next.
