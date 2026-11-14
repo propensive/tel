@@ -8,6 +8,14 @@ import soundness.*
 // modules themselves do. A named import outranks the `soundness` wildcard.
 import proscenium.{List, Nil, Chain}
 
+// Schema names are identifiers, so the listing is ordered by code point. `Text` is comparable
+// only once a collation has been chosen, and the given which makes it so is lexically scoped.
+import soundness.collationComparable
+import collations.codepointCollation
+import sortingAlgorithms.timsort
+// Taking the tail of a `List` is gated as a linear operation; the lists here are the handful of
+// components in one schema signature.
+import dysasymptotics.linearSize
 import pathInterfaces.pathOnLinux
 import systems.javaBaseSystem
 import filesystemBackends.javaBaseFilesystem
@@ -38,9 +46,9 @@ object SchemaCache:
   // base schema alone). Unknown layer names are ignored.
   def signature(tel: Tel, layers: List[Text])(using Tactic[Bintel.Error], Tactic[Tel.Error]): Text =
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = tel.as[Tels].layers.stdlib.to(scala.List).map(_.name)
-    val byName = names.zip(layerHashes.stdlib).toMap
-    Base256.encode(SchemaSignature.encode(baseHash :: layers.stdlib.flatMap(byName.get).to(List)))
+    val declared = tel.as[Tels].layers.to[List].map(_.name).zip(layerHashes)
+    val selected = layers.flatMap(layer => declared.filter(_(0) == layer).map(_(1)))
+    Base256.encode(SchemaSignature.encode(baseHash :: selected))
 
   // A registered schema's component hashes (BinTEL §8.1), each layer's paired with its declared
   // name: the library a pragma signature is decoded against.
@@ -48,8 +56,7 @@ object SchemaCache:
   :   (Data, List[(Text, Data)]) =
 
     val (baseHash, layerHashes) = SchemaSignature.componentHashes(tel, Tels.Axiom.tels)
-    val names = tel.as[Tels].layers.stdlib.to(scala.List).map(_.name)
-    (baseHash, names.zip(layerHashes.stdlib).to(List))
+    (baseHash, tel.as[Tels].layers.to[List].map(_.name).zip(layerHashes))
 
   // `Data` carries no structural equality, so hashes are compared by their BASE-256 rendering.
   private def sameHash(a: Data, b: Data): Boolean = Base256.encode(a) == Base256.encode(b)
@@ -57,7 +64,7 @@ object SchemaCache:
   // Parse + summarise a schema for the listing (base-schema id + declared layer names).
   private def entryOf(tel: Tel)(using Tactic[Bintel.Error], Tactic[Tel.Error]): Entry =
     val tels = tel.as[Tels]
-    Entry(tels.name, signature(tel, Nil), tels.layers.stdlib.to(List).map(_.name).join(t", "))
+    Entry(tels.name, signature(tel, Nil), tels.layers.map(_.name).join(t", "))
 
   // The §20.1 checks Stratiform's `Tels.Validation` does not yet perform: every type reference
   // must resolve within the composed namespace, and to a Definition of the right kind. A `Field`
@@ -67,38 +74,37 @@ object SchemaCache:
   // resolves to nothing at all is E209. Returns each offending TypeName with its reason, in
   // declaration order; run against the COMPOSED schema, so layer-introduced definitions and
   // references are both in scope.
-  def incoherences(schema: Tels): scala.List[(Text, Tel.Error.Reason)] =
+  def incoherences(schema: Tels): List[(Text, Tel.Error.Reason)] =
     def kindOf(name: Text): Optional[Text] =
-      if schema.records.stdlib.exists(_.name == name) then t"record"
-      else if schema.scalars.stdlib.exists(_.name == name) then t"scalar"
-      else if schema.selects.stdlib.exists(_.name == name) then t"select"
+      if schema.records.exists(_.name == name) then t"record"
+      else if schema.scalars.exists(_.name == name) then t"scalar"
+      else if schema.selects.exists(_.name == name) then t"select"
       else Unset
 
-    def checkType(fieldType: Tels.Type): scala.List[(Text, Tel.Error.Reason)] = fieldType match
+    def checkType(fieldType: Tels.Type): List[(Text, Tel.Error.Reason)] = fieldType match
       case Tels.Reference(name) => kindOf(name) match
-        case t"record" | t"scalar" => scala.Nil
-        case t"select"             => scala.List((name, Tel.Error.Reason.ReferenceKindMismatch))
-        case _                     => scala.List((name, Tel.Error.Reason.UnresolvedReference))
+        case t"record" | t"scalar" => Nil
+        case t"select"             => List((name, Tel.Error.Reason.ReferenceKindMismatch))
+        case _                     => List((name, Tel.Error.Reason.UnresolvedReference))
 
-      case struct: Tels.Struct => checkMembers(struct.members.stdlib.to(scala.List))
-      case _                   => scala.Nil
+      case struct: Tels.Struct => checkMembers(struct.members.to[List])
+      case _                   => Nil
 
-    def checkMembers(members: scala.List[Tels.Member]): scala.List[(Text, Tel.Error.Reason)] =
+    def checkMembers(members: List[Tels.Member]): List[(Text, Tel.Error.Reason)] =
       members.flatMap:
         case field: Tels.Field => checkType(field.fieldType)
 
         case select: Tels.SelectRef => kindOf(select.reference) match
-          case t"select"             => scala.Nil
-          case t"record" | t"scalar" => scala.List((select.reference, Tel.Error.Reason.ReferenceKindMismatch))
-          case _                     => scala.List((select.reference, Tel.Error.Reason.UnresolvedReference))
+          case t"select"             => Nil
+          case t"record" | t"scalar" => List((select.reference, Tel.Error.Reason.ReferenceKindMismatch))
+          case _                     => List((select.reference, Tel.Error.Reason.UnresolvedReference))
 
-        case _ => scala.Nil
+        case _ => Nil
 
-    checkMembers(schema.document.members.stdlib.to(scala.List))
-    ++ schema.records.stdlib.to(scala.List)
-       . flatMap(record => checkMembers(record.members.stdlib.to(scala.List)))
-    ++ schema.selects.stdlib.to(scala.List).flatMap: select =>
-         select.variants.stdlib.to(scala.List).flatMap(variant => checkType(variant.variantType))
+    checkMembers(schema.document.members.to[List])
+    + schema.records.to[List].flatMap(record => checkMembers(record.members.to[List]))
+    + schema.selects.to[List].flatMap: select =>
+        select.variants.to[List].flatMap(variant => checkType(variant.variantType))
 
   private def read(file: Path on Linux)
       (using Tactic[Tel.Error], Tactic[Io.Error], Tactic[Truncation.Error])
@@ -111,38 +117,43 @@ object SchemaCache:
   // The listing entry for a single cache file (used by the LSP to describe a resolved schema).
   def describe(file: Path on Linux): Optional[Entry] = safely(entryOf(read(file)))
 
+  // When the registry directory last changed, in milliseconds since the epoch, or `0` if it
+  // cannot be read: what the LSP keys its memo of resolutions on, since `tel schema add` writes
+  // into the directory.
+  def modified(directory: Path on Linux): Long =
+    safely(summon[FilesystemBackend on Linux].stat(directory, true).modified).or(0L)
+
   // Cached schema files are stored read-only, so an editor opened at one (via the LSP's cross-file
-  // go-to-definition) presents it as read-only. These use `java.io.File` because the registry copy is
-  // a managed artifact whose permission bit is being toggled, not filesystem I/O the typed API mediates.
-  private def markReadOnly(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setReadOnly())
-  private def makeWritable(file: Path on Linux): Unit = safely(java.io.File(file.encode.s).setWritable(true))
+  // go-to-definition) presents it as read-only. A copy is made writable again only to be replaced.
+  private def protect(file: Path on Linux): Unit = safely(file.writable() = false)
+  private def unprotect(file: Path on Linux): Unit = safely(file.writable() = true)
 
   // The schemas every implementation holds built in (TEL §8.2, resolution step 1): the `tels`
   // meta-schema and the `acceptance` schema (BinTEL §8.4), each under its declared name.
-  private val builtins: scala.List[(Text, Text)] =
-    scala.List(t"tels" -> MetaSchema.source, t"acceptance" -> MetaSchema.acceptance)
+  private val builtins: List[(Text, Text)] =
+    List(t"tels" -> MetaSchema.source, t"acceptance" -> MetaSchema.acceptance)
 
   // Write the built-in schemas into the cache, so the registry always contains them — and refresh
   // any copy whose text differs from the embedded source, so an upgraded `tel` never resolves a
   // stale pin. Best-effort (the cache may be unwritable).
   def ensurePreloaded(directory: Path on Linux): Unit =
-    builtins.foreach: (name, source) =>
+    builtins.each: (name, source) =>
       safely:
         val file = t"${directory.encode}/$name.tel".as[Path on Linux]
         val current = if file.existent() then readText(file).lay(false)(_ == source) else false
 
         if !current then
           if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
-          makeWritable(file)
+          unprotect(file)
           file.write(source)
-          markReadOnly(file)
+          protect(file)
 
   // Every cached schema, sorted by name; unreadable or unparseable files are skipped.
   def entries(directory: Path on Linux): List[Entry] =
     ensurePreloaded(directory)
-    safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).flatMap: file =>
-      safely(entryOf(read(file))).let(scala.List(_)).or(scala.Nil)
-    . sortBy(_.name.s).to(List)
+    safely(directory.children.to[List]).or(Nil).map(file => safely(entryOf(read(file))))
+    . sweep { case entry: Entry => entry }
+    . order(_.name)
 
   // Add a schema file to the cache: validate it against the meta-schema, then store it under its
   // declared name. Returns the added entry. Raises if the file is missing or is not a valid schema.
@@ -159,13 +170,13 @@ object SchemaCache:
     // incoherent schema would otherwise be accepted here and only fail later, when a document is
     // validated against it.
     val composed = validated(tel)
-    incoherences(composed).headOption.foreach { (_, reason) => abort(Tel.Error(reason)) }
+    incoherences(composed).head.let { (_, reason) => abort(Tel.Error(reason)) }
 
     if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
     val target = t"${directory.encode}/${entry.name}.tel".as[Path on Linux]
-    makeWritable(target)                   // a prior copy is stored read-only
+    unprotect(target)                   // a prior copy is stored read-only
     target.write(text)
-    markReadOnly(target)                   // keep the registry copy read-only
+    protect(target)                   // keep the registry copy read-only
     entry
 
   // Stratiform's §20.1 validity battery over the composed schema.
@@ -178,7 +189,7 @@ object SchemaCache:
   def layerNames(directory: Path on Linux, name: Text): List[Text] =
     load(directory, name) match
       case tel: Tel =>
-        safely(tel.as[Tels].layers.stdlib.to(List).map(_.name)).or(Nil)
+        safely(tel.as[Tels].layers.to[List].map(_.name)).or(Nil)
 
       case _ =>
         Nil
@@ -222,10 +233,12 @@ object SchemaCache:
       safely(Base256.decodeStrict(identifier)).lay(Lookup.Missing): claimed =>
         if safely(SchemaSignature.componentCount(claimed)).absent then Lookup.Missing
         else
-          safely(directory.children.stdlib.to(scala.List)).or(scala.Nil).iterator
-          . map(file => safely(decodeAgainst(file, claimed, selection)).or(Unset))
-          . collectFirst { case found: Lookup => found }
-          . getOrElse(Lookup.Missing)
+          // `children` is a `Chain`, so each registered schema is read and decoded only until
+          // one of them accounts for the signature.
+          safely(directory.children).or(Chain())
+          . map(file => safely(decodeAgainst(file, claimed, selection)))
+          . seek(_.present)
+          . or(Lookup.Missing)
 
   // Compose a registered schema with a layer selection, telling the two ways a selection can
   // fail apart: Stratiform raises `Resolution.Error` for an undeclared name and E124 for an
@@ -258,21 +271,20 @@ object SchemaCache:
     val (baseHash, layers) = components(tel)
 
     SchemaSignature.decodeHinted(claimed, baseHash, layers, selection).let: decoded =>
-      val hashes = decoded.stdlib
-
-      if hashes.isEmpty || !sameHash(hashes.head, baseHash) then Unset
-      else
-        val names = hashes.tail.map: hash =>
-          layers.stdlib.find((_, candidate) => sameHash(candidate, hash)).map(_(0))
-
-        if names.exists(_.isEmpty) then Unset
+      decoded.head.let: first =>
+        if !sameHash(first, baseHash) then Unset
         else
-          val layerNames = names.flatten.to(List)
+          val names = decoded.tail.or(Nil).map: hash =>
+            layers.seek((_, candidate) => sameHash(candidate, hash)).let(_(0))
 
-          if !selection.nil && selection.stdlib != names.flatten then
-            val named = layerNames.map(name => t"`$name`").join(t", ")
-
-            Lookup.Disagreement
-              ( file, t"the signature names the layers $named, not the `+` layer selections" )
+          if names.exists(_.absent) then Unset
           else
-            compose(file, tel, layerNames)
+            val layerNames: List[Text] = names.sweep { case name: Text => name }
+
+            if !selection.nil && selection != layerNames then
+              val named = layerNames.map(name => t"`$name`").join(t", ")
+
+              Lookup.Disagreement
+                ( file, t"the signature names the layers $named, not the `+` layer selections" )
+            else
+              compose(file, tel, layerNames)

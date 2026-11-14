@@ -1,7 +1,5 @@
 package tel
 
-import java.util.concurrent as juc
-
 import soundness.*
 
 import alphabets.hexLowerCase
@@ -118,10 +116,8 @@ object SelfUpgrade:
 
   // The newest release this daemon knows of, from the last check (`refresh`), and whether the
   // daily check has been started in this daemon.
-  private val latest: juc.atomic.AtomicReference[UpgradeManifest | Null] =
-    juc.atomic.AtomicReference(null)
-
-  private val checking: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(false)
+  private val latest = Atomic.Ref.vacant[UpgradeManifest]
+  private val checking = Atomic(false)
 
   // How old a cached manifest may be before it is fetched again: the check is daily.
   private val checkInterval: Long = 24*60*60*1000L
@@ -134,11 +130,12 @@ object SelfUpgrade:
   // task runs under the daemon's monitor, so it outlives the invocation that started it, and it
   // never raises: a failed check leaves the last known release in place.
   def check()(using resident: Resident, monitor: Monitor, environment: Environment): Unit =
-    if resident.buildId > 0 && checking.compareAndSet(false, true) then
+    if resident.buildId > 0 && checking.replace(false, true) then
       async:
-        while true do
+        loop:
           refresh(force = false)
           snooze(24*Hour)
+        . run()
 
   // The cached manifest, `$XDG_CACHE_HOME/<name>/upgrade.tsv`, so that a daemon restarted
   // within a day of the last check does not fetch again.
@@ -157,7 +154,7 @@ object SelfUpgrade:
     val cached: Optional[UpgradeManifest] =
       if force then Unset else file.let: file =>
         safely(summon[FilesystemBackend on Linux].stat(file, true)).let: stat =>
-          val age: Long = java.lang.System.currentTimeMillis() - stat.modified
+          val age: Long = now().long - stat.modified
           if age < checkInterval then safely(file.read[Text]).let(UpgradeManifest.parse(_))
           else Unset
 
@@ -169,12 +166,12 @@ object SelfUpgrade:
               if !directory.existent() then directory.create[Directory](CreateFlag.Parents)
               (directory / Name[Linux](t"upgrade.tsv")).write(text)
 
-    release.let(latest.set(_))
+    release.let(latest() = _)
     release
 
   // The newest release this daemon knows of, if it is newer than the running build.
   def available(using resident: Resident): Optional[UpgradeManifest] =
-    Optional(latest.get()).let: release =>
+    latest().let: release =>
       if resident.buildId > 0 && release.build > resident.buildId then release else Unset
 
   // Reports, once and on standard error, what the launcher did with a staged upgrade: this

@@ -142,6 +142,7 @@ object settings:
     mvn"dev.propensive:galilei-jvm:$soundness",              // the filesystem
     mvn"dev.propensive:hieroglyph-core:$soundness",          // charEncoders/charDecoders
     mvn"dev.propensive:iridescence-core:$soundness",         // the palette
+    mvn"dev.propensive:kaleidoscope-core:$soundness",        // the pragma's phrase patterns
     mvn"dev.propensive:stratiform-base256:$soundness",       // BASE-256 tokens
     mvn"dev.propensive:stratiform-core:$soundness",          // read[Tel], Tels, Telp, BinTEL
     mvn"dev.propensive:telekinesis-core:$soundness",         // fetching the upgrade manifest
