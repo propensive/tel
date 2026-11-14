@@ -21,7 +21,7 @@ name acceptance
 # A schema signature: a palimpsest of component hashes at the BinTEL-pinned
 # parameters. The codec rejects any byte sequence that is not structurally a
 # signature (a length other than 33, 37, 39, 41, …, or a cadence byte other
-# than 0x79), so a malformed signature is E312 at validation time.
+# than 0x79), so a malformed signature is ↯/t.3.12 at validation time.
 
 scalar Signature
   description

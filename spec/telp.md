@@ -147,12 +147,12 @@ readability.
 
 **Invalid documents.** Resolution is defined against the semantic model as it stands, whether or
 not the document is schema-valid (TEL §23). The claim in step 1 that a required member is always
-present holds only for a schema-valid document; against a document carrying **E307** the member
+present holds only for a schema-valid document; against a document carrying **↯/t.3.7** the member
 is genuinely absent, and resolution fails with *absent member* exactly as for an unfilled
 optional member. No TELP failure is ever reported as, or upgraded to, a document error code.
 
 **Non-normative note (duplicate keys).** Key selection is primarily meaningful for documents
-free of E314 (TEL §21.6). Against a document carrying duplicate key values, the
+free of ↯/t.3.14 (TEL §21.6). Against a document carrying duplicate key values, the
 first-in-semantic-order rule above still makes resolution deterministic.
 
 ## 5. The Shadowing Rule
@@ -180,7 +180,7 @@ unambiguous in a valid document.
 ## 7. Failures
 
 TELP failures are outcomes of the resolving implementation's API — they are **not** document
-errors and carry no E-codes (contrast TEL §19.3). The failure kinds, informatively:
+errors and carry no bolt codes (contrast TEL §19.3). The failure kinds, informatively:
 
 | Kind               | Condition                                                                     |
 | ------------------ | ----------------------------------------------------------------------------- |

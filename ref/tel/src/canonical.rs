@@ -176,7 +176,7 @@ fn emit_compound_line(
 fn emit_scalar_payload(value: &str, indent: usize, out: &mut String) {
     if value.is_empty() {
         // An empty scalar has no atom text: emitting a leading space would
-        // leave a trailing space on the keyword line (E108). The keyword line
+        // leave a trailing space on the keyword line (↯/t.1.8). The keyword line
         // alone re-parses to a compound with no atom, i.e. an empty value.
         out.push('\n');
         return;

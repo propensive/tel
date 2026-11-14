@@ -10,7 +10,7 @@
 //!   the §20.1 schema-validity checks, and the §21 validator-callback model.
 //! - **Schema composition** (`compose_schema`) implementing §20.3's MergeStruct algorithm,
 //!   producing the subtype guaranteed by §24.4.
-//! - **Indentation recovery** for E107 / E111 per §19.5.
+//! - **Indentation recovery** for ↯/t.1.7 / ↯/t.1.11 per §19.5.
 //! - **Built-in `tels`** (`builtin_tels`) with pinned BinTEL value hash per §20.5.
 //!
 //! Sub-modules: [`bintel`] (§7 of BinTEL Specification), [`canonical`] (§22.3),
@@ -159,9 +159,18 @@ impl TelError {
     }
 }
 
+impl ErrorCode {
+    /// The error's bolt code (§19.3): `↯/t.`, the number of its family, and
+    /// its number within the family, so that `E107` is `↯/t.1.7`.
+    pub fn bolt(self) -> String {
+        let number: u32 = format!("{:?}", self)[1..].parse().expect("an error code is E and a number");
+        format!("↯/t.{}.{}", number / 100, number % 100)
+    }
+}
+
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{}", self.bolt())
     }
 }
 
@@ -280,29 +289,29 @@ pub struct ScalarDefinition {
     /// RE2 pattern constraints (§21.8). Each pattern is matched against
     /// the entire value text (implicit anchoring); multiple patterns
     /// apply in AND-conjunction (intersection). Invalid patterns are
-    /// E222; a value that fails a pattern is E315.
+    /// ↯/t.2.22; a value that fails a pattern is ↯/t.3.15.
     pub patterns: Vec<String>,
     /// Optional codec name (§21.7). When present, values of this scalar
     /// are carried in BinTEL as the codec's bytes rather than as UTF-8
     /// text, and the codec's encoder acts as one further validity
-    /// constraint (E312 on rejection).
+    /// constraint (↯/t.3.12 on rejection).
     pub encoding: Option<String>,
     /// Optional human-readable description of this type. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
     pub description: Option<String>,
     /// RaTEL storage-layout annotation: the fixed byte width of this
     /// scalar's encoded values (`width <n>`, `[1-9][0-9]*`). Meaningful
-    /// only with an `encoding` (E227); must agree with a standard codec's
-    /// fixed width and across layers (E226); exclusive with `intern`
-    /// (E231). Layout only: never affects validation or canonical form.
+    /// only with an `encoding` (↯/t.2.27); must agree with a standard codec's
+    /// fixed width and across layers (↯/t.2.26); exclusive with `intern`
+    /// (↯/t.2.31). Layout only: never affects validation or canonical form.
     pub width: Option<u64>,
     /// The raw `width` text when it failed to parse as `[1-9][0-9]*`
-    /// (E225, reported by `validate_schema`); `None` otherwise. Kept so
+    /// (↯/t.2.25, reported by `validate_schema`); `None` otherwise. Kept so
     /// that construction stays permissive and the validator reports.
     pub invalid_width: Option<String>,
     /// RaTEL storage-layout annotation: values of this scalar are
     /// interned (`intern` flag). Monotone across layers (OR); exclusive
-    /// with `width` (E231). Layout only.
+    /// with `width` (↯/t.2.31). Layout only.
     pub intern: bool,
 }
 
@@ -330,7 +339,7 @@ pub struct SelectDefinition {
 /// `Type::Reference(name)` resolves (per §20.2) to either a `Struct` formed
 /// from the named record's `members`, a `Scalar` formed from the named
 /// scalar's `validators`, or one of the built-in types `Flag`, `String`,
-/// `Identifier`, `Sigil`. Resolving to a `SelectDefinition` is **E217**
+/// `Identifier`, `Sigil`. Resolving to a `SelectDefinition` is **↯/t.2.17**
 /// — sums at a single-keyword position are written as `SelectRef`, not
 /// `Reference`.
 #[derive(Debug, Clone, PartialEq)]
@@ -374,7 +383,7 @@ pub struct Scalar {
 
 /// Per-axis declaration state for `Field` and `SelectRef`. The tristate is
 /// retained through schema construction and layer merge so §20.3 can
-/// distinguish a layer that loosens an already-tight axis (E214/E215)
+/// distinguish a layer that loosens an already-tight axis (↯/t.2.14/↯/t.2.15)
 /// from a redundant restatement. Effective booleans are derived:
 ///   effective `required`   = `(polarity != Loose)`
 ///   effective `repeatable` = `(polarity == Loose)`
@@ -411,7 +420,7 @@ pub enum Member {
     /// Layer-only operation: declared inside a layer's `select N` body to
     /// remove a variant from the merged SelectDefinition (§20.3). It MUST
     /// NOT appear inside any Struct (root, RecordDefinition body, or
-    /// overlay); appearing there is **E216**.
+    /// overlay); appearing there is **↯/t.2.16**.
     Exclude(String),
 }
 
@@ -420,9 +429,9 @@ pub struct Field {
     pub required: Polarity,
     pub repeatable: Polarity,
     /// True when this field is the identifying key of its enclosing Struct
-    /// (§20). Constraints: type resolves to Scalar (E219), effectively
-    /// required and non-repeatable on the composed member (E220), at most
-    /// one per Struct (E221). Instance-level uniqueness is E314 (§21.6).
+    /// (§20). Constraints: type resolves to Scalar (↯/t.2.19), effectively
+    /// required and non-repeatable on the composed member (↯/t.2.20), at most
+    /// one per Struct (↯/t.2.21). Instance-level uniqueness is ↯/t.3.14 (§21.6).
     /// Monotone across layers: a layer may set it, never clear it (§20.3).
     pub key: bool,
     pub keyword: String,
@@ -430,15 +439,15 @@ pub struct Field {
     /// Per-use-site default value, applied when a required Scalar-typed
     /// field is absent from the document. Valid only when the effective
     /// `required` is `true` and the resolved `type` is `Scalar`
-    /// (E203 otherwise).
+    /// (↯/t.2.3 otherwise).
     pub default: Option<String>,
     /// Optional human-readable description of this field. Free-form text,
     /// carried through to the semantic model and BinTEL; never validated.
     pub description: Option<String>,
     /// RaTEL secondary indexes (`index` children), in declaration order.
     /// Valid only on an effectively repeatable field whose type resolves
-    /// to a Struct or a Scalar (E228); every path must be a syntactically
-    /// valid TELP (E229) that resolves statically (E230). Layers may add
+    /// to a Struct or a Scalar (↯/t.2.28); every path must be a syntactically
+    /// valid TELP (↯/t.2.29) that resolves statically (↯/t.2.30). Layers may add
     /// indexes (deduplicated by path identity), never remove them. Layout
     /// only: ignored by subtyping and by validation.
     pub indexes: Vec<Index>,
@@ -647,9 +656,9 @@ pub type ValidatorFn = dyn Fn(&ValidationRequest) -> ValidationResponse + Send +
 
 /// A codec (§21.7): the encoder/decoder pair behind a scalar's declared
 /// `encoding`. `encode` is total on the codec's accepted texts (rejection
-/// is invalidity, E312) and carries a scalar-kind `Diagnostic` on failure;
+/// is invalidity, ↯/t.3.12) and carries a scalar-kind `Diagnostic` on failure;
 /// `decode` is partial, succeeding exactly on the image of `encode` (law
-/// C3), and reports failure as a plain message (surfaced as B14).
+/// C3), and reports failure as a plain message (surfaced as ↯/t.4.14).
 pub trait Codec {
     fn encode(&self, text: &str) -> Result<Vec<u8>, Diagnostic>;
     fn decode(&self, bytes: &[u8]) -> Result<String, String>;
@@ -662,7 +671,7 @@ pub trait Codec {
 pub type CodecBindingFn = dyn Fn(&str) -> Option<Rc<dyn Codec>>;
 
 /// Resolve-once cache over a `CodecBindingFn`, shared by the validation
-/// path (E312/E313) and the BinTEL encode/decode paths (B13/B14/B15).
+/// path (↯/t.3.12/↯/t.3.13) and the BinTEL encode/decode paths (↯/t.4.13/↯/t.4.14/↯/t.4.15).
 /// A `None` cache entry records a definitive "unknown name" answer.
 pub struct CodecResolver<'a> {
     binding: Option<&'a CodecBindingFn>,
@@ -1074,7 +1083,7 @@ pub fn builtin_tels() -> Schema {
     };
 
     // Children admissible inside a Select body. `exclude` is lexically
-    // permitted (E216 if it appears outside a layer's Select body at
+    // permitted (↯/t.2.16 if it appears outside a layer's Select body at
     // construction time).
     let s_select_child = SelectDefinition {
         name: "SelectChild".to_string(),
@@ -1128,7 +1137,7 @@ pub const BUILTIN_TYPE_NAMES: &[&str] = &["Flag", "String", "Identifier", "Sigil
 
 /// Resolve a `Reference` to a record's `Member` slice. Returns `None` if the
 /// name doesn't resolve to a record. Used by `Field.type` resolution; a
-/// `Field` whose Reference resolves to a `SelectDefinition` is E217 and
+/// `Field` whose Reference resolves to a `SelectDefinition` is ↯/t.2.17 and
 /// should be caught at schema-validity time.
 pub(crate) fn resolve_reference<'a>(name: &str, schema: &'a Schema) -> Option<&'a [Member]> {
     schema.records.iter()
@@ -1151,7 +1160,7 @@ pub(crate) fn resolve_select_ref<'a>(name: &str, schema: &'a Schema) -> Option<&
 /// `Sigil`, `TypeName`) short-circuit to owned built-in types. Records
 /// resolve to a member-slice borrow; scalars resolve to an owned `Scalar`
 /// synthesized from the definition's validators. A Reference that
-/// resolves to a `SelectDefinition` is the E217 condition and is not
+/// resolves to a `SelectDefinition` is the ↯/t.2.17 condition and is not
 /// considered resolved here.
 pub(crate) enum ResolvedType<'a> {
     Struct(&'a [Member]),
@@ -1161,9 +1170,9 @@ pub(crate) enum ResolvedType<'a> {
     /// when it's a built-in or a named scalar definition.
     Scalar(std::borrow::Cow<'a, Scalar>),
     Flag,
-    Unresolved, // Reference whose name doesn't resolve (E209)
+    Unresolved, // Reference whose name doesn't resolve (↯/t.2.9)
     /// Reference whose name resolves to a `SelectDefinition` — invalid in
-    /// a `Field.type` / `Variant.type` position (E217).
+    /// a `Field.type` / `Variant.type` position (↯/t.2.17).
     KindMismatch,
 }
 
@@ -1230,7 +1239,7 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
             }));
         }
     }
-    // Select definitions: E217 in this position.
+    // Select definitions: ↯/t.2.17 in this position.
     if resolve_select_ref(name, schema).is_some() {
         return ResolvedType::KindMismatch;
     }
@@ -1239,8 +1248,8 @@ pub(crate) fn resolve_name<'a>(name: &str, schema: &'a Schema) -> ResolvedType<'
 
 // ── Type assignment (§20.2) ─────────────────────────────────────────────────
 
-/// Result of type-assigning a document against a schema. Carries E3xx errors
-/// and (optionally) E310 errors from validator callbacks.
+/// Result of type-assigning a document against a schema. Carries ↯/t.3 errors
+/// and (optionally) ↯/t.3.10 errors from validator callbacks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeAssignment {
     pub errors: Vec<TelError>,
@@ -1250,7 +1259,7 @@ pub struct TypeAssignment {
 ///
 /// When the schema has layers, this function composes them first via
 /// `compose_schema` (§20.3) and type-assigns against the composed schema.
-/// Composition errors (E2xx) are not surfaced here — callers that wish
+/// Composition errors (↯/t.2) are not surfaced here — callers that wish
 /// to see them should call `compose_schema` directly. (Composition is
 /// idempotent: an already-composed schema is returned unchanged.)
 pub fn type_assign(
@@ -1263,8 +1272,8 @@ pub fn type_assign(
 
 /// `type_assign` with a codec binding (§21.7). With a binding configured,
 /// each scalar whose type declares an `encoding` is additionally checked
-/// against the bound codec's encoder: rejection is E312, an unresolved
-/// name is E313. With no binding, encoding checks are skipped (the §21.4
+/// against the bound codec's encoder: rejection is ↯/t.3.12, an unresolved
+/// name is ↯/t.3.13. With no binding, encoding checks are skipped (the §21.4
 /// no-callback rule applied to codecs).
 pub fn type_assign_with_codecs(
     doc: &Document,
@@ -1314,7 +1323,7 @@ fn assign_compound_children_at_root(
                     ));
                 }
                 Some(&(i, ref child_type)) => {
-                    // Contiguity check (E309)
+                    // Contiguity check (↯/t.3.9)
                     if i as i32 != current_member {
                         if seen_members.contains(&i) {
                             errors.push(TelError::with_detail(
@@ -1338,7 +1347,7 @@ fn assign_compound_children_at_root(
     // Constraint check (§20.2 step 5)
     check_member_constraints(members, &fill_counts, errors);
 
-    // Key uniqueness among the root's keyed children (§21.6, E314).
+    // Key uniqueness among the root's keyed children (§21.6, ↯/t.3.14).
     check_key_uniqueness(blocks, members, &k, schema, errors);
 }
 
@@ -1369,7 +1378,7 @@ fn build_keyword_map(members: &[Member], schema: &Schema) -> std::collections::H
     k
 }
 
-/// Emit one E310 error per leaf diagnostic, walking the recursive
+/// Emit one ↯/t.3.10 error per leaf diagnostic, walking the recursive
 /// `Diagnostic` structure. Span resolution per §21.3 is the caller's
 /// concern; this helper records start/end as the diagnostic's local
 /// span when present, or (0, 0) when absent, with the diagnostic's
@@ -1405,10 +1414,10 @@ fn emit_validation_error(code: ErrorCode, diag: &Diagnostic, ctx: &str, errors: 
     }
 }
 
-/// Validate a scalar value: run its declared validators (E310 on failure)
+/// Validate a scalar value: run its declared validators (↯/t.3.10 on failure)
 /// and, when the type declares an `encoding` and a codec binding is
-/// configured, the encoding check (§21.7): unresolved name is E313, encoder
-/// rejection is E312. With no binding configured the encoding check is
+/// configured, the encoding check (§21.7): unresolved name is ↯/t.3.13, encoder
+/// rejection is ↯/t.3.12. With no binding configured the encoding check is
 /// skipped.
 fn validate_scalar_value(
     sc: &Scalar,
@@ -1426,7 +1435,7 @@ fn validate_scalar_value(
     }
     // Pattern constraints (§21.8): each pattern matches the entire value
     // text; declaration order; AND-conjoined. An unparseable pattern is a
-    // schema error (E222, reported by `validate_schema`), so it is skipped
+    // schema error (↯/t.2.22, reported by `validate_schema`), so it is skipped
     // here rather than double-reported.
     for pattern in &sc.patterns {
         if let Ok(matched) = containment::matches_whole(pattern, value) {
@@ -1469,10 +1478,10 @@ fn type_assign_compound(
 ) {
     match resolve(t, schema) {
         ResolvedType::Unresolved | ResolvedType::KindMismatch => {
-            // Schema-validity reports E209/E217; nothing more to do here.
+            // Schema-validity reports ↯/t.2.9/↯/t.2.17; nothing more to do here.
         }
         ResolvedType::Flag => {
-            // E311: Flag compound must have no atoms and no compound children.
+            // ↯/t.3.11: Flag compound must have no atoms and no compound children.
             if !c.atoms.is_empty() || !c.children.is_empty() {
                 errors.push(TelError::with_detail(
                     ErrorCode::E311, 0, 0,
@@ -1484,7 +1493,7 @@ fn type_assign_compound(
             // Scalar compound's value is its inline atom text (or "" if none).
             let value = scalar_value_text(c);
             // The spec says compound's value = inline atom text. Multiple atoms
-            // would be excess; report as E302 (more atoms than positions).
+            // would be excess; report as ↯/t.3.2 (more atoms than positions).
             if c.atoms.len() > 1 {
                 errors.push(TelError::with_detail(
                     ErrorCode::E302, 0, 0,
@@ -1492,7 +1501,7 @@ fn type_assign_compound(
                 ));
             }
             // A Scalar compound is a leaf and MUST NOT have child blocks
-            // (§20.2 step 1: T MUST be a Struct to host children → E301).
+            // (§20.2 step 1: T MUST be a Struct to host children → ↯/t.3.1).
             let has_children = c.children.iter().any(|b| !b.compounds.is_empty());
             if has_children {
                 errors.push(TelError::with_detail(
@@ -1500,7 +1509,7 @@ fn type_assign_compound(
                     format!("compound `{}` has children but its type is Scalar, not Struct", c.keyword),
                 ));
             }
-            // E310/E312/E313: validators then the encoding check, in one
+            // ↯/t.3.10/↯/t.3.12/↯/t.3.13: validators then the encoding check, in one
             // AND-conjunction (§21.7).
             validate_scalar_value(&sc, &value, &c.keyword, cb, codecs, errors);
         }
@@ -1557,7 +1566,7 @@ fn type_assign_compound(
                 }
 
                 let m = &members[pos];
-                // Atom-assignability check (E303)
+                // Atom-assignability check (↯/t.3.3)
                 let atom_assignable = match m {
                     Member::Field(f) => matches!(resolve(&f.r#type, schema),
                         ResolvedType::Scalar(_) | ResolvedType::Flag),
@@ -1649,17 +1658,17 @@ fn type_assign_compound(
                 }
             }
 
-            // Constraint check (E307, E308)
+            // Constraint check (↯/t.3.7, ↯/t.3.8)
             check_member_constraints(members, &fill_counts, errors);
 
-            // Key uniqueness among this compound's keyed children (§21.6, E314).
+            // Key uniqueness among this compound's keyed children (§21.6, ↯/t.3.14).
             check_key_uniqueness(&c.children, members, &k, schema, errors);
 
             // Struct-level validators (§21.6). The validators are
             // declared on the *Type*, not on the resolved members
             // alone, so look them up via the original Type. After
             // child validation has completed, invoke each validator;
-            // a returned `Diagnostic::Struct` is emitted as E310.
+            // a returned `Diagnostic::Struct` is emitted as ↯/t.3.10.
             let validators = struct_validators(t, schema).unwrap_or(&[]);
             if !validators.is_empty() {
                 let element = StructView { compound: c, members, schema };
@@ -1690,11 +1699,11 @@ fn struct_validators<'a>(t: &'a Type, schema: &'a Schema) -> Option<&'a [String]
     }
 }
 
-/// §21.6 Key Uniqueness (E314): among the compound children of one parent
+/// §21.6 Key Uniqueness (↯/t.3.14): among the compound children of one parent
 /// that fill effectively `repeatable` members and whose type resolves to a
 /// Struct with a key-flagged field, key values must be pairwise distinct —
 /// across all such members and keywords, in semantic order. Children whose
-/// key value is unavailable (key field absent with no default — E307
+/// key value is unavailable (key field absent with no default — ↯/t.3.7
 /// territory) are excluded from the comparison.
 fn check_key_uniqueness(
     blocks: &[Block],
@@ -1768,7 +1777,7 @@ fn key_value_of(c: &Compound, members: &[Member], schema: &Schema) -> Option<Str
             pos += 1;
         }
         if pos >= members.len() { break; }
-        // Non-atom-assignable member at `pos`: mirror the E303 bail-out.
+        // Non-atom-assignable member at `pos`: mirror the ↯/t.3.3 bail-out.
         let assignable = match &members[pos] {
             Member::Field(f) => matches!(resolve(&f.r#type, schema),
                 ResolvedType::Scalar(_) | ResolvedType::Flag),
@@ -1818,7 +1827,7 @@ fn check_member_constraints(
             ),
             Member::Exclude(_) => continue, // Skip; no constraint applies.
         };
-        // E307: required and empty (defaults handled separately for Scalar)
+        // ↯/t.3.7: required and empty (defaults handled separately for Scalar)
         if required && fc == 0 {
             let has_default = matches!(m, Member::Field(f) if f.default.is_some());
             if !has_default {
@@ -1828,7 +1837,7 @@ fn check_member_constraints(
                 ));
             }
         }
-        // E308: non-repeatable filled twice
+        // ↯/t.3.8: non-repeatable filled twice
         if !repeatable && fc > 1 {
             errors.push(TelError::with_detail(
                 ErrorCode::E308, 0, 0,
@@ -1874,7 +1883,7 @@ impl fmt::Display for SchemaError {
 }
 
 /// Check a `Schema` for validity per §20.1 and §20.3. Returns the full list
-/// of E2xx errors (no recovery; every constraint violation is reported).
+/// of ↯/t.2 errors (no recovery; every constraint violation is reported).
 // ── Schema construction from semantic model (§20.6) ────────────────────────
 
 /// Walk a parsed `Document` (which is presumed to be a schema document, i.e.
@@ -1941,7 +1950,7 @@ fn construct_scalar_definition(c: &Compound) -> ScalarDefinition {
                 "pattern" => patterns.push(scalar_value_text(child)),
                 "encoding" => encoding = Some(scalar_value_text(child)),
                 // `width <n>`: a positive decimal byte count, `[1-9][0-9]*`.
-                // Anything else is E225, reported by `validate_schema`.
+                // Anything else is ↯/t.2.25, reported by `validate_schema`.
                 "width" => {
                     let text = scalar_value_text(child);
                     match parse_width(&text) {
@@ -1970,7 +1979,7 @@ fn parse_width(text: &str) -> Option<u64> {
 }
 
 /// The fixed byte width of each standard codec (§21.7) whose values have
-/// one; a declared `width` must agree with it (E226).
+/// one; a declared `width` must agree with it (↯/t.2.26).
 pub fn standard_codec_width(encoding: &str) -> Option<u64> {
     match encoding {
         "u8" | "i8" => Some(1),
@@ -1987,7 +1996,7 @@ pub fn standard_codec_width(encoding: &str) -> Option<u64> {
 /// (at schema root or inside a `layer` body). Walks `variant`, `validate`,
 /// and (layer-only) `exclude` children. `exclude` is accumulated into
 /// `layer_excludes` to be consumed by `MergeSelect`; in a base schema
-/// `layer_excludes` should be empty (E216 if not, reported by
+/// `layer_excludes` should be empty (↯/t.2.16 if not, reported by
 /// `validate_schema`).
 fn construct_select_definition(c: &Compound) -> SelectDefinition {
     let name = definition_name(c);
@@ -2078,7 +2087,7 @@ fn construct_layer(c: &Compound) -> Layer {
 /// `record`'s body, or an `overlay` block) and collect both Members
 /// (`field`, `select` → SelectRef, `validate`) and its struct-level
 /// validators. `Exclude` MUST NOT appear in a struct-shaped body (§20.3);
-/// if it does, that's E216, reported by `validate_schema`. To remain
+/// if it does, that's ↯/t.2.16, reported by `validate_schema`. To remain
 /// permissive at construction time and let the validator report cleanly,
 /// the constructor accepts `Member::Exclude` here without complaint.
 fn construct_struct_body(blocks: &[Block]) -> (Vec<Member>, Vec<String>) {
@@ -2266,7 +2275,7 @@ fn construct_variant(c: &Compound) -> Variant {
 pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     let mut errors = Vec::new();
 
-    // E210: duplicate definition names across the base schema's three
+    // ↯/t.2.10: duplicate definition names across the base schema's three
     // Definition lists (records, scalars, selects). They share one
     // namespace.
     let mut seen_base: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -2304,8 +2313,8 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E222: every pattern (base and layer scalars alike) must be a valid
-    // RE2 pattern; fail closed like E313 — an unparseable pattern is never
+    // ↯/t.2.22: every pattern (base and layer scalars alike) must be a valid
+    // RE2 pattern; fail closed like ↯/t.3.13 — an unparseable pattern is never
     // treated as satisfied.
     for sd in s.scalars.iter().chain(s.layers.iter().flat_map(|l| l.scalars.iter())) {
         for pattern in &sd.patterns {
@@ -2360,7 +2369,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E202: every SelectDefinition (base or layer) must have ≥ 1 variant.
+    // ↯/t.2.2: every SelectDefinition (base or layer) must have ≥ 1 variant.
     // (A layer-side select with only Exclude/validate children but no
     // variants is fine in the LAYER source — the merge consumes excludes
     // against the base's variants; the layer's own `variants` list may be
@@ -2373,7 +2382,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
             });
         }
     }
-    // E216: an `exclude` declared inside a *base* SelectDefinition (i.e.
+    // ↯/t.2.16: an `exclude` declared inside a *base* SelectDefinition (i.e.
     // `layer_excludes` non-empty on a base select) is layer-only and not
     // allowed here. Layer-side excludes are valid; we trust them.
     for sl in &s.selects {
@@ -2388,7 +2397,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E204: duplicate layer names
+    // ↯/t.2.4: duplicate layer names
     let mut seen_layer_names = std::collections::HashSet::new();
     for l in &s.layers {
         if !seen_layer_names.insert(&l.name) {
@@ -2399,7 +2408,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E207: sigil character check
+    // ↯/t.2.7: sigil character check
     if let Some(c) = s.sigil {
         if matches!(validate_sigil(&c.to_string()), ValidationResponse::Invalid(_)) {
             errors.push(SchemaError {
@@ -2421,7 +2430,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E216 (alternative path): `Member::Exclude` MUST NOT appear inside any
+    // ↯/t.2.16 (alternative path): `Member::Exclude` MUST NOT appear inside any
     // struct-shaped body. (Layer-side exclude lives on `SelectDefinition.layer_excludes`
     // which is collected by `construct_select_definition`, not as a Member.)
     check_no_exclude_in_struct(&s.document.members, "document", &mut errors);
@@ -2437,7 +2446,7 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
         }
     }
 
-    // E208: reserved keyword `tel` — check every Field/Variant keyword.
+    // ↯/t.2.8: reserved keyword `tel` — check every Field/Variant keyword.
     for kw in collect_all_keywords(s) {
         if kw == "tel" {
             errors.push(SchemaError {
@@ -2448,35 +2457,35 @@ pub fn validate_schema(s: &Schema) -> Vec<SchemaError> {
     }
 
     // Run the full composition algorithm to surface any merge-time errors
-    // (E205/E206/E211/E212/E213). The simulation in the legacy code is
+    // (↯/t.2.5/↯/t.2.6/↯/t.2.11/↯/t.2.12/↯/t.2.13). The simulation in the legacy code is
     // subsumed by compose_schema.
     if !s.layers.is_empty() {
         let (_, compose_errs) = compose_schema(s);
         errors.extend(compose_errs);
     }
 
-    // E219–E221 (§20.1): key-field constraints, checked against the
+    // ↯/t.2.19–↯/t.2.21 (§20.1): key-field constraints, checked against the
     // composed schema's Structs — a layer may both key a field and tighten
     // its polarity, so effective polarity is meaningful only after
     // composition.
     check_key_constraints(s, &mut errors);
 
-    // E225–E231: RaTEL storage-layout annotations (`width`, `intern`,
+    // ↯/t.2.25–↯/t.2.31: RaTEL storage-layout annotations (`width`, `intern`,
     // `index`), checked against the composed schema for the same reason.
     check_layout_annotations(s, &mut errors);
 
     errors
 }
 
-/// E225–E231: the RaTEL storage-layout annotations. `width`/`intern` are
-/// checked per scalar of the composed schema (E226 against a standard
+/// ↯/t.2.25–↯/t.2.31: the RaTEL storage-layout annotations. `width`/`intern` are
+/// checked per scalar of the composed schema (↯/t.2.26 against a standard
 /// codec's fixed width is deferred to here because the encoding may arrive
 /// from a later layer than the width); `index` is checked per Field of the
 /// composed schema, where effective polarity and the merged index list are
-/// final. E225 is checked on every source scalar, base and layer alike,
+/// final. ↯/t.2.25 is checked on every source scalar, base and layer alike,
 /// because an unparseable width never reaches the composed model.
 fn check_layout_annotations(s: &Schema, errors: &mut Vec<SchemaError>) {
-    // E225: `width` text must be `[1-9][0-9]*`.
+    // ↯/t.2.25: `width` text must be `[1-9][0-9]*`.
     for sd in s.scalars.iter().chain(s.layers.iter().flat_map(|l| l.scalars.iter())) {
         if let Some(text) = &sd.invalid_width {
             errors.push(SchemaError {
@@ -2499,13 +2508,13 @@ fn check_layout_annotations(s: &Schema, errors: &mut Vec<SchemaError>) {
     for sd in &target.scalars {
         if let Some(width) = sd.width {
             match &sd.encoding {
-                // E227: a width is meaningful only alongside an encoding.
+                // ↯/t.2.27: a width is meaningful only alongside an encoding.
                 None => errors.push(SchemaError {
                     code: ErrorCode::E227,
                     detail: format!(
                         "scalar `{}` declares width `{}` but no encoding", sd.name, width),
                 }),
-                // E226: a width must agree with a standard codec's fixed width.
+                // ↯/t.2.26: a width must agree with a standard codec's fixed width.
                 Some(enc) => if let Some(fixed) = standard_codec_width(enc) {
                     if fixed != width {
                         errors.push(SchemaError {
@@ -2517,7 +2526,7 @@ fn check_layout_annotations(s: &Schema, errors: &mut Vec<SchemaError>) {
                     }
                 },
             }
-            // E231: `width` and `intern` are mutually exclusive.
+            // ↯/t.2.31: `width` and `intern` are mutually exclusive.
             if sd.intern {
                 errors.push(SchemaError {
                     code: ErrorCode::E231,
@@ -2535,7 +2544,7 @@ fn check_layout_annotations(s: &Schema, errors: &mut Vec<SchemaError>) {
     }
 }
 
-/// E228–E230 for every indexed Field in one Struct's member list, recursing
+/// ↯/t.2.28–↯/t.2.30 for every indexed Field in one Struct's member list, recursing
 /// into merge-produced nested `Type::Struct`s.
 fn check_indexes_in_members(
     members: &[Member],
@@ -2554,14 +2563,14 @@ fn check_indexes_in_members(
         }
         if f.indexes.is_empty() { continue; }
         let site = format!("field `{}` in {}", f.keyword, where_);
-        // E228: an indexed field must be effectively repeatable.
+        // ↯/t.2.28: an indexed field must be effectively repeatable.
         if !f.repeatable.effective_repeatable() {
             errors.push(SchemaError {
                 code: ErrorCode::E228,
                 detail: format!("{} declares an index but is not repeatable", site),
             });
         }
-        // E228: ... and its type must resolve to a Struct or a Scalar.
+        // ↯/t.2.28: ... and its type must resolve to a Struct or a Scalar.
         let element_members: Option<&[Member]> = match resolve(&f.r#type, schema) {
             ResolvedType::Struct(members) => Some(members),
             ResolvedType::Scalar(_) => None,
@@ -2577,7 +2586,7 @@ fn check_indexes_in_members(
         };
         for ix in &f.indexes {
             for path in &ix.paths {
-                // E229: syntactically valid TELP.
+                // ↯/t.2.29: syntactically valid TELP.
                 let telp = match telp::Telp::parse(path) {
                     Ok(t) => t,
                     Err(telp::Failure::Syntax(reason)) => {
@@ -2601,8 +2610,8 @@ fn check_indexes_in_members(
                                 site, path),
                         });
                     },
-                    // Struct-typed field: the root path is not allowed (E229);
-                    // every other path must resolve statically (E230).
+                    // Struct-typed field: the root path is not allowed (↯/t.2.29);
+                    // every other path must resolve statically (↯/t.2.30).
                     Some(members) => if telp.components().is_empty() {
                         errors.push(SchemaError {
                             code: ErrorCode::E229,
@@ -2624,7 +2633,7 @@ fn check_indexes_in_members(
     }
 }
 
-/// Static resolution of an index path (E230) from a Struct's members: each
+/// Static resolution of an index path (↯/t.2.30) from a Struct's members: each
 /// component must name a `Field` member (never a Select variant) whose
 /// effective `repeatable` is false; every non-final component must resolve
 /// to a Struct, and the final one to a Scalar.
@@ -2675,7 +2684,7 @@ fn resolve_index_path(
     Ok(())
 }
 
-/// E219–E221 (§20.1): key-field constraints over every Struct of the
+/// ↯/t.2.19–↯/t.2.21 (§20.1): key-field constraints over every Struct of the
 /// composed schema (document root and every RecordDefinition body,
 /// recursing into merge-produced nested `Type::Struct`s).
 fn check_key_constraints(s: &Schema, errors: &mut Vec<SchemaError>) {
@@ -2712,7 +2721,7 @@ fn check_key_constraints_in_members(
         }
         if !f.key { continue; }
         key_keywords.push(&f.keyword);
-        // E219: the key field's type must resolve to a Scalar.
+        // ↯/t.2.19: the key field's type must resolve to a Scalar.
         if !matches!(resolve(&f.r#type, schema), ResolvedType::Scalar(_)) {
             errors.push(SchemaError {
                 code: ErrorCode::E219,
@@ -2720,7 +2729,7 @@ fn check_key_constraints_in_members(
                     "key field `{}` in {} does not resolve to a Scalar", f.keyword, where_),
             });
         }
-        // E220: effectively required and non-repeatable.
+        // ↯/t.2.20: effectively required and non-repeatable.
         if !f.required.effective_required() || f.repeatable.effective_repeatable() {
             errors.push(SchemaError {
                 code: ErrorCode::E220,
@@ -2730,7 +2739,7 @@ fn check_key_constraints_in_members(
             });
         }
     }
-    // E221: at most one key field per Struct.
+    // ↯/t.2.21: at most one key field per Struct.
     if key_keywords.len() > 1 {
         errors.push(SchemaError {
             code: ErrorCode::E221,
@@ -2741,7 +2750,7 @@ fn check_key_constraints_in_members(
     }
 }
 
-/// Collect every Field/Variant keyword reachable from the schema (for E208 check).
+/// Collect every Field/Variant keyword reachable from the schema (for ↯/t.2.8 check).
 fn collect_all_keywords(s: &Schema) -> Vec<String> {
     let mut out = Vec::new();
     let visit_members = |out: &mut Vec<String>, members: &[Member]| {
@@ -2772,8 +2781,8 @@ fn collect_all_keywords(s: &Schema) -> Vec<String> {
 
 /// Apply every `Layer` in `s.layers` to produce a fully composed schema
 /// per §20.3. Returns the composed `Schema` (with empty `layers`) plus
-/// any `SchemaError`s raised during composition (E205, E206, E210, E211,
-/// E212, E213, E218, E226). The returned schema is always a best-effort result.
+/// any `SchemaError`s raised during composition (↯/t.2.5, ↯/t.2.6, ↯/t.2.10, ↯/t.2.11,
+/// ↯/t.2.12, ↯/t.2.13, ↯/t.2.18, ↯/t.2.26). The returned schema is always a best-effort result.
 pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
     let mut errors: Vec<SchemaError> = Vec::new();
     let mut records: Vec<RecordDefinition> = s.records.clone();
@@ -2843,7 +2852,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 // MergeScalar's pattern rule (§20.3): a layer scalar with
                 // one or more `pattern` lines REPLACES the inherited set,
                 // subject to the containment check L(⋂new) ⊆ L(⋂old),
-                // decomposed as ⋂new ⊆ Pᵢ for each inherited Pᵢ (E223 on
+                // decomposed as ⋂new ⊆ Pᵢ for each inherited Pᵢ (↯/t.2.23 on
                 // failure, fail-closed: the inherited set is kept). A
                 // textually identical restatement short-circuits; an empty
                 // inherited set is Σ*, so first patterns are trivially
@@ -2885,7 +2894,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 };
                 // MergeScalar's encoding rule (§20.3): a layer MAY add an
                 // encoding where the base has none, MAY restate the base's,
-                // MUST NOT change it (E218). Removal has no syntax.
+                // MUST NOT change it (↯/t.2.18). Removal has no syntax.
                 let merged_encoding = match (&scalars[pos].encoding, &sd.encoding) {
                     (base, None) => base.clone(),
                     (None, layer_enc @ Some(_)) => layer_enc.clone(),
@@ -2905,7 +2914,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                 };
                 // MergeScalar's width rule: a layer MAY add a width where
                 // the base has none, MAY restate the base's, MUST NOT
-                // change it (E226). Disagreement with a standard codec's
+                // change it (↯/t.2.26). Disagreement with a standard codec's
                 // fixed width is checked on the composed schema by
                 // `validate_schema`, where the encoding is finally known.
                 let merged_width = match (scalars[pos].width, sd.width) {
@@ -2945,7 +2954,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
         // Select merge: same-name SelectDefinition → MergeSelect (exclude
         // variants per layer's `layer_excludes`; append validators). Adding
         // a variant in a layer (i.e. layer's SelectDefinition has a variant
-        // keyword absent from the base) is E213.
+        // keyword absent from the base) is ↯/t.2.13.
         for sl in &layer.selects {
             if records.iter().any(|d| d.name == sl.name)
                 || scalars.iter().any(|sd| sd.name == sl.name)
@@ -3009,11 +3018,11 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
 }
 
 /// Merge a layer's SelectDefinition into the base SelectDefinition with the
-/// same name. Variant addition by the layer is E213; an Exclude that names
-/// a variant the base (`origin`, before any layer) never declared is E211,
+/// same name. Variant addition by the layer is ↯/t.2.13; an Exclude that names
+/// a variant the base (`origin`, before any layer) never declared is ↯/t.2.11,
 /// while one naming a variant an earlier layer already excluded is a no-op;
 /// emptying a SelectDefinition referenced
-/// by any required SelectRef would be E212 (deferred: we don't know the
+/// by any required SelectRef would be ↯/t.2.12 (deferred: we don't know the
 /// referencing SelectRefs at this layer; the validity check is left to
 /// downstream schema validation that observes the composed schema).
 fn merge_select_def(
@@ -3026,7 +3035,7 @@ fn merge_select_def(
     let mut variants = base.variants.clone();
     // Variants in `layer.variants` MUST identify existing base variants
     // (variant restatement, allowed); a layer variant whose keyword is
-    // absent from the base is E213.
+    // absent from the base is ↯/t.2.13.
     for lv in &layer.variants {
         if !variants.iter().any(|v| v.keyword == lv.keyword) {
             errors.push(SchemaError {
@@ -3069,8 +3078,8 @@ fn merge_select_def(
 }
 
 /// Merge per-axis Polarity (§20.3): tightening or restatement allowed;
-/// loosening an already-tight or default axis is E214 (required axis) or
-/// E215 (repeatable axis).
+/// loosening an already-tight or default axis is ↯/t.2.14 (required axis) or
+/// ↯/t.2.15 (repeatable axis).
 fn merge_polarity(
     base: Polarity,
     layer: Polarity,
@@ -3143,7 +3152,7 @@ fn merge_field_with(
         required: merged_required,
         repeatable: merged_repeatable,
         // Monotone OR (§20.3): a layer may mark a field as key; nothing
-        // can clear it. E219/E220/E221 are re-checked on the composed
+        // can clear it. ↯/t.2.19/↯/t.2.20/↯/t.2.21 are re-checked on the composed
         // schema by `check_key_constraints`.
         key: base.key || layer.key,
         keyword: base.keyword.clone(),
@@ -3233,7 +3242,7 @@ fn merge_members(
                         // §20.3: the keyword must be free across the whole
                         // merged keyword space, which includes the variant
                         // keywords contributed by any existing SelectRef. A
-                        // collision there is E205, not a type mismatch.
+                        // collision there is ↯/t.2.5, not a type mismatch.
                         let taken = merged.iter().any(|m| {
                             member_keywords(m, selects).iter().any(|k| *k == f.keyword)
                         });
@@ -3308,7 +3317,7 @@ fn merge_members(
             Member::Exclude(kw) => {
                 // Exclude is layer-only and lives in a layer's SelectDefinition
                 // body, not in a struct-shaped member list. Reaching here is a
-                // validity error (E216) — but the validate_schema path
+                // validity error (↯/t.2.16) — but the validate_schema path
                 // typically catches it first. Report defensively.
                 errors.push(SchemaError {
                     code: ErrorCode::E216,
@@ -3332,7 +3341,7 @@ fn member_types(m: &Member) -> Vec<&Type> {
     }
 }
 
-/// E216 (§20.3): scan a member list (a struct-shaped body) for `Member::Exclude`
+/// ↯/t.2.16 (§20.3): scan a member list (a struct-shaped body) for `Member::Exclude`
 /// and report each as an error.
 fn check_no_exclude_in_struct(members: &[Member], where_: &str, errors: &mut Vec<SchemaError>) {
     for m in members {
@@ -3368,7 +3377,7 @@ fn check_members_recursive(
     schema: &Schema,
     errors: &mut Vec<SchemaError>,
 ) {
-    // E201: duplicate keyword within a Struct (Field keywords + variant
+    // ↯/t.2.1: duplicate keyword within a Struct (Field keywords + variant
     // keywords of every SelectRef's referenced SelectDefinition).
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push_dup = |seen: &mut std::collections::HashSet<String>,
@@ -3398,7 +3407,7 @@ fn check_members_recursive(
     for m in members {
         match m {
             Member::Field(f) => {
-                // E203: Field.default requires required + Scalar resolution.
+                // ↯/t.2.3: Field.default requires required + Scalar resolution.
                 if let Some(def_val) = &f.default {
                     let is_required = f.required.effective_required();
                     let resolves_to_scalar = matches!(&f.r#type, Type::Scalar(_)) ||
@@ -3427,7 +3436,7 @@ fn check_members_recursive(
                         });
                     }
                 }
-                // E209/E217: type-name resolution.
+                // ↯/t.2.9/↯/t.2.17: type-name resolution.
                 if let Type::Reference(n) = &f.r#type {
                     match resolve_name(n, schema) {
                         ResolvedType::Unresolved => {
@@ -3457,7 +3466,7 @@ fn check_members_recursive(
                 }
             }
             Member::SelectRef(s) => {
-                // E209/E217: SelectRef must resolve to a SelectDefinition.
+                // ↯/t.2.9/↯/t.2.17: SelectRef must resolve to a SelectDefinition.
                 match resolve_name(&s.reference, schema) {
                     ResolvedType::Unresolved => {
                         errors.push(SchemaError {
@@ -3565,7 +3574,7 @@ pub fn parse(input: &str) -> ParseResult {
     parse_inner(input, None)
 }
 
-/// Parse with schema-aware E107 (odd-indentation) recovery enabled.
+/// Parse with schema-aware ↯/t.1.7 (odd-indentation) recovery enabled.
 /// Per §19.5: when a schema is available, the parser disambiguates a line
 /// whose relative indentation is odd by picking the candidate depth at
 /// which the line's keyword is a valid member of the parent struct. With
@@ -3579,7 +3588,7 @@ pub fn parse_with_schema(input: &str, schema: &Schema) -> ParseResult {
 
 /// Decode a byte sequence as UTF-8, replacing each maximal ill-formed
 /// subsequence with `U+FFFD` REPLACEMENT CHARACTER (Unicode §3.9 "maximal
-/// subpart" practice, per the E123 recovery of §19.5) and recording one E123
+/// subpart" practice, per the ↯/t.1.23 recovery of §19.5) and recording one ↯/t.1.23
 /// error per replacement. Error spans are code-point offsets into the
 /// decoded text, so they line up with every other diagnostic span (§19.3).
 fn decode_utf8_tracked(bytes: &[u8]) -> (String, Vec<TelError>) {
@@ -3616,7 +3625,7 @@ fn decode_utf8_tracked(bytes: &[u8]) -> (String, Vec<TelError>) {
 
 /// Parse a byte sequence as a single TEL document. A well-formed UTF-8
 /// sequence parses exactly as [`parse`] on the decoded text; each maximal
-/// ill-formed subsequence is reported as **E123** (§4), replaced with
+/// ill-formed subsequence is reported as **↯/t.1.23** (§4), replaced with
 /// `U+FFFD` per §19.5, and parsing continues on the decoded text.
 pub fn parse_bytes(input: &[u8]) -> ParseResult {
     let (text, mut errors) = decode_utf8_tracked(input);
@@ -3670,7 +3679,7 @@ fn continuation_offset(raw_lines: &[RawLine], next: usize) -> Option<usize> {
 
 /// Result of the file-level parsing prelude shared by every document in a
 /// source: the line split and line-ending mode are computed once for the
-/// whole input. A UTF-8 BOM (E101) is only meaningful at the very start of
+/// whole input. A UTF-8 BOM (↯/t.1.1) is only meaningful at the very start of
 /// the source; if present, its error is recorded on `ParserState::errors`
 /// and is taken by the first document's result.
 struct Prelude {
@@ -3747,18 +3756,18 @@ impl ParserState {
     }
 
     /// File-level prelude shared by every document in the source: handle a
-    /// leading BOM (E101), detect the line-ending mode (E120), and split the
+    /// leading BOM (↯/t.1.1), detect the line-ending mode (↯/t.1.20), and split the
     /// input into raw lines. Computed once per source.
     fn prelude(&mut self) -> Prelude {
         let mut start = 0;
 
-        // E101: BOM (only meaningful at the very start of the source).
+        // ↯/t.1.1: BOM (only meaningful at the very start of the source).
         if self.all_chars.first() == Some(&'\u{FEFF}') {
             self.errors.push(TelError::new(ErrorCode::E101, 0, 1));
             start = 1;
         }
 
-        // Detect line endings and check E120 (file-wide; one mode per source).
+        // Detect line endings and check ↯/t.1.20 (file-wide; one mode per source).
         let line_endings = self.detect_line_endings(start);
 
         // Split into raw lines.
@@ -3805,7 +3814,7 @@ impl ParserState {
             let text = raw_lines[fi].text();
             let trimmed = text.trim_start();
             if trimmed == "tel" || trimmed.starts_with("tel ") {
-                // Check E103 — measured from the document's first byte, since
+                // Check ↯/t.1.3 — measured from the document's first byte, since
                 // each document in a stream has its own 4096-byte pragma window.
                 let doc_start_char = raw_lines.get(start_line).map(|l| l.start).unwrap_or(0);
                 let byte_end: usize = self.all_chars
@@ -3818,7 +3827,7 @@ impl ParserState {
                         raw_lines[fi].start + raw_lines[fi].chars.len(),
                     ));
                 }
-                // Check E102 - is it the first non-blank after directive?
+                // Check ↯/t.1.2 - is it the first non-blank after directive?
                 // There shouldn't be non-blank lines between line_idx and fi
                 if raw_lines[pragma_search_start..fi].iter().any(|l| !l.is_blank()) {
                     self.errors.push(TelError::new(
@@ -3846,7 +3855,7 @@ impl ParserState {
         // raw-line index of the separator that ended the document, if any.
         let (children, boundary) = self.build_tree(raw_lines, line_idx, schema);
 
-        // Check E102: if no pragma was found at the first non-blank line, scan
+        // Check ↯/t.1.2: if no pragma was found at the first non-blank line, scan
         // for a misplaced pragma — but only within this document (up to its
         // separator), so the next document's pragma is never mistaken for one.
         if pragma.is_none() {
@@ -3928,7 +3937,7 @@ impl ParserState {
         let mut ranges = Vec::new();
         // Very simple heuristic: look for lines that are heavily indented (6+ spaces from margin)
         // and have non-whitespace content that could be a delimiter, then scan for closing.
-        // This is a rough scan — we just need to avoid false E120 inside literal payloads.
+        // This is a rough scan — we just need to avoid false ↯/t.1.20 inside literal payloads.
 
         let mut i = start;
         while i < chars.len() {
@@ -4014,8 +4023,8 @@ impl ParserState {
         // signature, sigil. `position` tracks the highest position consumed
         // so far (1 = reference, 2 = layers, 3 = signature, 4 = sigil).
         // A phrase that violates the order or multiplicity is dropped
-        // (E122 recovery: keep the earliest well-ordered subsequence); an
-        // unclassifiable phrase is skipped (E121 recovery).
+        // (↯/t.1.22 recovery: keep the earliest well-ordered subsequence); an
+        // unclassifiable phrase is skipped (↯/t.1.21 recovery).
         let mut reference: Option<String> = None;
         let mut layers: Vec<String> = Vec::new();
         let mut signature: Option<String> = None;
@@ -4057,7 +4066,7 @@ impl ParserState {
                 }
             } else if char_count == 1 && i == n - 1 {
                 // Final single-character phrase matching no other form: the
-                // sigil parameter, which MUST be sigil-valid (E105).
+                // sigil parameter, which MUST be sigil-valid (↯/t.1.5).
                 let ch = s.chars().next().unwrap();
                 if is_sigil_valid(ch) {
                     sigil = Some(ch);
@@ -4133,7 +4142,7 @@ struct TreeCtx<'a> {
     margin: usize,
     sigil: char,
     errors: Vec<TelError>,
-    /// Schema used for schema-aware E107 recovery. `None` falls back to the
+    /// Schema used for schema-aware ↯/t.1.7 recovery. `None` falls back to the
     /// schema-independent shallower-wins rule (§19.5).
     schema: Option<&'a Schema>,
     /// Stack of keywords of currently-open ancestor compounds, indexed by
@@ -4146,13 +4155,13 @@ struct TreeCtx<'a> {
     /// the current document and begins a new one on the following line. Set
     /// once, when the structural parser first encounters such a line.
     boundary: Option<usize>,
-    /// Raw-line indices whose indentation defect (E106/E107) has already been
+    /// Raw-line indices whose indentation defect (↯/t.1.6/↯/t.1.7) has already been
     /// reported. `line_indent` is called more than once for the same line —
     /// `parse_compound_body` inspects the line to decide whether it opens a
     /// source atom, a literal atom or a child block, and on declining it
     /// leaves the line for the enclosing `parse_blocks` loop, which inspects
     /// it again. The recovered depth is deliberately *not* cached: schema-
-    /// aware E107 recovery (§19.5) resolves against `ancestors`, which differs
+    /// aware ↯/t.1.7 recovery (§19.5) resolves against `ancestors`, which differs
     /// between those two call sites. Only the diagnostic is suppressed, since
     /// a line has at most one indentation defect however often it is examined.
     indent_reported: std::collections::HashSet<usize>,
@@ -4172,14 +4181,14 @@ enum LineKind {
 }
 
 impl<'a> TreeCtx<'a> {
-    /// Get indent of raw line, or None if blank. Also checks E106/E107/E108.
+    /// Get indent of raw line, or None if blank. Also checks ↯/t.1.6/↯/t.1.7/↯/t.1.8.
     fn line_indent(&mut self, ri: usize) -> Option<usize> {
         let line = &self.raw[ri];
         if line.is_blank() { return None; }
         let chars = &line.chars;
         let margin = self.margin;
 
-        // Check margin (E106)
+        // Check margin (↯/t.1.6)
         if chars.len() < margin {
             let start = line.start;
             let end = line.start + chars.len();
@@ -4209,7 +4218,7 @@ impl<'a> TreeCtx<'a> {
             return Some(spaces / 2);
         }
 
-        // E107: odd indentation. §19.5 specifies schema-aware recovery when a
+        // ↯/t.1.7: odd indentation. §19.5 specifies schema-aware recovery when a
         // schema is available, falling back to the schema-independent
         // shallower-wins rule otherwise.
         let e107_start = line.start;
@@ -4251,7 +4260,7 @@ impl<'a> TreeCtx<'a> {
     }
 
     /// Is `keyword` a valid member-keyword for a compound placed at
-    /// `target_depth`? Used by schema-aware E107 recovery. Returns `false`
+    /// `target_depth`? Used by schema-aware ↯/t.1.7 recovery. Returns `false`
     /// if there's no schema, no parent at `target_depth - 1`, the parent's
     /// type can't be resolved to a Struct, or the keyword doesn't appear
     /// in the parent's keyword order.
@@ -4343,7 +4352,7 @@ impl<'a> TreeCtx<'a> {
         chars[margin..].iter().take_while(|&&c| c == ' ').count()
     }
 
-    /// Check trailing spaces (E108) on a non-blank ordinary line.
+    /// Check trailing spaces (↯/t.1.8) on a non-blank ordinary line.
     fn check_trailing(&mut self, ri: usize) {
         let chars = &self.raw[ri].chars;
         if !chars.is_empty() && *chars.last().unwrap() == ' ' {
@@ -4420,7 +4429,7 @@ impl<'a> TreeCtx<'a> {
 
             if indent != expected {
                 if cur.tabulation.is_some() {
-                    // Row at wrong indent inside a tabulated block → E116
+                    // Row at wrong indent inside a tabulated block → ↯/t.1.16
                     self.errors.push(TelError::new(
                         ErrorCode::E116, self.raw[ri].start, self.raw[ri].start + self.margin + indent * 2,
                     ));
@@ -4430,7 +4439,7 @@ impl<'a> TreeCtx<'a> {
                 if indent < expected {
                     break; // belongs to parent
                 }
-                // E111: over-indentation. Recovery (deliberate
+                // ↯/t.1.11: over-indentation. Recovery (deliberate
                 // simplification of §19.5's full backtracking): skip
                 // the over-indented line and continue with the next
                 // line at the originally-expected indent. The line is
@@ -4453,7 +4462,7 @@ impl<'a> TreeCtx<'a> {
                 }
 
                 LineKind::Comment(text) => {
-                    // E109 check
+                    // ↯/t.1.9 check
                     let ok = matches!(prev_kind, PrevKind::Start | PrevKind::Blank | PrevKind::Comment);
                     if !ok {
                         self.errors.push(TelError::new(
@@ -4524,7 +4533,7 @@ impl<'a> TreeCtx<'a> {
                     // Look for source atom, literal atom, or children
                     let is_tab_row = cur.tabulation.is_some();
                     if is_tab_row {
-                        // Tabulated rows must not have children (E112)
+                        // Tabulated rows must not have children (↯/t.1.12)
                         if self.idx < self.raw.len() && !self.raw[self.idx].is_blank() {
                             let next_indent = self.peek_indent(self.idx);
                             if let Some(ni) = next_indent {
@@ -4538,7 +4547,7 @@ impl<'a> TreeCtx<'a> {
                         }
                     } else {
                         // Push this compound's keyword onto the ancestor
-                        // stack so that schema-aware E107 recovery in any
+                        // stack so that schema-aware ↯/t.1.7 recovery in any
                         // nested parse_blocks call can resolve the parent
                         // struct correctly. Pop on the way out.
                         self.ancestors.push(compound.keyword.clone());
@@ -4598,13 +4607,13 @@ impl<'a> TreeCtx<'a> {
             }
         }
 
-        // E118 (overflow): §16.2 states column presence as a trichotomy —
+        // ↯/t.1.18 (overflow): §16.2 states column presence as a trichotomy —
         // present, absent, or overflowed. A row whose content occupies the
         // separator positions M_i − 2 / M_i − 1 with a non-space character has
         // overflowed the preceding column (or, for i = 1, the row's
         // keyword-and-pre-column-atom portion), and would otherwise silently
         // lose its column structure. Positions inside a remark are exempt,
-        // as they are for E117.
+        // as they are for ↯/t.1.17.
         let content_end = indent_spaces + check_end;
         for &m_i in tab.marker_offsets.iter() {
             if m_i < 2 { continue; }
@@ -4624,7 +4633,7 @@ impl<'a> TreeCtx<'a> {
             }
         }
 
-        // E118: column width check
+        // ↯/t.1.18: column width check
         for col_idx in 0..tab.marker_offsets.len() {
             let m_i = tab.marker_offsets[col_idx];
             if m_i == 0 { continue; } // skip M_0
@@ -4674,7 +4683,7 @@ impl<'a> TreeCtx<'a> {
         // Only the child case survives the blank. A line at indent+2 or deeper
         // after a blank is no longer a source or literal atom, so it is simply
         // over-indented, and is left for the enclosing `parse_blocks` to report
-        // as E111.
+        // as ↯/t.1.11.
         if self.raw[ri].is_blank() {
             let mut peek = ri;
             while peek < self.raw.len() && self.raw[peek].is_blank() { peek += 1; }
@@ -4730,10 +4739,10 @@ impl<'a> TreeCtx<'a> {
 
     /// §14/§15: a compound may carry at most one source or literal atom.
     /// Once one has been consumed, a further atom-triggering line immediately
-    /// after it is E113 (a source atom at indent+2) or E114 (a literal atom at
+    /// after it is ↯/t.1.13 (a source atom at indent+2) or ↯/t.1.14 (a literal atom at
     /// indent+3). The §19.5 recovery keeps the first atom and ignores the
     /// duplicate, so the duplicate's lines are consumed and discarded — leaving
-    /// them unconsumed would instead surface as spurious E111 over-indentation.
+    /// them unconsumed would instead surface as spurious ↯/t.1.11 over-indentation.
     ///
     /// Only source-after-literal and literal-after-literal can reach here: a
     /// source atom already absorbs every following line indented at least as
@@ -4893,7 +4902,7 @@ impl<'a> TreeCtx<'a> {
             }
             Some(_) => String::new(), // closing delim on the same line as opener (degenerate)
             None => {
-                // E115: unclosed literal atom. Per §19.5's E115 recovery,
+                // ↯/t.1.15: unclosed literal atom. Per §19.5's ↯/t.1.15 recovery,
                 // treat the payload as everything from the opening
                 // delimiter line to end of file (excluding the final LF).
                 self.errors.push(TelError::new(
@@ -5216,7 +5225,7 @@ mod tests {
                         if schema_ta.errors.is_empty() {
                             let user_schema = construct_schema(&schema_parsed.document);
                             // Validate the constructed user schema first;
-                            // surface any of its own E2xx errors so the test
+                            // surface any of its own ↯/t.2 errors so the test
                             // author sees them.
                             for serr in validate_schema(&user_schema) {
                                 all_errors.push(TelError::with_detail(
@@ -5471,7 +5480,7 @@ mod tests {
     #[test]
     fn stream_tests() { run_stream_dir("test/stream"); }
 
-    // ── UTF-8 byte-level parsing (E123, §4) ─────────────────────────────────
+    // ── UTF-8 byte-level parsing (↯/t.1.23, §4) ─────────────────────────────────
 
     #[test]
     fn parse_bytes_wellformed_matches_parse() {
@@ -5485,7 +5494,7 @@ mod tests {
     #[test]
     fn parse_bytes_invalid_byte_e123() {
         // A lone 0xFF is a maximal ill-formed subsequence of length 1: it is
-        // replaced by U+FFFD and reported as E123 with a code-point span.
+        // replaced by U+FFFD and reported as ↯/t.1.23 with a code-point span.
         let result = parse_bytes(b"key\xFF value\n");
         let e123: Vec<_> = result.errors.iter()
             .filter(|e| e.code == ErrorCode::E123).collect();
@@ -5509,7 +5518,7 @@ mod tests {
     #[test]
     fn parse_bytes_truncated_sequence_e123() {
         // Input ends mid-way through a well-formed sequence (truncated €):
-        // one replacement, one E123.
+        // one replacement, one ↯/t.1.23.
         let result = parse_bytes(b"ok \xE2\x82");
         let e123: Vec<_> = result.errors.iter()
             .filter(|e| e.code == ErrorCode::E123).collect();
@@ -5675,12 +5684,12 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E201),
-                "expected E201, got: {:?}", errors);
+                "expected ↯/t.2.1, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_catches_e202_empty_select() {
-        // A SelectDefinition with no variants is E202.
+        // A SelectDefinition with no variants is ↯/t.2.2.
         let s = Schema {
             name: "test".to_string(),
             document: Struct { members: vec![], validators: vec![] },
@@ -5696,12 +5705,12 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E202),
-                "expected E202, got: {:?}", errors);
+                "expected ↯/t.2.2, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_catches_e203_default_on_optional() {
-        // Field.default on a non-required field is invalid (E203).
+        // Field.default on a non-required field is invalid (↯/t.2.3).
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -5720,7 +5729,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E203),
-                "expected E203, got: {:?}", errors);
+                "expected ↯/t.2.3, got: {:?}", errors);
     }
 
     #[test]
@@ -5734,7 +5743,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E207),
-                "expected E207, got: {:?}", errors);
+                "expected ↯/t.2.7, got: {:?}", errors);
     }
 
     #[test]
@@ -5754,7 +5763,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E208),
-                "expected E208, got: {:?}", errors);
+                "expected ↯/t.2.8, got: {:?}", errors);
     }
 
     #[test]
@@ -5774,7 +5783,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E209),
-                "expected E209, got: {:?}", errors);
+                "expected ↯/t.2.9, got: {:?}", errors);
     }
 
     #[test]
@@ -5792,13 +5801,13 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E210),
-                "expected E210, got: {:?}", errors);
+                "expected ↯/t.2.10, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_catches_e216_exclude_in_document() {
         // `exclude K` may appear only inside a layer's root. An exclude
-        // in the base schema's document is E216.
+        // in the base schema's document is ↯/t.2.16.
         let s = Schema {
             name: "test".to_string(),
             document: Struct {
@@ -5811,12 +5820,12 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E216),
-                "expected E216, got: {:?}", errors);
+                "expected ↯/t.2.16, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_catches_e216_exclude_in_base_definition() {
-        // An exclude inside a base Definition is also E216 (Definitions
+        // An exclude inside a base Definition is also ↯/t.2.16 (Definitions
         // are part of the base schema namespace).
         let s = Schema {
             name: "test".to_string(),
@@ -5831,13 +5840,13 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E216),
-                "expected E216, got: {:?}", errors);
+                "expected ↯/t.2.16, got: {:?}", errors);
     }
 
     #[test]
     fn validate_schema_accepts_exclude_in_layer_select_def() {
         // `exclude` inside a layer's SelectDefinition body is the valid
-        // path — NOT E216. Base schema declares a named Select with
+        // path — NOT ↯/t.2.16. Base schema declares a named Select with
         // variants {a, b}; the layer declares a same-name Select with
         // `exclude b` to narrow.
         let base_select = SelectDefinition { description: None,
@@ -5872,7 +5881,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(!errors.iter().any(|e| e.code == ErrorCode::E216),
-                "expected no E216, got: {:?}", errors);
+                "expected no ↯/t.2.16, got: {:?}", errors);
     }
 
     #[test]
@@ -5891,7 +5900,7 @@ mod tests {
         };
         let errors = validate_schema(&s);
         assert!(errors.iter().any(|e| e.code == ErrorCode::E204),
-                "expected E204, got: {:?}", errors);
+                "expected ↯/t.2.4, got: {:?}", errors);
     }
 
     // ── Type assignment unit tests ──────────────────────────────────────────
@@ -5951,7 +5960,7 @@ mod tests {
         let doc = parse("name Alice\nwhat-is-this 42\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E306),
-                "expected E306, got: {:?}", ta.errors);
+                "expected ↯/t.3.6, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -5962,7 +5971,7 @@ mod tests {
         let doc = parse("").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E307),
-                "expected E307, got: {:?}", ta.errors);
+                "expected ↯/t.3.7, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -5990,7 +5999,7 @@ mod tests {
         let doc = parse("name Alice\nname Bob\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E308),
-                "expected E308, got: {:?}", ta.errors);
+                "expected ↯/t.3.8, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6007,7 +6016,7 @@ mod tests {
         let doc = parse("id FOO\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E310),
-                "expected E310, got: {:?}", ta.errors);
+                "expected ↯/t.3.10, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6019,7 +6028,7 @@ mod tests {
         let doc = parse("active extra-atom\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E311),
-                "expected E311, got: {:?}", ta.errors);
+                "expected ↯/t.3.11, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6032,7 +6041,7 @@ mod tests {
         let doc = parse("a 1\nb 2\na 3\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E309),
-                "expected E309, got: {:?}", ta.errors);
+                "expected ↯/t.3.9, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6066,23 +6075,23 @@ mod tests {
         // "active" and the compound's keyword is also "active", the inline
         // atom "inactive" tries to bind to... well, there's only one member,
         // and it's been filled by the compound itself, so we'd get a Flag
-        // with content (E311).
+        // with content (↯/t.3.11).
         assert!(ta.errors.iter().any(|e| matches!(e.code, ErrorCode::E311 | ErrorCode::E305)),
-                "expected E311 or E305, got: {:?}", ta.errors);
+                "expected ↯/t.3.11 or ↯/t.3.5, got: {:?}", ta.errors);
         let _ = s; // suppress unused warning
     }
 
     #[test]
     fn type_assign_catches_e301_scalar_compound_with_children() {
         // `note` is a Scalar field. The user writes children under it: that
-        // can only make sense for a Struct, so E301.
+        // can only make sense for a Struct, so ↯/t.3.1.
         let s = schema_with_root(vec![
             field(true, false, "note", scalar_string()),
         ]);
         let doc = parse("note hello\n  child line\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E301),
-                "expected E301, got: {:?}", ta.errors);
+                "expected ↯/t.3.1, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6090,7 +6099,7 @@ mod tests {
         // `outer` is a required Field whose Struct contains a SelectRef to
         // `Mixed`, whose variants mix Scalar and Flag types. The SelectRef
         // is therefore not atom-assignable, and the atom on `outer`'s line
-        // cannot be assigned: E303.
+        // cannot be assigned: ↯/t.3.3.
         let mixed_struct = Type::Struct(Struct {
             members: vec![select_ref(true, false, "Mixed")],
             validators: Vec::new(),
@@ -6110,7 +6119,7 @@ mod tests {
         let doc = parse("outer something\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E303),
-                "expected E303, got: {:?}", ta.errors);
+                "expected ↯/t.3.3, got: {:?}", ta.errors);
     }
 
     #[test]
@@ -6118,7 +6127,7 @@ mod tests {
         // `colour` is a Field with Struct type whose only member is a SelectRef
         // to an all-Flag SelectDefinition `Colour` = {red, green, blue}. The
         // atom `yellow` on the `colour` compound must match a variant — it
-        // doesn't, so E304.
+        // doesn't, so ↯/t.3.4.
         let colour_struct = Type::Struct(Struct {
             members: vec![select_ref(true, false, "Colour")],
             validators: Vec::new(),
@@ -6139,7 +6148,7 @@ mod tests {
         let doc = parse("colour yellow\n").document;
         let ta = type_assign(&doc, &s, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E304),
-                "expected E304, got: {:?}", ta.errors);
+                "expected ↯/t.3.4, got: {:?}", ta.errors);
     }
 
     // ── compose_schema tests (§20.3) ────────────────────────────────────
@@ -6288,7 +6297,7 @@ mod tests {
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E211),
-                "expected E211, got: {:?}", errs);
+                "expected ↯/t.2.11, got: {:?}", errs);
     }
 
     #[test]
@@ -6332,7 +6341,7 @@ mod tests {
     #[test]
     fn compose_select_variant_addition_is_e213() {
         // A layer tries to introduce a fresh variant `extra` in an existing
-        // SelectDefinition — variant addition is forbidden (E213 — would
+        // SelectDefinition — variant addition is forbidden (↯/t.2.13 — would
         // widen the sum).
         let base_status = SelectDefinition { description: None,
             name: "Status".to_string(),
@@ -6360,7 +6369,7 @@ mod tests {
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E213),
-                "expected E213, got: {:?}", errs);
+                "expected ↯/t.2.13, got: {:?}", errs);
     }
 
     #[test]
@@ -6491,7 +6500,7 @@ mod tests {
 
     #[test]
     fn compose_layer_cannot_loosen_required_to_optional_is_e214() {
-        // Base required; layer attempts to mark optional → E214.
+        // Base required; layer attempts to mark optional → ↯/t.2.14.
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
@@ -6514,12 +6523,12 @@ mod tests {
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E214),
-                "expected E214, got: {:?}", errs);
+                "expected ↯/t.2.14, got: {:?}", errs);
     }
 
     #[test]
     fn compose_layer_cannot_loosen_irrepeatable_to_repeatable_is_e215() {
-        // Base irrepeatable; layer attempts to mark repeatable → E215.
+        // Base irrepeatable; layer attempts to mark repeatable → ↯/t.2.15.
         let base = Schema {
             name: "x".to_string(),
             document: Struct {
@@ -6542,7 +6551,7 @@ mod tests {
         };
         let (_composed, errs) = compose_schema(&base);
         assert!(errs.iter().any(|e| e.code == ErrorCode::E215),
-                "expected E215, got: {:?}", errs);
+                "expected ↯/t.2.15, got: {:?}", errs);
     }
 
     #[test]
@@ -6628,7 +6637,7 @@ mod tests {
         }
     }
 
-    /// Default-supplied key values participate in the E314 comparison
+    /// Default-supplied key values participate in the ↯/t.3.14 comparison
     /// (§21.6): two siblings that both elide a defaulted key field share
     /// the default as their key value and collide.
     #[test]
@@ -6642,12 +6651,12 @@ mod tests {
         let doc = parse("item\nitem\n");
         let ta = type_assign(&doc.document, &schema, None);
         assert!(ta.errors.iter().any(|e| e.code == ErrorCode::E314),
-                "expected E314, got: {:?}", ta.errors);
+                "expected ↯/t.3.14, got: {:?}", ta.errors);
         // A single elision is fine.
         let doc_ok = parse("item\nitem other\n");
         let ta_ok = type_assign(&doc_ok.document, &schema, None);
         assert!(!ta_ok.errors.iter().any(|e| e.code == ErrorCode::E314),
-                "unexpected E314: {:?}", ta_ok.errors);
+                "unexpected ↯/t.3.14: {:?}", ta_ok.errors);
     }
 
     /// THE bootstrap closure: parsing tels.tel, constructing a Schema
@@ -6990,7 +6999,7 @@ layer fancy
 
     /// Every `demo/*.tel` file is a worked example cited from the demo README
     /// and, indirectly, from §25 of the TEL Specification. They must at least
-    /// parse without a single E1xx error — a claim demo/README.md makes
+    /// parse without a single ↯/t.1 error — a claim demo/README.md makes
     /// explicitly, and which nothing previously checked. (Schema-level
     /// checking is covered per-file by the worked-example tests below.)
     #[test]
@@ -7096,7 +7105,7 @@ layer fancy
                 ta.errors);
     }
 
-    /// E107 (odd indentation) is recorded as an error, and the parser
+    /// ↯/t.1.7 (odd indentation) is recorded as an error, and the parser
     /// recovers by preferring the shallower interpretation (the line is
     /// treated as if at the floor of (spaces / 2)). Subsequent lines
     /// continue to parse normally.
@@ -7105,10 +7114,10 @@ layer fancy
         // `b` is at 3 spaces (odd) — should be treated as indent 1 (shallower).
         let src = "tel 1.0\n\na\n   b\nc\n";
         let parsed = parse(src);
-        // E107 should be raised but parsing produces useful output for
+        // ↯/t.1.7 should be raised but parsing produces useful output for
         // the remaining lines.
         assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E107),
-                "expected E107, got: {:?}", parsed.errors);
+                "expected ↯/t.1.7, got: {:?}", parsed.errors);
         // The line `c` at indent 0 should appear at the document root.
         let root_keywords: Vec<&str> = parsed.document.children.iter()
             .flat_map(|b| b.compounds.iter())
@@ -7117,7 +7126,7 @@ layer fancy
         assert!(root_keywords.contains(&"c"), "got: {:?}", root_keywords);
     }
 
-    /// Schema-aware E107 recovery (§19.5): when a schema is supplied and
+    /// Schema-aware ↯/t.1.7 recovery (§19.5): when a schema is supplied and
     /// the line's keyword is valid only at the deeper candidate depth, the
     /// parser places the line at deeper rather than the default shallower.
     /// Schema: root has `field outer Outer`; `Outer` has `field inner String`.
@@ -7162,7 +7171,7 @@ layer fancy
         let src = "tel 1.0\n\nouter\n   inner foo\n";
         let parsed = parse_with_schema(src, &schema);
         assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E107),
-                "expected E107 with schema-aware recovery, got: {:?}", parsed.errors);
+                "expected ↯/t.1.7 with schema-aware recovery, got: {:?}", parsed.errors);
         // The `inner` compound should appear as a child of `outer`, not as
         // a root-level peer.
         let root: Vec<&Compound> = parsed.document.children.iter()
@@ -7178,7 +7187,7 @@ layer fancy
                 outer_children.iter().map(|c| &c.keyword).collect::<Vec<_>>());
     }
 
-    /// Schema-aware E107 recovery: when both candidates are valid, the
+    /// Schema-aware ↯/t.1.7 recovery: when both candidates are valid, the
     /// parser uses the shallower-wins tiebreaker. The test schema has the
     /// keyword `shared` admissible at two depths (3 and 4 in this
     /// document's structure): `shared` is a member of B (depth-2 parent)
@@ -7250,7 +7259,7 @@ layer fancy
         let src = "tel 1.0\n\na\n  b\n    c\n     shared foo\n";
         let parsed = parse_with_schema(src, &schema);
         assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E107),
-                "expected E107, got: {:?}", parsed.errors);
+                "expected ↯/t.1.7, got: {:?}", parsed.errors);
         // Walk a → b. b's children should include `shared` (peer of c),
         // and c's children should NOT include `shared`.
         let root: &Compound = &parsed.document.children[0].compounds[0];
@@ -7276,7 +7285,7 @@ layer fancy
                 c_children);
     }
 
-    /// E111 (over-indentation) is recorded as an error, and the parser
+    /// ↯/t.1.11 (over-indentation) is recorded as an error, and the parser
     /// recovers by skipping the over-indented line. Subsequent lines
     /// continue to parse at the originally-expected indent.
     #[test]
@@ -7284,16 +7293,16 @@ layer fancy
         // `parent` at indent 0; `too-deep` at indent 8 (4 levels deeper
         // than parent — too deep for a child, beyond source-atom indent,
         // and not a literal atom delimiter). `d` is back at the root
-        // and must still parse despite the intervening E111.
+        // and must still parse despite the intervening ↯/t.1.11.
         let src = "tel 1.0\n\nparent\n        too-deep\nd\n";
         let parsed = parse(src);
         assert!(parsed.errors.iter().any(|e| e.code == ErrorCode::E111),
-                "expected E111, got: {:?}", parsed.errors);
+                "expected ↯/t.1.11, got: {:?}", parsed.errors);
         let root_keywords: Vec<&str> = parsed.document.children.iter()
             .flat_map(|b| b.compounds.iter())
             .map(|c| c.keyword.as_str()).collect();
         assert!(root_keywords.contains(&"d"),
-                "parser should recover past E111 and reach `d`, got root keywords: {:?}",
+                "parser should recover past ↯/t.1.11 and reach `d`, got root keywords: {:?}",
                 root_keywords);
     }
 
@@ -7348,7 +7357,7 @@ layer fancy
     /// and demo/struct-validator-document.tel, register a real
     /// `start-precedes-end` validator that compares ISO-8601 date strings,
     /// and verify the document's second `event` (where end-date precedes
-    /// start-date) raises E310 with a nested per-field diagnostic.
+    /// start-date) raises ↯/t.3.10 with a nested per-field diagnostic.
     #[test]
     fn struct_validator_worked_example() {
         use std::collections::HashMap;
@@ -7391,7 +7400,7 @@ layer fancy
                                 fields,
                             })
                         }
-                        _ => ValidationResponse::Valid, // missing date — let E307 handle
+                        _ => ValidationResponse::Valid, // missing date — let ↯/t.3.7 handle
                     }
                 }
                 _ => ValidationResponse::Valid,
@@ -7400,11 +7409,11 @@ layer fancy
         let ta = type_assign(&doc_parsed.document, &schema, Some(&cb));
         let e310s: Vec<_> = ta.errors.iter()
             .filter(|e| e.code == ErrorCode::E310).collect();
-        // The good event (first) produces no E310; the bad event (second)
+        // The good event (first) produces no ↯/t.3.10; the bad event (second)
         // produces a top-level struct diagnostic plus a nested end-date
-        // diagnostic — two E310 entries in total.
+        // diagnostic — two ↯/t.3.10 entries in total.
         assert_eq!(e310s.len(), 2,
-                   "expected exactly two E310 entries (one struct, one nested field), got: {:?}",
+                   "expected exactly two ↯/t.3.10 entries (one struct, one nested field), got: {:?}",
                    e310s);
         assert!(e310s.iter().any(|e| e.message.contains("end-date must not precede")),
                 "missing top-level struct diagnostic: {:?}", e310s);
@@ -7414,7 +7423,7 @@ layer fancy
 
     /// Struct validator that pinpoints a specific field using the
     /// recursive `Diagnostic::Struct.fields` mechanism. Tests the
-    /// failure path (validator returns Invalid → E310).
+    /// failure path (validator returns Invalid → ↯/t.3.10).
     #[test]
     fn struct_validator_invocation_and_diagnostic_shape() {
         use std::collections::HashMap;
@@ -7470,7 +7479,7 @@ layer fancy
         let ta = type_assign(&doc, &schema, Some(&cb));
         let e310s: Vec<_> = ta.errors.iter().filter(|e| e.code == ErrorCode::E310).collect();
         assert!(!e310s.is_empty(),
-                "expected E310 from struct validator, got: {:?}", ta.errors);
+                "expected ↯/t.3.10 from struct validator, got: {:?}", ta.errors);
         assert!(e310s.iter().any(|e| e.message.contains("country/postcode rule violated")),
                 "missing top-level struct diagnostic: {:?}", e310s);
         assert!(e310s.iter().any(|e| e.message.contains("UK requires postcode")),
@@ -7792,7 +7801,7 @@ layer fancy
         let doc = parse("tel 1.0\n\ndata not-hex!\n").document;
         let ta = type_assign_with_codecs(&doc, &schema, None, Some(&hex_binding));
         let e312s: Vec<_> = ta.errors.iter().filter(|e| e.code == ErrorCode::E312).collect();
-        assert_eq!(e312s.len(), 1, "expected one E312: {:?}", ta.errors);
+        assert_eq!(e312s.len(), 1, "expected one ↯/t.3.12: {:?}", ta.errors);
         assert!(e312s[0].message.contains("lowercase hex"),
                 "diagnostic should carry the codec's message: {:?}", e312s[0]);
     }
@@ -7804,7 +7813,7 @@ layer fancy
         let unknown_binding = |_: &str| -> Option<Rc<dyn Codec>> { None };
         let ta = type_assign_with_codecs(&doc, &schema, None, Some(&unknown_binding));
         let e313s: Vec<_> = ta.errors.iter().filter(|e| e.code == ErrorCode::E313).collect();
-        assert_eq!(e313s.len(), 1, "expected one E313: {:?}", ta.errors);
+        assert_eq!(e313s.len(), 1, "expected one ↯/t.3.13: {:?}", ta.errors);
     }
 
     #[test]

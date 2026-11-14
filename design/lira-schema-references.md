@@ -6,7 +6,7 @@ LIRA distribution system. **Everything in §2 and §3 has since been merged into
 [TEL Specification](../spec/tel.md)** — the pragma grammar and classification rules into §8, the
 coordinate grammar, layer selections and signature semantics into §8.1, the resolution protocol
 into §8.2, the removal of `+` from the sigil alphabet into §6, and the layer-order rule as error
-**E124**. The specification, not this document, is normative; where the two differ, the
+**↯/t.1.24**. The specification, not this document, is normative; where the two differ, the
 specification wins.
 
 Two parts were **not** merged and remain open: the LIRA-side `tels` publishing discipline (§3.3),
@@ -74,7 +74,7 @@ Phrases after the version are classified by form, then checked against the posit
 
 A phrase matching none of these forms, or a sequence of phrases violating the order or
 multiplicity above (e.g. a signature before a layer selection, two references, two signatures),
-is invalid (**E121**/**E122**, reworded — see §7). Remarks are still not recognised on the
+is invalid (**↯/t.1.21**/**↯/t.1.22**, reworded — see §7). Remarks are still not recognised on the
 pragma line.
 
 The classification is unambiguous:
@@ -127,7 +127,7 @@ tel 1.0 propensive.dev/build +publishing +maven ‹signature› #
 - Each layer name MUST match a layer declared by the referenced schema; an unknown name is a
   resolution error.
 - Composition follows the schema's **declaration order**, and the pragma MUST list the
-  selected layers in declaration order (new E1xx error — see §7). Each selected layer set
+  selected layers in declaration order (new ↯/t.1 error — see §7). Each selected layer set
   therefore has exactly one canonical pragma spelling and exactly one composed signature; two
   documents selecting the same layers can never disagree on order and spuriously fail the
   compatibility check of tel.md §8.2.
@@ -139,13 +139,13 @@ tel 1.0 propensive.dev/build +publishing +maven ‹signature› #
 
 `+` is removed from the `Sigil` type of tel.md §6, reducing the enumeration from twenty-four
 characters to twenty-three. This keeps single-character phrase classification trivially
-unambiguous: `+` always introduces a layer selection, and a bare `+` phrase is invalid (E121)
-rather than a sigil. All rules stated in terms of sigil-validity (E105, E207, `Schema.sigil`,
+unambiguous: `+` always introduces a layer selection, and a bare `+` phrase is invalid (↯/t.1.21)
+rather than a sigil. All rules stated in terms of sigil-validity (↯/t.1.5, ↯/t.2.7, `Schema.sigil`,
 §21.5) inherit the change.
 
 The positional note of tel.md §8 ("In `tel 1.0 %`, the `%` occupies the schema-identifier
 position…") is superseded: classification is now by form first, so `tel 1.0 %` reads `%` as a
-sigil. A document may therefore set its sigil without naming a schema. (E121 remains for
+sigil. A document may therefore set its sigil without naming a schema. (↯/t.1.21 remains for
 phrases that match no form.)
 
 ### 2.5 Signature semantics with layers
@@ -229,7 +229,7 @@ Step 4 (URL fetch) is replaced by **LIRA resolution**, by identifier form:
   portable; portability is always explicit, via a selector or a signature (§5).
 
 Step 5 (failure) is unchanged: a resolution failure is a runtime error reported outside the
-E1xx/E2xx/E3xx taxonomy, identifying the failing step. A non-network-capable parser MAY omit
+↯/t.1/↯/t.2/↯/t.3 taxonomy, identifying the failing step. A non-network-capable parser MAY omit
 the network half of step 4 and treat anything unresolved by local state as a failure. Offline,
 a bare reference needs no network at all, and a selector-form reference fails resolution only
 if absent from every local store.
@@ -332,24 +332,24 @@ writing):
 
 - `spec/tel.md` §6 (`Sigil` type, lines 162–193): remove `+`; twenty-four → twenty-three.
 - `spec/tel.md` §8 (lines 244–305): phrase count and positional rules replaced by §2.1 of this
-  document; E122 reworded from "at most three phrases after `tel`" to the order/multiplicity
+  document; ↯/t.1.22 reworded from "at most three phrases after `tel`" to the order/multiplicity
   rule; the `tel 1.0 %` positional note replaced per §2.4.
-- `spec/tel.md` §8.1 (lines 307–333): replaced by §2.2–§2.6 of this document; E121 reworded to
-  "phrase matches no pragma form" plus the reference/selector grammar; a new E1xx code for
+- `spec/tel.md` §8.1 (lines 307–333): replaced by §2.2–§2.6 of this document; ↯/t.1.21 reworded to
+  "phrase matches no pragma form" plus the reference/selector grammar; a new ↯/t.1 code for
   layer selections out of declaration order.
 - `spec/tel.md` §8.2 (lines 335–458): matching rule, Resolution Protocol step 4, Signature
   Verification, and Caching replaced per §3; delete lines 403–408 (URL fetch, transport,
   redirects), 431–433 (URL-only binding), 438–440 (HTTP cache headers).
 - `spec/tel.md` §8.3 (lines 460–480): unchanged in substance; re-examine wording that assumes
   the three-parameter positional form.
-- `spec/tel.md` error taxonomy (E121/E122 entries near line 1249; E105 wording): update per
+- `spec/tel.md` error taxonomy (↯/t.1.21 and ↯/t.1.22 entries near line 1249; ↯/t.1.5 wording): update per
   the above.
 - `spec/tel.md` §20.4 (lines 2307–2312) and §24.5 tooling note (lines 3891–3892): re-point
   "identification (§8.1)" wording at the new identifier forms.
 - `spec/bintel.md` "Textual form" (lines 563–572): the pragma-token rationale for BASE-256
   stands; drop any mention of the URL fragment carriage.
 - `readme.md` line 52: the example `tel 1.0 contact %` is already invalid under the *current*
-  specification (a bare name is E121) and must be rewritten — under this proposal, e.g.
+  specification (a bare name is ↯/t.1.21) and must be rewritten — under this proposal, e.g.
   `tel 1.0 specification.tel/contact:1.0.0 %` or a bare development reference.
 - Reference implementation (a later round): `parse_pragma`/`is_valid_schema_id`
   (`ref/tel/src/lib.rs`) and `SchemaIdentifier::parse`/`Resolver`

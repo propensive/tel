@@ -34,7 +34,7 @@ Several examples exercise the validator model defined in §21 of the TEL Specifi
   `TypeName`s `String`, `Identifier`, `Sigil` and `TypeName` (§21.5); everything else is
   application-defined. Multiple scalar validators on the same Field apply in AND-conjunction.
 - **Scalar encodings** (§21.7) attach a codec to a scalar Definition via an `encoding`
-  line. The codec's encoder doubles as a validator (a value it rejects is E312-invalid)
+  line. The codec's encoder doubles as a validator (a value it rejects is ↯/t.3.12-invalid)
   and defines the scalar's binary representation in BinTEL (§7.1 of the BinTEL
   Specification). `encoding-schema.tel` is the worked example.
 - **Struct validators** (§21.6) attach to Definitions and inline Struct types, and inspect

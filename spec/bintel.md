@@ -111,12 +111,12 @@ property of the bytes and not of the decoder that reads them:
 
 - **Width.** The representable range is `[0, 2^64 − 1]`. A conforming decoder MUST accept every
   value in that range and MUST reject any encoding that exceeds it: an integer occupying more than
-  ten bytes, or whose tenth byte is greater than `0x01`, is **B02**. Ten bytes carry 70 bits, of
+  ten bytes, or whose tenth byte is greater than `0x01`, is **↯/t.4.2**. Ten bytes carry 70 bits, of
   which only the low 64 are available.
 - **Minimality.** An encoder MUST emit the shortest sequence representing the value — exactly the
   output of the algorithm above, in which no encoding ends in a `0x80` continuation byte carrying
   no information. A decoder MUST reject a non-minimal ("overlong") encoding, such as `80 00` for
-  zero, as **B02**. Without this rule a single integer would have unboundedly many encodings, and
+  zero, as **↯/t.4.2**. Without this rule a single integer would have unboundedly many encodings, and
   neither the byte-determinism of §7 nor the value hash of §3 would be well defined.
 
 | Value | Encoded bytes (hex) |
@@ -199,7 +199,7 @@ A BinTEL document in external-schema mode consists of the following fields in or
    a single pass. The full length of the document is `4 + len(varint) + document_length`, and the
    continuation (§6.3) begins at that offset. A decoder MUST verify that decoding fields 3 and 4
    consumes exactly `document_length` bytes; a disagreement between the declared and structural
-   extents is a framing error (**B16**).
+   extents is a framing error (**↯/t.4.16**).
 3. **Schema signature**: the byte length of the signature (integer), followed by the signature
    bytes. The schema signature (whose construction is defined in the Schema Signature section
    below) identifies the composed schema (base plus layers) used to type the document. The
@@ -210,13 +210,13 @@ A BinTEL document in external-schema mode consists of the following fields in or
    then 37 and every odd integer above). Note that `length == 35` is **not** valid under these
    pinned parameters: the initial cadence `k_i = 4` introduces a one-time +4-byte step between
    `n = 1` (33 bytes) and `n = 2` (37 bytes), after which each additional layer adds `k_r = 2`
-   bytes. A length of zero or any length not matching this pattern is a framing error (B03).
+   bytes. A length of zero or any length not matching this pattern is a framing error (↯/t.4.3).
 4. **Document root**: encoded using the node encoding described in the Node Encoding section
    below (root form). The encoding terminates exactly when the recursive procedure of §7.8 has
    consumed the last byte of the document root; there is no trailing tag or length within it.
 
 The document ends at the last byte counted by field 2. A decoder MUST check the two extents
-against each other (B16 on disagreement); whether any bytes beyond that point are an error
+against each other (↯/t.4.16 on disagreement); whether any bytes beyond that point are an error
 depends on the reading mode of §6.3.
 
 ### 6.2 Self-Contained Mode
@@ -231,13 +231,13 @@ A BinTEL document in self-contained mode consists of the following fields in ord
    `βτελ`. As with §6.1 every byte is `≥ 0x80`, so the document cannot be mistaken for ASCII
    or UTF-8 text.
 2. **Document length**: identical in meaning to §6.1 field 2 — the number of bytes following this
-   field, here the combined length of fields 3, 4 and 5 (**B16** on disagreement with the
+   field, here the combined length of fields 3, 4 and 5 (**↯/t.4.16** on disagreement with the
    structural extent).
 3. **Schema signature**: identical in structure and constraints to §6.1 field 3 — a length
    varint followed by a palimpsest at the BinTEL-pinned parameters `(H, k_i, k_r) = (32, 4, 2)`.
    The signature carried here MUST be the composed signature obtained from the embedded schema
    body (field 4 below) under §8. A decoder MUST recompute the signature from the embedded body
-   and verify equality byte-for-byte; mismatch is fatal (B11).
+   and verify equality byte-for-byte; mismatch is fatal (↯/t.4.11).
 4. **Embedded schema body**: the byte length of the schema body (integer), followed by that many
    bytes. The bytes are the bare document-root encoding (§7.1) of the schema document, with the
    root struct's member list taken to be `tels.document.members` (an axiomatic property
@@ -254,7 +254,7 @@ A BinTEL document in self-contained mode consists of the following fields in ord
    the embedded body therefore never requires a codec binding, and the bootstrap of §7.8 is
    unaffected by codecs. The body is decoded under the receiver's `tels` axiom, so a receiver
    whose axiom predates a vocabulary addition — the `width`, `intern` and `index` members of
-   `tels` 2.1.0 (§20.5 of the TEL Specification) — cannot decode a body that uses it (B12 at
+   `tels` 2.1.0 (§20.5 of the TEL Specification) — cannot decode a body that uses it (↯/t.4.12 at
    the unknown keyword index), while a body that uses none of it decodes identically under
    either revision. Only the document root (field 5) may contain encoded scalars, governed
    by the schema the body defines.
@@ -263,10 +263,10 @@ A BinTEL document in self-contained mode consists of the following fields in ord
    semantic content and the same composed schema; the embedded-schema preamble is the only
    wire-form difference between the two modes.
 
-A conforming decoder MUST check the declared and structural extents against each other (B16 on
+A conforming decoder MUST check the declared and structural extents against each other (↯/t.4.16 on
 disagreement), and treats any bytes beyond the document per §6.3. A decoder MUST NOT begin
 decoding the document root until the embedded schema's signature has been recomputed and
-verified equal to the carried signature (B11 on mismatch); it MUST NOT emit a partial result
+verified equal to the carried signature (↯/t.4.11 on mismatch); it MUST NOT emit a partial result
 when verification fails.
 
 A receiver that already has the embedded schema cached or known (e.g., the signature equals
@@ -294,7 +294,7 @@ the continuation available to its caller in both:
   single-document decoding: decode one document, then apply the same procedure to its
   continuation, until the continuation is empty. A continuation that is empty yields no further
   document; a continuation that is non-empty but does not begin with a recognised magic number is
-  **B01** for that position.
+  **↯/t.4.1** for that position.
 
 Each document in a stream is independent. Documents in one stream MAY be in different modes (§6.1
 and §6.2 may be interleaved freely) and MAY be typed by different schemas: every document carries
@@ -302,9 +302,9 @@ its own signature, and a self-contained document carries its own schema body. No
 from a preceding document.
 
 A **whole-document** reader — one whose contract is that its input is exactly one document and
-nothing else — MUST additionally reject a non-empty continuation as a framing error (**B08**).
+nothing else — MUST additionally reject a non-empty continuation as a framing error (**↯/t.4.8**).
 This is a property of the reader's contract rather than of the byte sequence: the same bytes are a
-well-formed two-document stream to a stream decoder and a B08 error to a whole-document reader,
+well-formed two-document stream to a stream decoder and a ↯/t.4.8 error to a whole-document reader,
 just as trailing content is valid to a single-document TEL parser and a second document to a
 streaming one.
 
@@ -364,7 +364,7 @@ Specification) — have no effect on BinTEL: a `width` scalar is length-prefixed
 and nothing is interned or indexed. They are read by RaTEL alone. An
 encoder MUST be configured with a codec binding (TEL §21.7) resolving every encoding named by
 the composed schema; if any name is unresolved, or any value is rejected by its codec's encoder
-(the E312 condition — the document is invalid), the encoder MUST fail without emitting a
+(the ↯/t.3.12 condition — the document is invalid), the encoder MUST fail without emitting a
 document. BinTEL never encodes an invalid document.
 
 **Flag node** (schema type is `Flag`):
@@ -441,7 +441,7 @@ presentation model (§18.1 of the TEL Specification) rather than in BinTEL.
 
 A decoder receiving a Scalar node with a zero-length value MUST therefore treat it as a
 semantically present Scalar with an empty text. There is no encoding for "absent Scalar with no
-default": such a member is reported at type-assignment time as an E307 error against the
+default": such a member is reported at type-assignment time as an ↯/t.3.7 error against the
 document, and BinTEL never encodes an invalid document.
 
 For an *encoded* scalar the value bytes are `encode(text)`: empty *text* need not produce
@@ -468,7 +468,7 @@ BinTEL preserves only the post-atom-decoded text, never atom-form presentation d
 
 When the member's type is an encoded scalar, the default text passes through the codec exactly
 as an explicitly written value would: the encoded value bytes are `encode(default-text)`. A
-default rejected by the codec renders any document relying on it invalid (E312, TEL §21.7),
+default rejected by the codec renders any document relying on it invalid (↯/t.3.12, TEL §21.7),
 and the encoder MUST fail rather than emit it. The atom-form-independence rule above is
 unaffected: the codec consumes the post-atom-decoded text.
 
@@ -503,8 +503,8 @@ self-contained-mode bootstrap never requires a codec.
 
 The decoding algorithm is recursive. The pseudocode below treats `bytes` as a **stateful byte
 cursor**: each `next N bytes`, `decode-varint(bytes)`, and similar operation advances the cursor;
-reading past end-of-input raises B09, and any input bytes remaining when the document root
-completes raise B08.
+reading past end-of-input raises ↯/t.4.9, and any input bytes remaining when the document root
+completes raise ↯/t.4.8.
 
 ```
 decode-document(bytes, schema_or_resolver):
@@ -513,15 +513,15 @@ decode-document(bytes, schema_or_resolver):
     mode = External
   elif magic == [B2, C4, B5, BC]:      // self-contained mode (§6.2)
     mode = SelfContained
-  else: report error (B01)
+  else: report error (↯/t.4.1)
 
   read document-length = decode-varint(bytes)
-  if bytes-remaining() < document-length: report error (B09)
+  if bytes-remaining() < document-length: report error (↯/t.4.9)
   body-start = cursor-position()
 
   read signature-length = decode-varint(bytes)
   read signature-bytes = next signature-length bytes
-  verify signature length and cadence XOR per §8.2 (B03 on failure)
+  verify signature length and cadence XOR per §8.2 (↯/t.4.3 on failure)
 
   if mode == SelfContained:
     read schema-bytes-length = decode-varint(bytes)
@@ -530,10 +530,10 @@ decode-document(bytes, schema_or_resolver):
     // TELS; its keyword indices and member layout are
     // axiomatic to any conforming implementation (§20.5 of the TEL spec).
     schema-doc = decode-struct-body(schema-bytes, tel_schema.document.members)
-    if schema-doc is malformed: report error (B12)
+    if schema-doc is malformed: report error (↯/t.4.12)
     composed-schema = construct_schema_and_compose(schema-doc)  // TEL §20.3
     recomputed-sig = composed-signature(schema-doc) per §8
-    if recomputed-sig != signature-bytes: report error (B11)
+    if recomputed-sig != signature-bytes: report error (↯/t.4.11)
     schema = composed-schema
   else:
     // Resolution to a composed schema is handled at the §8.2 (TEL spec) layer;
@@ -543,11 +543,11 @@ decode-document(bytes, schema_or_resolver):
   root = decode-struct-body(bytes, schema.document.members)
 
   // §6.1 field 2: the declared and structural extents must agree exactly.
-  if cursor-position() - body-start != document-length: report error (B16)
+  if cursor-position() - body-start != document-length: report error (↯/t.4.16)
 
   // Everything from here to the end of input is the continuation (§6.3); it
   // is returned to the caller, not decoded. A whole-document reader rejects a
-  // non-empty continuation as B08; a stream decoder recurses on it.
+  // non-empty continuation as ↯/t.4.8; a stream decoder recurses on it.
   return Document { signature: signature-bytes, root, mode,
                     continuation: bytes-from(cursor-position()) }
 
@@ -560,7 +560,7 @@ decode-struct-body(bytes, members):
 
 decode-element(bytes, parent-members):
   kidx = decode-varint(bytes)
-  if kidx >= keyword-count(parent-members): report error (B05)
+  if kidx >= keyword-count(parent-members): report error (↯/t.4.5)
   (keyword, type) = lookup-by-index(parent-members, kidx)
   resolved-type = resolve(type, schema)   // Reference resolution per TEL §20.2
   switch resolved-type:
@@ -569,13 +569,13 @@ decode-element(bytes, parent-members):
       return Struct-element { kidx, keyword, children: sub-children }
     Scalar(validators, encoding):
       value-length = decode-varint(bytes)
-      value-bytes = next value-length bytes        // B06 if cursor advances past EOI
+      value-bytes = next value-length bytes        // ↯/t.4.6 if cursor advances past EOI
       if encoding == null:
-        value-text = UTF-8-decode(value-bytes)     // B07 if not valid UTF-8
+        value-text = UTF-8-decode(value-bytes)     // ↯/t.4.7 if not valid UTF-8
       else:
-        codec = codec-binding(encoding)            // B13 if unresolved
-        value-text = codec.decode(value-bytes)     // B14 on CodecFailure
-        // OPTIONAL hardening (TEL §21.7): if codec.encode(value-text) != value-bytes: B15
+        codec = codec-binding(encoding)            // ↯/t.4.13 if unresolved
+        value-text = codec.decode(value-bytes)     // ↯/t.4.14 on CodecFailure
+        // OPTIONAL hardening (TEL §21.7): if codec.encode(value-text) != value-bytes: ↯/t.4.15
       return Scalar-element { kidx, keyword, text: value-text }
     Flag:
       return Flag-element { kidx, keyword }
@@ -587,7 +587,7 @@ not recoverable from the BinTEL stream.
 
 Decoding does not re-run validators — BinTEL never encodes an invalid document, and the
 decoder trusts the producer for validator conformance exactly as it does for text scalars; the
-codec decode (B14) is the only value-level check applied to encoded scalars.
+codec decode (↯/t.4.14) is the only value-level check applied to encoded scalars.
 
 A decoder MAY stop after producing the semantic model; converting it to a presentation model is
 outside BinTEL's scope (the source-level distinctions — atom form, remarks, comments, tabulation
@@ -716,10 +716,10 @@ of the Palimpsest Specification for the probabilistic analysis.
 
 1. From `L`, compute `n`: `n = 1` if `L = 33`; otherwise require `L ≥ 37` and
    `(L − 37) mod 2 = 0`, and set `n = 2 + (L − 37) / 2`. Any other `L` is a framing error
-   (**B03**).
+   (**↯/t.4.3**).
 2. XOR every byte of the signature; the result MUST equal `0x79` (the BinTEL-pinned cadence
-   byte). If it does not, that too is **B03**. Both checks are structural and both report B03;
-   B04 is reserved for the library-decode failure of step 4, and is never reported for a
+   byte). If it does not, that too is **↯/t.4.3**. Both checks are structural and both report ↯/t.4.3;
+   ↯/t.4.4 is reserved for the library-decode failure of step 4, and is never reported for a
    malformed length or a bad cadence byte.
 3. Treating bytes `[0..L − 2]` as the palimpsest body, run the recursive search of §5.3 of the
    Palimpsest Specification with `(H, k_i, k_r) = (32, 4, 2)`. Candidates at step 0 are looked
@@ -730,11 +730,11 @@ of the Palimpsest Specification for the probabilistic analysis.
    65 536 prefixes, and once a library of atoms approaches that size the backtracking search
    over a global candidate set grows as `(N / 65 536)ⁿ` (§3.2 of the Palimpsest Specification).
 4. If the search returns a valid sequence, decoding succeeds. If no valid sequence is found
-   against the candidate library, the signature is malformed (B04). The "more than one valid
+   against the candidate library, the signature is malformed (↯/t.4.4). The "more than one valid
    sequence" case requires a BLAKE3 collision among components — a second-preimage attack on
    BLAKE3-256 — and is computationally infeasible under the collision-resistance assumption of
    §8 of the Palimpsest Specification (see also its §10); a decoder that nevertheless encounters multiple satisfying
-   sequences MUST also report B04 (treating it as a corruption or integrity failure rather than
+   sequences MUST also report ↯/t.4.4 (treating it as a corruption or integrity failure rather than
    as a regular decoding outcome).
 
 The decoded sequence gives the component hashes in order: h₀ (base schema), then h₁ … h_{n−1}
@@ -915,7 +915,7 @@ inline atom fills `schema`; an atom equal to `self-contained` or `any-published`
 flag; and every remaining atom fills `component`, a repeatable Scalar, which the atom phase of
 §20.2 of the TEL Specification never skips. The flag keywords contain `-`, which is not in the
 BASE-256 alphabet, so a flag can never be read as a component nor a component as a flag; a
-flag written after a component is consumed as a component and rejected by the codec (E312).
+flag written after a component is consumed as a component and rejected by the codec (↯/t.3.12).
 Components MAY equally be written as compound children (`component ‹hash›`), which suits long
 lists. The base's own hash never appears among the components: it is the first component of
 `schema`.
@@ -935,7 +935,7 @@ exactly this behaviour; `tels` itself continues to declare no encodings, so the 
   whose bytes are not structurally a schema signature: the length is neither `33` nor
   `37 + 2·(n − 2)` for some `n ≥ 2`, or the XOR of every byte is not the pinned cadence byte
   `0x79` (§8.2, decoding steps 1 and 2). `decode` succeeds on exactly the byte sequences
-  `encode` produces (C3). A malformed signature in an acceptance is therefore E312 at
+  `encode` produces (C3). A malformed signature in an acceptance is therefore ↯/t.3.12 at
   validation, and a writer never runs the palimpsest search of §8.2 step 3 on bytes that fail
   its structural checks. Any schema that carries a signature as a field MAY use this codec.
 
@@ -1147,49 +1147,49 @@ specification.
 
 ## 10. Decoder Error Handling
 
-A conforming BinTEL decoder MUST detect and report each of the following error conditions. Codes
-are local to BinTEL; they do not overlap with the E1xx/E2xx/E3xx taxonomy of the TEL
-Specification.
+A conforming BinTEL decoder MUST detect and report each of the following error conditions. Their
+codes are the family **↯/t.4** of TEL's bolt codes (TEL §19.3), beside the ↯/t.1, ↯/t.2 and ↯/t.3
+of the TEL Specification.
 
-| Code | Description                                                                                  |
-| ---- | -------------------------------------------------------------------------------------------- |
-| B01  | Magic number absent or does not match either of the recognised values `B2 C4 B5 BB` (external-schema mode, BASE-256: `βτελ`, §6.1 field 1) or `B2 C4 B5 BC` (self-contained mode, BASE-256: `βτεμ`, §6.2 field 1). |
-| B02  | A variable-length integer (§4) extends beyond the end of input, exceeds the pinned range `[0, 2^64 − 1]`, or is not in the minimal form §4 requires. |
-| B03  | Schema signature length is not `33` (for `n = 1`) and not `37 + 2·(n − 2)` for any `n ≥ 2` (§6 field 2), **or** the XOR of every signature byte does not equal `0x79` — the BinTEL-pinned cadence byte (§8.2). |
-| B04  | Schema signature does not decode against the available hash library (§8.2 decoding); zero or more than one valid hash sequence. |
-| B05  | A keyword index read from the stream is outside `[0, keyword-count(parent-members))` (§7.8). |
-| B06  | A Scalar value's byte length extends beyond the end of input.                                 |
-| B07  | A **text** Scalar value's UTF-8 bytes are not a valid UTF-8 sequence (does not apply to encoded scalars, whose value bytes are codec-defined). |
-| B08  | A **whole-document** reader (§6.3) found a non-empty continuation — bytes remaining after the document ended. This is a property of the reader's contract, not of the bytes: a stream decoder treats the same bytes as the next document, and a single-document decoder returns them to its caller. |
-| B09  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.              |
-| B10  | A `Reference` or `SelectRef` in the composed schema does not resolve usably: either it names no `Definition` at all (the E209 condition at parse time), or it resolves to a `Definition` of the wrong kind — a `Reference` to a `SelectDefinition`, or a `SelectRef` to a record or scalar (the E217 condition). Both are surfaced by the decoder as a configuration error: the composed schema it was given is malformed, so keyword indices cannot be interpreted. |
-| B11  | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte. |
-| B12  | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tels` (structural error during bootstrap; the bytes do not yield a well-formed schema document). |
-| B13  | The composed schema declares an `encoding` for a Scalar but the decoder's codec binding (TEL §21.7) does not resolve that name. |
-| B14  | An encoded Scalar's value bytes are rejected by the bound codec's decoder — the bytes are not the encoding of any accepted text (including corrupt or non-canonical bytes, per law C3 of TEL §21.7). |
-| B15  | An implementation performing the OPTIONAL re-encode verification of TEL §21.7 found `encode(decode(b)) ≠ b` for an encoded Scalar's value bytes — a canonicality violation indicating a non-conforming codec or corrupted input. |
-| B16  | The document length declared in §6.1 field 2 / §6.2 field 2 disagrees with the extent the structural decode actually consumed. The two framings of the same document contradict each other, so neither can be trusted. |
+| Code     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ↯/t.4.1  | Magic number absent or does not match either of the recognised values `B2 C4 B5 BB` (external-schema mode, BASE-256: `βτελ`, §6.1 field 1) or `B2 C4 B5 BC` (self-contained mode, BASE-256: `βτεμ`, §6.2 field 1).                                                                                                                                                                                                                                                          |
+| ↯/t.4.2  | A variable-length integer (§4) extends beyond the end of input, exceeds the pinned range `[0, 2^64 − 1]`, or is not in the minimal form §4 requires.                                                                                                                                                                                                                                                                                                                        |
+| ↯/t.4.3  | Schema signature length is not `33` (for `n = 1`) and not `37 + 2·(n − 2)` for any `n ≥ 2` (§6 field 2), **or** the XOR of every signature byte does not equal `0x79` — the BinTEL-pinned cadence byte (§8.2).                                                                                                                                                                                                                                                              |
+| ↯/t.4.4  | Schema signature does not decode against the available hash library (§8.2 decoding); zero or more than one valid hash sequence.                                                                                                                                                                                                                                                                                                                                             |
+| ↯/t.4.5  | A keyword index read from the stream is outside `[0, keyword-count(parent-members))` (§7.8).                                                                                                                                                                                                                                                                                                                                                                                |
+| ↯/t.4.6  | A Scalar value's byte length extends beyond the end of input.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ↯/t.4.7  | A **text** Scalar value's UTF-8 bytes are not a valid UTF-8 sequence (does not apply to encoded scalars, whose value bytes are codec-defined).                                                                                                                                                                                                                                                                                                                              |
+| ↯/t.4.8  | A **whole-document** reader (§6.3) found a non-empty continuation — bytes remaining after the document ended. This is a property of the reader's contract, not of the bytes: a stream decoder treats the same bytes as the next document, and a single-document decoder returns them to its caller.                                                                                                                                                                         |
+| ↯/t.4.9  | The document-root decoding procedure of §7.8 requests bytes beyond end of input.                                                                                                                                                                                                                                                                                                                                                                                            |
+| ↯/t.4.10 | A `Reference` or `SelectRef` in the composed schema does not resolve usably: either it names no `Definition` at all (the ↯/t.2.9 condition at parse time), or it resolves to a `Definition` of the wrong kind — a `Reference` to a `SelectDefinition`, or a `SelectRef` to a record or scalar (the ↯/t.2.17 condition). Both are surfaced by the decoder as a configuration error: the composed schema it was given is malformed, so keyword indices cannot be interpreted. |
+| ↯/t.4.11 | In self-contained mode (§6.2), the composed signature recomputed from the embedded schema body does not equal the carried signature byte-for-byte.                                                                                                                                                                                                                                                                                                                          |
+| ↯/t.4.12 | In self-contained mode (§6.2), the embedded schema body does not decode as a valid TEL document under `tels` (structural error during bootstrap; the bytes do not yield a well-formed schema document).                                                                                                                                                                                                                                                                     |
+| ↯/t.4.13 | The composed schema declares an `encoding` for a Scalar but the decoder's codec binding (TEL §21.7) does not resolve that name.                                                                                                                                                                                                                                                                                                                                             |
+| ↯/t.4.14 | An encoded Scalar's value bytes are rejected by the bound codec's decoder — the bytes are not the encoding of any accepted text (including corrupt or non-canonical bytes, per law C3 of TEL §21.7).                                                                                                                                                                                                                                                                        |
+| ↯/t.4.15 | An implementation performing the OPTIONAL re-encode verification of TEL §21.7 found `encode(decode(b)) ≠ b` for an encoded Scalar's value bytes — a canonicality violation indicating a non-conforming codec or corrupted input.                                                                                                                                                                                                                                            |
+| ↯/t.4.16 | The document length declared in §6.1 field 2 / §6.2 field 2 disagrees with the extent the structural decode actually consumed. The two framings of the same document contradict each other, so neither can be trusted.                                                                                                                                                                                                                                                      |
 
-**Precedence among the end-of-input codes.** B02, B06 and B09 all describe a decoder running out
+**Precedence among the end-of-input codes.** ↯/t.4.2, ↯/t.4.6 and ↯/t.4.9 all describe a decoder running out
 of input, and without a rule two conforming decoders would report different codes for identical
 bytes. The most specific applicable code MUST be reported:
 
-1. **B06** when a Scalar value's already-decoded byte length extends past the end of input.
-2. **B02** when the truncation falls inside a variable-length integer (§4), or when that integer
+1. **↯/t.4.6** when a Scalar value's already-decoded byte length extends past the end of input.
+2. **↯/t.4.2** when the truncation falls inside a variable-length integer (§4), or when that integer
    violates the width or minimality rules of §4.
-3. **B09** otherwise — any other request for bytes beyond end of input.
+3. **↯/t.4.9** otherwise — any other request for bytes beyond end of input.
 
 The same ordering applies in self-contained mode to the embedded schema body: a truncated
-`schema_bytes_len` is B02, a body shorter than that length is B09. A document whose declared
-length (§6.1 field 2) exceeds the bytes remaining is likewise B09 — the document is truncated —
-whereas a declared length that disagrees with a *successful* structural decode is B16.
+`schema_bytes_len` is ↯/t.4.2, a body shorter than that length is ↯/t.4.9. A document whose declared
+length (§6.1 field 2) exceeds the bytes remaining is likewise ↯/t.4.9 — the document is truncated —
+whereas a declared length that disagrees with a *successful* structural decode is ↯/t.4.16.
 
-All BinTEL error codes (B01–B16) are **fatal**: on any such error a conforming decoder MUST
+All BinTEL error codes (↯/t.4.1–↯/t.4.16) are **fatal**: on any such error a conforming decoder MUST
 abort decoding and MUST NOT emit any partial result. BinTEL is the authoritative serialisation
 of the semantic model — once any byte is found inconsistent with §6 / §7, no remaining bytes
 can be trusted to convey their nominal types and lengths. No recovery is specified for BinTEL.
 
-B13 merits a remark: because encoded-scalar framing is length-prefixed (§7.1), a decoder
+↯/t.4.13 merits a remark: because encoded-scalar framing is length-prefixed (§7.1), a decoder
 *structurally could* skip an unknown codec's value bytes and continue. For semantic decoding
 this is deliberately forbidden — a schema that names an encoding expresses both a
 representation and a constraint, and a consumer that cannot decode the representation cannot
@@ -1203,7 +1203,7 @@ are implementation-specific and are not error conditions defined by this specifi
 
 An acceptance (§8.4) introduces no codes of its own: it is an ordinary document under the
 `acceptance` schema, so a malformed one fails as any document does — a signature that is not
-structurally a signature is E312 from the `schema-signature` codec at validation, or B14 from
+structurally a signature is ↯/t.3.12 from the `schema-signature` codec at validation, or ↯/t.4.14 from
 its decoder in BinTEL — and a `schema` that does not decode against the writer's library is
 not an error at all but an alternative the writer cannot serve.
 
@@ -1225,22 +1225,22 @@ than exhaust memory or stack:
   count before reading the children. Each child consumes at least one byte (a keyword index), so a
   count exceeding the number of bytes remaining is unsatisfiable and can be rejected immediately.
 - **Value lengths.** A Scalar value's declared byte length MUST be checked against the bytes
-  remaining before any allocation (**B06** when it overruns).
+  remaining before any allocation (**↯/t.4.6** when it overruns).
 - **Document length.** The document length of §6.1 field 2 is as attacker-controlled as any other
-  count. A decoder MUST check it against the bytes remaining before acting on it (**B09** when it
+  count. A decoder MUST check it against the bytes remaining before acting on it (**↯/t.4.9** when it
   overruns) and MUST NOT pre-allocate a buffer sized by it. Because it is *declared* rather than
   derived, it MUST NOT be trusted in place of the structural decode: the check that the two agree
-  (**B16**) is what stops a forged length from concealing bytes inside a document or exposing
+  (**↯/t.4.16**) is what stops a forged length from concealing bytes inside a document or exposing
   bytes of the next one.
 
 These limits are properties of a decoder's configuration, not of the document, so exceeding one is
-a resource error reported outside the B01–B16 taxonomy — exactly as §20.2 of the TEL Specification
+a resource error reported outside the ↯/t.4.1–↯/t.4.16 taxonomy — exactly as §20.2 of the TEL Specification
 treats its depth limit. A decoder with a larger limit would accept the same bytes. Implementations
 MAY expose the limits as configurable parameters.
 
 **Self-contained mode carries executable structure.** In self-contained mode (§6.2) the embedded
 schema body determines how every subsequent byte is interpreted, and it arrives from the same
-untrusted source as the document. The signature check of B11 confirms only that the body is
+untrusted source as the document. The signature check of ↯/t.4.11 confirms only that the body is
 *internally consistent* with the signature the document carries — a self-consistent forgery passes
 it. A receiver that requires the schema to be one it trusts MUST compare the verified signature
 against a set of known schema signatures, and MUST NOT infer trust from successful decoding. The
@@ -1253,7 +1253,7 @@ and integrity against a motivated adversary MUST be supplied at a separate layer
 
 **Codecs run on attacker-controlled bytes.** A bound codec's `decode` (§7.1) is invoked on value
 bytes taken directly from the input. Codec implementations are as exposed as the decoder itself
-and MUST be written accordingly; the OPTIONAL re-encode verification (B15) detects
+and MUST be written accordingly; the OPTIONAL re-encode verification (↯/t.4.15) detects
 non-canonical input but is not a substitute for a codec that handles malformed bytes safely.
 
 **Streams are unbounded.** A reader consuming a stream (§6.3) accepts an arbitrary number of

@@ -38,8 +38,8 @@ It is organised around subcommands:
   against the invoking shell's directory). Acceptance requires the full battery: conformance to the
   TELS meta-schema, Stratiform's §20.1 schema-validity checks over the layer-composed result
   (`Tels.Validation.validate` — duplicate keywords, layer rules, `key` constraints, …), and
-  reference coherence (every `TypeName` must resolve, to a Definition of the right kind — E209 and
-  E217, which Stratiform itself only discovers lazily when a document is validated against the
+  reference coherence (every `TypeName` must resolve, to a Definition of the right kind — ↯/t.2.9 and
+  ↯/t.2.17, which Stratiform itself only discovers lazily when a document is validated against the
   schema). An incoherent schema is rejected rather than stored, so the registry can never hold a
   schema that will fail at use.
 - **`tel schema signature <name> [layer…]`** — print the BASE-256 palimpsest for a schema composed
@@ -49,7 +49,7 @@ It is organised around subcommands:
   the registry), and exiting nonzero when any error is found. The default report is for humans:
   each problem quotes its source line with the offending span coloured and caret-underlined.
   `--llm` emits a quotation-free report — one line per problem, with 1-based line and column
-  positions, the E-code and the message — the right shape to paste to (or pipe through) an LLM,
+  positions, the bolt code and the message — the right shape to paste to (or pipe through) an LLM,
   which has the file and needs addresses, not excerpts.
 - **`tel install`** — write (or refresh) the shell's tab-completion entry for `tel`.
 - **`tel --help`** (or a bare `tel`) — usage, generated from the subcommand, flag and exit-status
@@ -120,7 +120,7 @@ Features so far:
 - **Diagnostics** — published on open and on change (the editor's incremental edits are applied by
   `Lsp.listen`'s document store, so each change re-parses the spliced text). The document is parsed
   with [Stratiform](https://github.com/propensive/stratiform)'s TEL parser (`read[Tel]`) under an
-  accrual boundary, and every `TelError` is reported with its spec E-code (e.g. `E104`, `E107`), its
+  accrual boundary, and every `TelError` is reported with its bolt code (e.g. `↯/t.1.4`, `↯/t.1.7`), its
   message, and a **source range**. Ranges come from Stratiform's position tracking (`import
   parsing.trackPositions`), and are *exact*: every located `TelError` carries a `Span` giving both
   the start and the extent of the offending text, so a diagnostic underlines the token itself — the
@@ -130,23 +130,23 @@ Features so far:
   `Tel.supplementPositions`), and, failing that, the focus's keyword path is resolved against the
   position-tracked document with `tel.locate`. A *schema* document (one whose pragma names the `tels` meta-schema) is
   additionally validated against the built-in meta-schema (`Tels.Axiom.tels`), surfacing
-  malformed-schema errors such as `E306` (unrecognised keyword); run through Stratiform's §20.1
-  schema-validity battery over the layer-composed result (E201–E223); and checked for reference
-  coherence (E209/E217, located on the offending `TypeName` atom). A local `E210` check covers
-  duplicate (or built-in-colliding) definition names, which the battery's base side does not. E224
+  malformed-schema errors such as `↯/t.3.6` (unrecognised keyword); run through Stratiform's §20.1
+  schema-validity battery over the layer-composed result (↯/t.2.1–↯/t.2.23); and checked for reference
+  coherence (↯/t.2.9/↯/t.2.17, located on the offending `TypeName` atom). A local `↯/t.2.10` check covers
+  duplicate (or built-in-colliding) definition names, which the battery's base side does not. ↯/t.2.24
   was withdrawn from the specification (an unconstrained scalar is valid), so the error Stratiform
   0.67 still raises for it is dropped, and such a schema is composed without the battery.
-  Ordinary documents are validated in full: the four **built-in validators** of §21.5 run (E310),
-  every **pattern** constraint is matched (E315), and the two **codecs** the specification defines
+  Ordinary documents are validated in full: the four **built-in validators** of §21.5 run (↯/t.3.10),
+  every **pattern** constraint is matched (↯/t.3.15), and the two **codecs** the specification defines
   — `base-256` and `schema-signature`, BinTEL §8.4 — check the values of scalars that declare them
-  (E312). An application-defined validator name is treated as satisfied, since only the application
-  can run it, and an application-defined encoding is reported as an **E313 warning** (the value is
+  (↯/t.3.12). An application-defined validator name is treated as satisfied, since only the application
+  can run it, and an application-defined encoding is reported as an **↯/t.3.13 warning** (the value is
   unchecked) rather than the error an application would raise. Diagnostics are cleared when a
   document closes. A pragma naming an unregistered schema gets an `Information` diagnostic on the
   identifier (the document is valid, just unvalidated); a `+layer` selection out of declaration
-  order is `E124`, while an undeclared layer name (`layer-unknown`) and a signature that disagrees
-  with the reference or selections beside it (`signature-disagrees`) are runtime resolution errors
-  under codes of their own, since the specification gives them no E-code.
+  order is `↯/t.1.24`, while an undeclared layer name (`↯/t.6.2`) and a signature that disagrees
+  with the reference or selections beside it (`↯/t.6.3`) are runtime resolution errors
+  under codes of the tool's own, in `↯/t.6`, since the specification gives them none.
 - **Outline / document symbols**, **folding ranges**, **selection ranges**, and **document
   highlights** — derived from an indentation scan of the source. (Stratiform positions are looked up
   by keyword *path*, which can't disambiguate same-keyword siblings, so the scan stays authoritative
@@ -292,10 +292,10 @@ the local-development behaviour of §8.2, where a bare reference is deliberately
 signature is matched against each cached schema's base, selected, or fully-composed signature
 (memoized per identification, invalidated when the registry directory changes). `+layer`
 selections compose exactly the named layers, in the schema's declaration order; an unknown or
-out-of-order selection is reported as `E124`. Schema *documents* (pragma references the pinned
+out-of-order selection is reported as `↯/t.1.24`. Schema *documents* (pragma references the pinned
 meta-schema coordinate, `specification.tel/tels:2.1.0`) are validated against the built-in
 meta-schema. When the pragma names a schema that matches nothing in the registry, the LSP says so:
-an `Information` diagnostic (`schema-unresolved`) underlines the identifier, and hovering the
+an `Information` diagnostic (`↯/t.6.1`) underlines the identifier, and hovering the
 pragma explains the resolution status (resolved schema name, signature and registry path;
 meta-schema; or the failure). The pragma's identifier slot also tab-completes to the registered
 schemas, inserting the signature.
@@ -317,8 +317,8 @@ transport is involved; for a live smoke test, drive `tel lsp` over stdio and wat
 ## Known gaps / next steps
 
 - **Deeper schema validity** — `assign`/`fromTel` catch malformed schema *syntax*, and the LSP
-  checks duplicate/built-in-colliding definition names itself (E210), but the remaining semantic
-  E2xx (layer-merge errors, empty selects) need Stratiform's §20.1 schema-validity pass.
+  checks duplicate/built-in-colliding definition names itself (↯/t.2.10), but the remaining semantic
+  ↯/t.2 (layer-merge errors, empty selects) need Stratiform's §20.1 schema-validity pass.
 - **LIRA network resolution** — references resolve locally only (the registry stands in for the
   developer's working copies). Fetching a `:version`/`:tag` release through LIRA (reliquary's
   resolution delegate) and the pragma "rubber-stamp" code action — appending the resolved

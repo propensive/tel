@@ -189,7 +189,7 @@ object SelfUpgrade:
 
             case result =>
               val reason: Message = result.communicate
-              Err.println(t"$name: the staged upgrade was not applied: $reason")
+              Err.println(t"$name: [↯/t.6.13] the staged upgrade was not applied: $reason")
 
           Upgrade.acknowledge()
 
@@ -240,7 +240,7 @@ object SelfUpgrade:
         UpgradeManifest.download(executable).let: data =>
           recover:
             case error: Upgrade.Error =>
-              Out.println(t"The upgrade could not be staged: ${error.message}")
+              Out.println(t"[↯/t.6.14] The upgrade could not be staged: ${error.message}")
               UpgradeFailed
 
           . protect:

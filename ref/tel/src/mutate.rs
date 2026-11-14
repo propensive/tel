@@ -430,7 +430,7 @@ pub fn insert_into_block(
 /// are preserved.
 ///
 /// A "group" here is the set of consecutive same-keyword compounds within
-/// the same block: this is what §20.2's E309 contiguity rule defines as
+/// the same block: this is what §20.2's ↯/t.3.9 contiguity rule defines as
 /// a single member-fill region. `new_index` is the desired position in
 /// the group (0-based), not in the block.
 pub fn reorder_within_group(
@@ -493,7 +493,7 @@ pub enum GroupPlacement {
 /// that keyword.
 ///
 /// The operation rejects with `MutationError::PathNotFound` if no blocks
-/// belong to either group. It does NOT enforce schema-level E309
+/// belong to either group. It does NOT enforce schema-level ↯/t.3.9
 /// contiguity by itself, since `mutate.rs` carries no schema; the caller
 /// is responsible for ensuring the move is semantically valid.
 pub fn reorder_groups(

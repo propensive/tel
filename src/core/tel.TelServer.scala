@@ -45,6 +45,10 @@ import columnAttenuation.ignoreAttenuation
 // workspace and the request's payload are ambient within it — so a handler reads `document.text`
 // and `position` directly rather than resolving a URI against a store of its own.
 object TelServer:
+  // The bolt code of the error the specification numbers `number` — its family in the hundreds,
+  // so that 107 is ↯/t.1.7 (§19.3).
+  private def bolt(number: Int): Text = t"↯/t.${number/100}.${number%100}"
+
   // ── Diagnostics ─────────────────────────────────────────────────────────────────────────────
   //
   // Parse the document with Stratiform's TEL parser and surface every error it reports as an LSP
@@ -103,7 +107,7 @@ object TelServer:
 
   // The codec binding (§21.7) a document is checked with: the two specified codecs resolve; any
   // other encoding name is application-defined, and its values go unchecked — reported by
-  // `diagnostic` as a warning rather than the E313 error an application would raise.
+  // `diagnostic` as a warning rather than the ↯/t.3.13 error an application would raise.
   private val editorCodecs: Tel.Codec.Bindings = new Tel.Codec.Bindings:
     def apply(name: Text): Optional[Tel.Codec] = name match
       case t"base-256"         => Base256Codec
@@ -310,23 +314,23 @@ object TelServer:
                     ( identifier,
                       t"the signature identifies the schema `${entry.name}`, not the referenced "
                       + t"schema `${expected.or(t"")}`",
-                      t"signature-disagrees" )
+                      t"↯/t.6.3" )
                 else
                   Resolution.Resolved(entry, file, schema, selected, signature)
 
               case SchemaCache.Lookup.UnknownLayer(_, layer) =>
                 Resolution.BadLayers
                   ( identifier, t"the selected layer `$layer` is not one the schema declares",
-                    t"layer-unknown" )
+                    t"↯/t.6.2" )
 
               case SchemaCache.Lookup.LayerOrder(_) =>
                 Resolution.BadLayers
                   ( identifier,
                     t"the `+` layer selections are not in the schema's declaration order",
-                    t"E124" )
+                    t"↯/t.1.24" )
 
               case SchemaCache.Lookup.Disagreement(_, detail) =>
-                Resolution.BadLayers(identifier, detail, t"signature-disagrees")
+                Resolution.BadLayers(identifier, detail, t"↯/t.6.3")
 
               case SchemaCache.Lookup.Missing =>
                 Resolution.Unresolved(identifier)
@@ -359,7 +363,7 @@ object TelServer:
           // When the document parses, validate it against its schema. A schema *document* (its
           // pragma names TELS) is checked two ways: conformance to the built-in TELS meta-schema
           // (`assign`), catching malformed schema syntax, and construction of the `Tels` from it
-          // (`tel.as[Tels]`), catching schema-validity errors (E2xx). Any other pragma
+          // (`tel.as[Tels]`), catching schema-validity errors (↯/t.2). Any other pragma
           // schema — a LIRA reference or BASE-256 signature — is resolved against the local registry
           // populated by `tel schema add`. The two meta-schema passes are ventured separately so
           // that a failure in the first still lets the second contribute its errors.
@@ -372,7 +376,7 @@ object TelServer:
                 venture(Tel.Type.assign(tel, Tels.Axiom.tels, editorValidators, editorCodecs))
 
                 // Reconstruction alone checks only the document's shape; `Validation.validate`
-                // composes the layers and runs the §20.1 schema-validity battery (E201-E221)
+                // composes the layers and runs the §20.1 schema-validity battery (↯/t.2.1–↯/t.2.21)
                 // over the result. The composed schema feeds the reference-coherence pass.
                 val validated = venture(Tels.Validation.validate(tel.as[Tels]))
                 guard:
@@ -388,7 +392,7 @@ object TelServer:
     // reason. This is deliberately not applied when the parse failed: parse errors legitimately
     // repeat one reason at several positions, and the `guard` guarantees the two sets are never
     // both present.
-    // E224 (a scalar declaring neither `validate` nor `pattern`) was withdrawn from the
+    // ↯/t.2.24 (a scalar declaring neither `validate` nor `pattern`) was withdrawn from the
     // specification: an unconstrained scalar is valid. Stratiform 0.67 still raises it, so it is
     // dropped here; the registry's `validated` composes such a schema without the battery.
     val retired = accrued.items.filter((_, error) => error.reason.number != 224)
@@ -397,8 +401,8 @@ object TelServer:
       if document.absent then retired
       else retired.deduplicate((_, error) => (error.reason.number, error.reason))
 
-    // Stratiform's validity battery now checks reference coherence itself (E209/E217), and — since
-    // Soundness 0.67.0 — duplicate definition names (E210) too, but it aborts at the first defect
+    // Stratiform's validity battery now checks reference coherence itself (↯/t.2.9/↯/t.2.17), and — since
+    // Soundness 0.67.0 — duplicate definition names (↯/t.2.10) too, but it aborts at the first defect
     // without a source span, so the entry would land at the head of the file. Those entries are
     // dropped for a schema document and re-located precisely: the coherence pair by the
     // incoherences pass below, against the composed schema, and `DuplicateDefinition` by the
@@ -417,13 +421,13 @@ object TelServer:
         collapsed
 
     // Stratiform's `Reconstructor` leaves §20.1 schema-validity checking out of scope, so the one
-    // cheap, high-value case — duplicate or built-in-colliding definition names (E210) — is
+    // cheap, high-value case — duplicate or built-in-colliding definition names (↯/t.2.10) — is
     // checked here against the source scan, on the offending name atom.
     val duplicates = resolution match
       case Resolution.Meta(_, _) if !document.absent => duplicateDefinitions(lines)
       case _                                         => Nil
 
-    // Reference-coherence findings (E209/E217), located on the offending TypeName atom in the
+    // Reference-coherence findings (↯/t.2.9/↯/t.2.17), located on the offending TypeName atom in the
     // source scan. Computed only when the whole validity battery passed, so they are never
     // cascade noise from a malformed schema.
     val incoherent: List[Lsp.Diagnostic] = composed.lay(Nil): schema =>
@@ -433,9 +437,9 @@ object TelServer:
     // An identifier that matches nothing in the registry gets a diagnostic of its own: the document
     // is valid TEL, but it is not being validated, which would otherwise be invisible to the user.
     // A bad `+` layer selection against a resolved schema is an error (§8.1): a selection out of
-    // declaration order is E124, and an undeclared layer name — like a signature that disagrees
+    // declaration order is ↯/t.1.24, and an undeclared layer name — like a signature that disagrees
     // with the reference or selections beside it — is a runtime resolution error, which carries
-    // no E-code and is reported under a code of its own.
+    // no code and is reported under one of the tool's own, in ↯/t.6.
     val unresolved = resolution match
       case Resolution.Unresolved(identifier) =>
         val range = pragma.identifier
@@ -445,14 +449,14 @@ object TelServer:
         List(Lsp.Diagnostic
           ( range    = range,
             severity = Lsp.DiagnosticSeverity.Information,
-            code     = t"schema-unresolved",
+            code     = t"↯/t.6.1",
             source   = t"tel",
             message  = t"Schema `$identifier` is not registered, so this document is parsed but "
                        + t"not validated. Register the schema with `tel schema add <file>`." ))
 
       case Resolution.BadLayers(identifier, detail, code) =>
         // The layer phrases when the selection is at fault; the whole identification otherwise.
-        val phrases = if code == t"signature-disagrees" then Nil else pragma.layers
+        val phrases = if code == t"↯/t.6.3" then Nil else pragma.layers
         val start = phrases.head.let(_.start).or(pragma.identifier.let(_.start).or(0))
         val end = phrases.last.let(_.end).or(pragma.identifier.let(_.end).or(1))
 
@@ -468,14 +472,14 @@ object TelServer:
     (entries.map(diagnostic(_, lines, document)) + duplicates + incoherent + unresolved)
     . deduplicate(entry => (entry.range, entry.code, entry.message))
 
-  // E210 (§20.1): two base Definitions sharing a name, or a Definition using a predefined built-in
+  // ↯/t.2.10 (§20.1): two base Definitions sharing a name, or a Definition using a predefined built-in
   // name. Located on the second (or built-in-colliding) definition's name atom.
   private def duplicateDefinitions(lines: Sequence[Text]): List[Lsp.Diagnostic] =
     def diagnostic(line: Int, name: Token, message: Text): Lsp.Diagnostic =
       Lsp.Diagnostic
         ( range    = Lsp.Range(Lsp.Position(line, name.start), Lsp.Position(line, name.end)),
           severity = Lsp.DiagnosticSeverity.Error,
-          code     = t"E210",
+          code     = t"↯/t.2.10",
           source   = t"tel",
           message  = message )
 
@@ -520,7 +524,7 @@ object TelServer:
     Lsp.Diagnostic
       ( range    = Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)),
         severity = Lsp.DiagnosticSeverity.Error,
-        code     = t"E${reason.number}",
+        code     = bolt(reason.number),
         source   = t"tel",
         message  = m"$reason".text )
 
@@ -665,7 +669,7 @@ object TelServer:
       else t", matching ${patterns.map(pattern => t"`$pattern`").join(t" and ")}"
 
     // A declared `encoding` (§21.7) is a further constraint on the value — the codec's encoder
-    // rejects what it cannot represent (E312) — as well as its BinTEL representation.
+    // rejects what it cannot represent (↯/t.3.12) — as well as its BinTEL representation.
     val codec = encoding.let(name => t", encoded as `$name`").or(t"")
     val header = t"**$keyword** value — `${name.or(t"scalar")}`$checks$matching$codec"
     val fallback = default.let(value => t"\n\nDefault: `$value`").or(t"")
@@ -871,7 +875,7 @@ object TelServer:
 
   // Layer-selection completions on the pragma line: `+name` for each layer the resolved schema
   // declares and the pragma does not yet select. Declaration order is preserved, since a
-  // selection must be written in it (E124).
+  // selection must be written in it (↯/t.1.24).
   private def layerCompletions(pragma: Pragma, resolver: PragmaResolver): List[Lsp.CompletionItem] =
     resolver(pragma) match
       case Resolution.Resolved(entry, _, _, _, _) =>
@@ -1015,7 +1019,7 @@ object TelServer:
         val hardened = hard || start - from >= 2
 
         // In hard mode the phrase runs to the next hard run, or to the end of the line less a
-        // trailing single space (which would be E108 anyway, and verification catches the
+        // trailing single space (which would be ↯/t.1.8 anyway, and verification catches the
         // invalid document); otherwise it runs to the next space.
         val end =
           if !hardened then column(line, start)(_ == ' ')
@@ -1055,7 +1059,7 @@ object TelServer:
       val spans = inlineAtomSpans(lineText, node.keywordEnd)
 
       // The last phrase must run to the end of the line: with remarks declined, anything after it
-      // would be trailing space (E108), and verification would reject the document anyway.
+      // would be trailing space (↯/t.1.8), and verification would reject the document anyway.
       spans.last.let: moved =>
         if declined(lines, node) || moved.end != lineText.length then Unset else
           val struct = enclosingStruct(tree, node.line, node.indent, schema)
@@ -1309,7 +1313,7 @@ object TelServer:
     val (focus, error) = entry
     val range = errorRange(focus, error, lines, document)
 
-    // Every TEL E-code is a hard error, with one editor-specific exception: E313 (an encoding
+    // Every TEL error is a hard error, with one editor-specific exception: ↯/t.3.13 (an encoding
     // name the codec binding does not resolve) is what an application must raise, but here it
     // means the codec is the application's — the editor binds only the two the specification
     // defines (BinTEL §8.4) — so the value is merely unchecked, and that is a warning.
@@ -1319,7 +1323,7 @@ object TelServer:
       ( range    = range,
         severity = if unchecked then Lsp.DiagnosticSeverity.Warning
                    else Lsp.DiagnosticSeverity.Error,
-        code     = t"E${error.reason.number}",
+        code     = bolt(error.reason.number),
         source   = t"tel",
         message  =
           if unchecked
@@ -1949,7 +1953,7 @@ object TelServer:
   :   DocumentInvalid.type | Unreadable.type | Exit.Ok.type =
     recover:
       case error: Path.Error =>
-        Out.println(t"tel: could not resolve ${file.encode}: ${error.message.text}")
+        Out.println(t"tel: [↯/t.6.4] could not resolve ${file.encode}: ${error.message.text}")
         Unreadable
 
     . protect:
@@ -1967,7 +1971,7 @@ object TelServer:
             if errors > 0 then DocumentInvalid else Exit.Ok
 
           case _ =>
-            Out.println(t"tel: could not read ${file.encode}")
+            Out.println(t"tel: [↯/t.6.5] could not read ${file.encode}")
             Unreadable
 
   // ── Live message log ────────────────────────────────────────────────────────────────────────
@@ -2150,15 +2154,15 @@ object TelServer:
           // the message stream.
           recover:
             case error: Async.Error =>
-              Err.println(t"tel: the language server terminated abnormally: ${error.message.text}")
+              Err.println(t"tel: [↯/t.6.6] the language server terminated abnormally: ${error.message.text}")
               ServerFailed
 
             case error: Framing.Error =>
-              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
+              Err.println(t"tel: [↯/t.6.7] the language server's transport failed: ${error.message.text}")
               ServerFailed
 
             case error: Truncation.Error =>
-              Err.println(t"tel: the language server's transport failed: ${error.message.text}")
+              Err.println(t"tel: [↯/t.6.7] the language server's transport failed: ${error.message.text}")
               ServerFailed
 
           . protect:
@@ -2272,7 +2276,7 @@ object TelServer:
 
       case _ =>
         execute:
-          Err.println(t"tel: unrecognised command")
+          Err.println(t"tel: [↯/t.6.8] unrecognised command")
           Out.println(resident.help())
           UsageError
 
@@ -2303,7 +2307,7 @@ object TelServer:
   private def schemaList()(using Stdio, Environment, System): Unreadable.type | Exit =
     recover:
       case error: Path.Error =>
-        Out.println(t"tel: could not list schemas: ${error.message.text}")
+        Out.println(t"tel: [↯/t.6.9] could not list schemas: ${error.message.text}")
         Unreadable
 
     . protect:
@@ -2325,7 +2329,7 @@ object TelServer:
       (using Stdio, Environment, System)
   :   SchemaRejected.type | Exit =
     def failed(error: Error): SchemaRejected.type =
-      Out.println(t"tel: could not add schema: ${error.message.text}")
+      Out.println(t"tel: [↯/t.6.10] could not add schema: ${error.message.text}")
       SchemaRejected
 
     recover:
@@ -2344,7 +2348,7 @@ object TelServer:
       (using Stdio, Environment, System)
   :   Unreadable.type | SchemaMissing.type | Exit =
     def failed(error: Error): Unreadable.type =
-      Out.println(t"tel: could not compute signature: ${error.message.text}")
+      Out.println(t"tel: [↯/t.6.11] could not compute signature: ${error.message.text}")
       Unreadable
 
     recover:
@@ -2359,5 +2363,5 @@ object TelServer:
             Exit.Ok
 
           case _ =>
-            Out.println(t"tel: no schema named `$name` in the registry")
+            Out.println(t"tel: [↯/t.6.12] no schema named `$name` in the registry")
             SchemaMissing

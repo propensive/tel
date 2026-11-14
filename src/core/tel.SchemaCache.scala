@@ -69,9 +69,9 @@ object SchemaCache:
   // The §20.1 checks Stratiform's `Tels.Validation` does not yet perform: every type reference
   // must resolve within the composed namespace, and to a Definition of the right kind. A `Field`
   // or `Variant` may reference a record or a scalar (the built-ins are prepended into
-  // `schema.scalars` at reconstruction, so they resolve here too), but not a select (E217 — the
+  // `schema.scalars` at reconstruction, so they resolve here too), but not a select (↯/t.2.17 — the
   // sum-typed member form is the `SelectRef`); a `SelectRef` must reference a select. A name that
-  // resolves to nothing at all is E209. Returns each offending TypeName with its reason, in
+  // resolves to nothing at all is ↯/t.2.9. Returns each offending TypeName with its reason, in
   // declaration order; run against the COMPOSED schema, so layer-introduced definitions and
   // references are both in scope.
   def incoherences(schema: Tels): List[(Text, Tel.Error.Reason)] =
@@ -209,7 +209,7 @@ object SchemaCache:
     // The schema is registered, but a selected layer is not one it declares: a runtime resolution
     // error (§8.1), distinct from a mis-ordered selection.
     case UnknownLayer(file: Path on Linux, layer: Text)
-    // The schema is registered, but the layers are not in its declaration order (E124).
+    // The schema is registered, but the layers are not in its declaration order (↯/t.1.24).
     case LayerOrder(file: Path on Linux)
     // The signature resolves, but not to what the pragma's other phrases claim (§8.1).
     case Disagreement(file: Path on Linux, detail: Text)
@@ -241,7 +241,7 @@ object SchemaCache:
           . or(Lookup.Missing)
 
   // Compose a registered schema with a layer selection, telling the two ways a selection can
-  // fail apart: Stratiform raises `Resolution.Error` for an undeclared name and E124 for an
+  // fail apart: Stratiform raises `Resolution.Error` for an undeclared name and ↯/t.1.24 for an
   // order violation.
   private def compose(file: Path on Linux, tel: Tel, selection: List[Text]): Lookup =
     recover:

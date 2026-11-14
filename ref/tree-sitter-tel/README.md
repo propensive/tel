@@ -14,7 +14,7 @@ The grammar parses TEL's presentation model:
 - tabulation lines and tabulated rows
 
 It is **not** a schema-driven semantic parser. Schema resolution,
-typing, BinTEL encoding, palimpsest verification, and the E2xx / E3xx
+typing, BinTEL encoding, palimpsest verification, and the ↯/t.2 / ↯/t.3
 error families remain the concern of the reference parser at
 [`ref/tel/`](../tel/).
 
@@ -84,7 +84,7 @@ The exact gap byte count is recoverable from the gap node's range.
   body (rather than the pragma) is not honoured.
 - Parsing the demo `contact-document.tel` treats the leading comments
   before the pragma line as ordinary comments and the `tel 1.0 …` line
-  as a compound with keyword `tel`. The strict spec (§8, E102) would
+  as a compound with keyword `tel`. The strict spec (§8, ↯/t.1.2) would
   flag the missing pragma; tree-sitter produces a usable tree either
   way.
 
