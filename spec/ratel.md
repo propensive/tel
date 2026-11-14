@@ -249,12 +249,28 @@ violation of these constraints is **R23**.
 
 ### 5.7 Digests Section
 
-When flag bit 0 is set, the digests section holds `7 × 32` bytes: the BLAKE3-256 digest of each
+When flag bit 0 is set, the digests section holds six BLAKE3-256 digests, `6 × 32 = 192` bytes
+in all, and its length MUST be exactly `192` (**R07** otherwise). The first five are the digests
 of the first five sections (schema, strings, variable, tables, indexes), in directory order, each
 computed over exactly the `length` bytes the directory gives for that section (an empty section
-digests the empty input), followed by the digest of header bytes `0..144`. A reader that verifies
-digests MUST report a mismatch as **R07**. When flag bit 0 is clear, the digests section's length
-MUST be `0` (**R07** otherwise).
+digests the empty input); the sixth is the digest of header bytes `0..144`:
+
+| Offset | Size | Digest of |
+| -----: | ---: | --------- |
+| 0 | 32 | the schema section |
+| 32 | 32 | the strings section |
+| 64 | 32 | the variable section |
+| 96 | 32 | the tables section |
+| 128 | 32 | the indexes section |
+| 160 | 32 | the header, bytes `0..144` |
+
+The header is digested as it is finally written: its input includes the flags (with bit 0 set),
+the committed length, every directory entry — that of the digests section itself among them — and
+the value hash field. The digests section is the input of none of its own digests, so nothing is
+circular: a writer completes the header, then computes the header digest and writes it.
+
+A reader that verifies digests MUST report a mismatch as **R07**. When flag bit 0 is clear, the
+digests section's length MUST be `0` (**R07** otherwise).
 
 Digest verification is OPTIONAL and a reader MAY defer it, but a reader that advertises
 integrity checking MUST complete it before trusting any section's contents. Digests detect
@@ -626,7 +642,8 @@ MAY follow and which keeps rows contiguous even for recursive types:
    allocated child row in slot order.
 3. Build each index by computing its entries from the finished rows and sorting them.
 4. Lay out the sections in directory order — schema, strings, variable, tables, indexes, digests
-   — each 8-aligned; fill the header last.
+   — each 8-aligned; fill the header last, and when digests are written compute the header digest
+   from the completed header (§5.7).
 
 ## 11. Security Considerations
 
@@ -785,7 +802,7 @@ Specification or the B-codes of BinTEL, though several restate a B-code's condit
 | R04 | File shorter than 144 bytes; committed length `< 144`, greater than the file, or not a multiple of 8 | open |
 | R05 | A directory offset or length is not a multiple of 8, an offset is `< 144`, or `offset + length` exceeds the committed length | open |
 | R06 | Two non-empty sections overlap | open |
-| R07 | A section or header digest does not match (flag bit 0 set), or flag bit 0 is clear and the digests section is non-empty | open / verify |
+| R07 | A section or header digest does not match, or the digests section's length is not `192` (flag bit 0 set); or flag bit 0 is clear and the digests section is non-empty | open / verify |
 | R08 | Schema signature structurally invalid — the B03 conditions | open |
 | R09 | Embedded schema body does not decode under `tels` — the B12 condition | open |
 | R10 | Recomputed composed signature differs from the carried signature — the B11 condition | open |
