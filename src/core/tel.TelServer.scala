@@ -1,7 +1,5 @@
 package tel
 
-import scala.collection.mutable as scm
-
 import soundness.*
 
 // `soundness` re-exports Proscenium's collections, but an *exported* opaque type does not carry its
@@ -10,10 +8,16 @@ import soundness.*
 // modules themselves do. A named import outranks the `soundness` wildcard.
 import proscenium.{List, Nil, Chain, Map, Set, `::`}
 
-// `Accrued` appends to, and takes the length of, a `List` — both O(n) on a linked structure, and
-// both gated behind this acknowledgement. The lists are the errors in one document, so linear cost
-// is not a concern here.
+// Appending to a `List`, taking its length and reading it by position are all O(n) on a linked
+// structure, and all gated behind this acknowledgement. The lists here are the errors in one
+// document, the tokens on one line and the phrases of one pragma, so linear cost is not a concern.
 import dysasymptotics.linearSize
+// Type names and diagnostics are ordered for display: by code point, which for the identifiers
+// TEL admits is alphabetical order. `Text` is comparable only once a collation has been chosen,
+// and the given which makes it so is lexically scoped.
+import soundness.collationComparable
+import collations.codepointCollation
+import sortingAlgorithms.timsort
 import backstops.stackTraceBackstop
 import codepages.utf8Codepage
 import errorDiagnostics.emptyDiagnostics
@@ -66,7 +70,7 @@ object TelServer:
     override def apply(request: Tel.Validator.Request): Tel.Validator.Response =
       Tel.Validator.Registry.builtins(request) match
         case Tel.Validator.Response.Invalid(Tel.Validator.Diagnostic.Scalar(message, _))
-             if message.s.startsWith("unknown validator") =>
+             if message.starts(t"unknown validator") =>
           Tel.Validator.Response.Valid
 
         case Tel.Validator.Response.Invalid(Tel.Validator.Diagnostic.Struct(_, _)) =>
@@ -101,10 +105,10 @@ object TelServer:
   // other encoding name is application-defined, and its values go unchecked — reported by
   // `diagnostic` as a warning rather than the E313 error an application would raise.
   private val editorCodecs: Tel.Codec.Bindings = new Tel.Codec.Bindings:
-    def apply(name: Text): Optional[Tel.Codec] = name.s match
-      case "base-256"         => Base256Codec
-      case "schema-signature" => SignatureCodec
-      case _                  => Unset
+    def apply(name: Text): Optional[Tel.Codec] = name match
+      case t"base-256"         => Base256Codec
+      case t"schema-signature" => SignatureCodec
+      case _                   => Unset
 
   // The schema registry directory is resolved once, where the invoker's `Environment` is in scope,
   // and threaded to the handlers that need it: nothing capability-carrying or stateful lives in this
@@ -138,47 +142,56 @@ object TelServer:
     def layerNames: List[Text] = layers.map(_.name)
 
   // A well-formed pragma: `tel <major>.<minor>` optionally followed by schema phrases.
-  private val pragmaPattern = "tel [0-9]+\\.[0-9]+( .*)?"
+  private def wellFormed(line: Text): Boolean = line match
+    case r"tel [0-9]+\.[0-9]+( .*)?" => true
+    case _                           => false
 
   // A well-formed BASE-256 schema signature phrase (§8.1): 33 characters for one component,
-  // `37 + 2·(n − 2)` for `n ≥ 2`, every character a Unicode letter or ASCII digit.
-  private def isSignatureToken(token: String): Boolean =
-    val length = token.codePointCount(0, token.length)
-    (length == 33 || (length >= 37 && (length - 37) % 2 == 0))
-    && token.codePoints.nn.allMatch(Character.isLetterOrDigit(_))
+  // `37 + 2·(n − 2)` for `n ≥ 2`, every character a Unicode letter or decimal digit.
+  private def isSignatureToken(token: Text): Boolean = token match
+    case r"[\p{L}\p{Nd}]{33}"                       => true
+    case r"[\p{L}\p{Nd}]{37}([\p{L}\p{Nd}]{2})*" => true
+    case _                                          => false
 
-  private[tel] def pragmaOf(lines: scala.IndexedSeq[String]): Pragma =
-    val index = if lines.headOption.exists(_.startsWith("#!")) then 1 else 0
+  // A sigil phrase (§6): a single character which is neither a letter, a digit nor the `+` that
+  // introduces a layer selection.
+  private def isSigilToken(token: Text): Boolean = token match
+    case r"[^\p{L}\p{Nd}+]" => true
+    case _                   => false
 
-    lines.lift(index) match
-      case Some(line) =>
-        val rest = tokens(line).stdlib.drop(2)
+  // How a pragma phrase after the version reads, by its form alone (§8). The sigil is recognised
+  // only as the last phrase.
+  private enum Phrase derives CanEqual:
+    case Layer, Reference, Signature, Sigil, Unclassified
 
-        var reference: Optional[PragmaId] = Unset
-        var signature: Optional[PragmaId] = Unset
-        var sigil: Optional[Char] = Unset
-        val layers = scm.ListBuffer[PragmaId]()
-        val count = rest.length
+  private def phrase(token: Text, last: Boolean): Phrase =
+    if token.starts(t"+") && token.length > 1 then Phrase.Layer
+    else if token.contains(t"/") && token.length > 1 then Phrase.Reference
+    else if isSignatureToken(token) then Phrase.Signature
+    else if last && isSigilToken(token) then Phrase.Sigil
+    else Phrase.Unclassified
 
-        rest.zipWithIndex.foreach: (entry, position) =>
-          val (token, start, end) = entry
+  private[tel] def pragmaOf(lines: Sequence[Text]): Pragma =
+    val index = if lines.head.lay(false)(_.starts(t"#!")) then 1 else 0
 
-          if token.startsWith("+") && token.length > 1 then
-            layers += PragmaId(token.substring(1).nn.tt, start, end)
-          else if token.contains("/") && token.length > 1 then
-            if reference.absent then reference = PragmaId(token.tt, start, end)
-          else if isSignatureToken(token) then
-            if signature.absent then signature = PragmaId(token.tt, start, end)
-          else if token.length == 1 && !Character.isLetterOrDigit(token.charAt(0))
-                  && token.charAt(0) != '+' && position == count - 1
-          then sigil = token.charAt(0)
+    lines.at(index.z).lay(Pragma(index, false, Unset, Nil, Unset, '#')): line =>
+      // The phrases after `tel` and the version, each with the form it has.
+      val phrases = tokens(line).skip(2)
 
-        Pragma
-          ( index, line.matches(pragmaPattern), reference, layers.to(scala.List).to(List),
-            signature, sigil.or('#') )
+      val classified = phrases.map: token =>
+        phrase(token.text, phrases.last.lay(false)(_.start == token.start)) -> token
 
-      case None =>
-        Pragma(index, false, Unset, Nil, Unset, '#')
+      // The first phrase of a form is the one that counts; a second is the parser's to report.
+      def first(form: Phrase): Optional[PragmaId] =
+        classified.seek(_(0) == form).let: (_, token) =>
+          PragmaId(token.text, token.start, token.end)
+
+      val layers = classified.filter(_(0) == Phrase.Layer).map: (_, token) =>
+        PragmaId(token.text.skip(1), token.start, token.end)
+
+      Pragma
+        ( index, wellFormed(line), first(Phrase.Reference), layers, first(Phrase.Signature),
+          first(Phrase.Sigil).let(_.name.at(Prim)).or('#') )
 
   // Does this pragma schema identifier name TELS, the schema-of-schemas (§20.5)? The meta-schema's
   // canonical coordinate is `specification.tel/tels`, pinned in the specification to `:2.1.0`;
@@ -226,9 +239,8 @@ object TelServer:
   // binds the published name to the declared name), with any `:version`/`:tag` selector stripped;
   // a signature (or a bare name, for direct calls) is used verbatim.
   private def lookupName(identifier: Text): Text =
-    if identifier.s.contains("/") then
-      val coordinate = identifier.s.takeWhile(_ != ':')
-      coordinate.substring(coordinate.lastIndexOf('/') + 1).nn.tt
+    if identifier.contains(t"/")
+    then identifier.cut(t":").head.cut(t"/").last
     else identifier
 
   // Resolves pragma schema identifications against the registry, memoized per identification:
@@ -236,12 +248,13 @@ object TelServer:
   // to repeat on every keystroke. The memo is dropped whenever the registry directory's
   // modification time changes (i.e. `tel schema add` ran).
   private[tel] class PragmaResolver(registry: Registry):
-    private val cache = scm.HashMap[Text, Resolution]()
-    private var stamp: Long = 0L
+    // What has been resolved since the registry last changed.
+    private case class Memo(stamp: Long, resolutions: Map[Text, Resolution])
 
-    private def registryStamp: Long = registry match
-      case directory: (Path on Linux) => java.io.File(directory.encode.s).lastModified
-      case _                          => 0L
+    private val mutex: Mutex = Mutex()
+    private val memo = Atomic(Memo(0L, Map()))
+
+    private def registryStamp: Long = registry.lay(0L)(SchemaCache.modified(_))
 
     // A pragma carrying both a reference and a signature is resolved by the signature, which is
     // authoritative (§8.1), and the reference must agree with it (§8.2): the schema the signature
@@ -259,30 +272,28 @@ object TelServer:
     def apply(identifier: Text, layers: List[Text]): Resolution = apply(identifier, layers, Unset)
 
     def apply(identifier: Text, layers: List[Text], expected: Optional[Text]): Resolution =
-      synchronized:
-        val now = registryStamp
-        if now != stamp then
-          cache.clear()
-          stamp = now
-
+      mutex:
+        val stamp = registryStamp
+        val current = memo().when(_.stamp != stamp)(_ => Memo(stamp, Map()))
         val key = (identifier :: layers).join(t" +") + expected.let(name => t" =$name").or(t"")
-        cache.getOrElseUpdate(key, resolve(identifier, layers, expected))
 
-    def entries: List[SchemaCache.Entry] = registry match
-      case directory: (Path on Linux) => SchemaCache.entries(directory)
-      case _                          => Nil
+        current.resolutions.at(key).or:
+          resolve(identifier, layers, expected).tap: resolution =>
+            memo() = Memo(stamp, current.resolutions.define(key, resolution))
+
+    def entries: List[SchemaCache.Entry] = registry.lay(Nil)(SchemaCache.entries(_))
 
     // The layers the registered schema `name` declares, in declaration order.
-    def layersOf(name: Text): List[Text] = registry match
-      case directory: (Path on Linux) => SchemaCache.layerNames(directory, name)
-      case _                          => Nil
+    def layersOf(name: Text): List[Text] = registry.lay(Nil)(SchemaCache.layerNames(_, name))
 
     private def resolve(identifier: Text, layers: List[Text], expected: Optional[Text])
     :   Resolution =
 
-      registry match
-        case directory: (Path on Linux) =>
-          if namesTels(identifier) then
+      val meta = namesTels(identifier)
+
+      registry.lay(if meta then Resolution.Meta(Tels.Axiom.tels, Unset) else Resolution.NoSchema):
+        directory =>
+          if meta then
             val file = SchemaCache.lookup(directory, t"tels") match
               case SchemaCache.Lookup.Found(file, _, _, _) => file
               case _                                       => Unset
@@ -320,12 +331,8 @@ object TelServer:
               case SchemaCache.Lookup.Missing =>
                 Resolution.Unresolved(identifier)
 
-        case _ =>
-          if namesTels(identifier) then Resolution.Meta(Tels.Axiom.tels, Unset)
-          else Resolution.NoSchema
-
   private[tel] def diagnose(text: Text, resolver: PragmaResolver): List[Lsp.Diagnostic] =
-    val lines = text.s.linesIterator.toIndexedSeq
+    val lines = linesOf(text)
     val pragma = pragmaOf(lines)
     val resolution = resolver(pragma)
 
@@ -388,7 +395,7 @@ object TelServer:
 
     val collapsed =
       if document.absent then retired
-      else retired.stdlib.distinctBy((_, error) => (error.reason.number, error.reason)).to(List)
+      else retired.deduplicate((_, error) => (error.reason.number, error.reason))
 
     // Stratiform's validity battery now checks reference coherence itself (E209/E217), and — since
     // Soundness 0.67.0 — duplicate definition names (E210) too, but it aborts at the first defect
@@ -396,7 +403,7 @@ object TelServer:
     // dropped for a schema document and re-located precisely: the coherence pair by the
     // incoherences pass below, against the composed schema, and `DuplicateDefinition` by the
     // `duplicateDefinitions` source scan, on the second declaration's name atom.
-    val coherenceReasons = scala.List(Tel.Error.Reason.UnresolvedReference,
+    val coherenceReasons = List(Tel.Error.Reason.UnresolvedReference,
         Tel.Error.Reason.ReferenceKindMismatch, Tel.Error.Reason.DuplicateDefinition)
 
     val entries = resolution match
@@ -404,7 +411,7 @@ object TelServer:
         if composed.absent then composed = document.let: tel =>
           safely(Tels.Layers.compose(tel.as[Tels]))
 
-        collapsed.filter((_, error) => !coherenceReasons.contains(error.reason))
+        collapsed.filter((_, error) => !coherenceReasons.has(error.reason))
 
       case _ =>
         collapsed
@@ -419,7 +426,7 @@ object TelServer:
     // Reference-coherence findings (E209/E217), located on the offending TypeName atom in the
     // source scan. Computed only when the whole validity battery passed, so they are never
     // cascade noise from a malformed schema.
-    val incoherent = composed.lay(scala.List[Lsp.Diagnostic]()): schema =>
+    val incoherent: List[Lsp.Diagnostic] = composed.lay(Nil): schema =>
       SchemaCache.incoherences(schema).map: (name, reason) =>
         incoherenceDiagnostic(name, reason, lines)
 
@@ -446,10 +453,8 @@ object TelServer:
       case Resolution.BadLayers(identifier, detail, code) =>
         // The layer phrases when the selection is at fault; the whole identification otherwise.
         val phrases = if code == t"signature-disagrees" then Nil else pragma.layers
-        val start = phrases.stdlib.headOption.map(_.start)
-          . getOrElse(pragma.identifier.let(_.start).or(0))
-        val end = phrases.stdlib.lastOption.map(_.end)
-          . getOrElse(pragma.identifier.let(_.end).or(1))
+        val start = phrases.head.let(_.start).or(pragma.identifier.let(_.start).or(0))
+        val end = phrases.last.let(_.end).or(pragma.identifier.let(_.end).or(1))
 
         List(Lsp.Diagnostic
           ( range    = Lsp.Range(Lsp.Position(pragma.line, start), Lsp.Position(pragma.line, end)),
@@ -460,67 +465,57 @@ object TelServer:
 
       case _ => Nil
 
-    (entries.map(diagnostic(_, lines, document)).stdlib ::: duplicates.stdlib
-     ::: incoherent.to(List).stdlib ::: unresolved.stdlib)
-    . distinctBy(entry => (entry.range, entry.code, entry.message))
-    . to(List)
+    (entries.map(diagnostic(_, lines, document)) + duplicates + incoherent + unresolved)
+    . deduplicate(entry => (entry.range, entry.code, entry.message))
 
   // E210 (§20.1): two base Definitions sharing a name, or a Definition using a predefined built-in
   // name. Located on the second (or built-in-colliding) definition's name atom.
-  private def duplicateDefinitions(lines: scala.IndexedSeq[String]): List[Lsp.Diagnostic] =
-    def diagnosticAt(line: Int, message: Text): Optional[Lsp.Diagnostic] =
-      lines.lift(line).flatMap(candidate => tokens(candidate).stdlib.drop(1).headOption)
-      . map: (_, start, end) =>
-          Lsp.Diagnostic
-            ( range    = Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)),
-              severity = Lsp.DiagnosticSeverity.Error,
-              code     = t"E210",
-              source   = t"tel",
-              message  = message )
-      . getOrElse(Unset)
+  private def duplicateDefinitions(lines: Sequence[Text]): List[Lsp.Diagnostic] =
+    def diagnostic(line: Int, name: Token, message: Text): Lsp.Diagnostic =
+      Lsp.Diagnostic
+        ( range    = Lsp.Range(Lsp.Position(line, name.start), Lsp.Position(line, name.end)),
+          severity = Lsp.DiagnosticSeverity.Error,
+          code     = t"E210",
+          source   = t"tel",
+          message  = message )
 
-    val builtins = builtinTypeNames.stdlib.to(scala.collection.immutable.Set)
-    var seen = scala.collection.immutable.Set[Text]()
-    val out = scm.ListBuffer[Lsp.Diagnostic]()
+    // Every unindented definition line, as its line number and its name atom.
+    val declared: List[(Int, Token)] = numbered(lines).flatMap: (line, index) =>
+      tokens(line) match
+        case keyword :: name :: _
+            if leadingSpaces(line) == 0 && definitionKeywords.has(keyword.text) =>
+          List((index, name))
 
-    lines.zipWithIndex.foreach: (line, index) =>
-      val lineTokens = tokens(line).stdlib
-      if leadingSpaces(line) == 0 && lineTokens.length >= 2
-         && definitionKeywords.stdlib.contains(lineTokens(0)(0).tt)
-      then
-        val name = lineTokens(1)(0).tt
-        if builtins.contains(name) then
-          diagnosticAt(index, t"`$name` is a predefined built-in type name").let(out += _)
-        else if seen.contains(name) then
-          diagnosticAt(index, t"a definition named `$name` is already declared").let(out += _)
-        else seen += name
+        case _ => Nil
 
-    out.to(scala.List).to(List)
+    declared.flatMap: (index, name) =>
+      if builtinTypeNames.has(name.text)
+      then List(diagnostic(index, name, t"`${name.text}` is a predefined built-in type name"))
+      else if declared.exists((earlier, other) => earlier < index && other.text == name.text)
+      then List(diagnostic(index, name, t"a definition named `${name.text}` is already declared"))
+      else Nil
 
   // A reference-coherence finding, located on the first occurrence of the offending TypeName in a
   // type slot: the third token of a `field`/`variant` line, or the second token of an indented
   // `select` line (a `SelectRef`; the definition form is unindented). Falls back to the first
   // line when the scan cannot find it, which only a scan/parse disagreement would cause.
-  private def incoherenceDiagnostic
-     ( name: Text, reason: Tel.Error.Reason, lines: scala.IndexedSeq[String] )
+  private def incoherenceDiagnostic(name: Text, reason: Tel.Error.Reason, lines: Sequence[Text])
   :   Lsp.Diagnostic =
 
-    val located = lines.zipWithIndex.collectFirst(scala.Function.unlift { (line, index) =>
-      val lineTokens = tokens(line).stdlib
+    val slots: List[(Int, Token)] = numbered(lines).flatMap: (line, index) =>
+      tokens(line) match
+        case keyword :: _ :: slot :: _
+            if memberKeywords.has(keyword.text) && slot.text == name =>
+          List((index, slot))
 
-      val slot =
-        if lineTokens.length >= 3 && (lineTokens(0)(0) == "field" || lineTokens(0)(0) == "variant")
-           && lineTokens(2)(0) == name.s
-        then Some(lineTokens(2))
-        else if lineTokens.length >= 2 && lineTokens(0)(0) == "select" && leadingSpaces(line) > 0
-                && lineTokens(1)(0) == name.s
-        then Some(lineTokens(1))
-        else None
+        case keyword :: slot :: _
+            if keyword.text == t"select" && leadingSpaces(line) > 0 && slot.text == name =>
+          List((index, slot))
 
-      slot.map((_, start, end) => (index, start, end))
-    })
+        case _ => Nil
 
-    val (line, start, end) = located.getOrElse((0, 0, 1))
+    val (line, start, end) = slots.head.lay((0, 0, 1)): (index, slot) =>
+      (index, slot.start, slot.end)
 
     Lsp.Diagnostic
       ( range    = Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)),
@@ -537,30 +532,35 @@ object TelServer:
 
   // The chain of compound nodes whose block contains `line`, outermost first.
   private def nodeChain(nodes: List[Node], line: Int): List[Node] =
-    nodes.stdlib.find(node => line >= node.line && line <= node.endLine) match
-      case Some(node) => node :: nodeChain(node.children, line)
-      case None       => Nil
+    nodes.seek(node => line >= node.line && line <= node.endLine).lay(Nil): node =>
+      node :: nodeChain(node.children, line)
 
   // The struct a `Reference`/`Struct` type denotes (a record reference resolves to its struct).
   private def structOf(fieldType: Tels.Type, schema: Tels): Optional[Tels.Struct] =
     fieldType match
-      case struct: Tels.Struct  => struct
-      case Tels.Reference(name) => schema.records.stdlib.find(_.name == name) match
-        case Some(record) => Tels.Struct(record.members, record.validators)
-        case None         => Unset
+      case struct: Tels.Struct => struct
+
+      case Tels.Reference(name) =>
+        schema.records.seek(_.name == name).let: record =>
+          Tels.Struct(record.members, record.validators)
+
       case _ => Unset
+
+  // The variants of the select named `reference`, or none if the schema defines no such select.
+  private def variantsOf(reference: Text, schema: Tels): List[Tels.Variant] =
+    schema.selects.seek(_.name == reference).lay(Nil)(_.variants.to[List])
 
   // The type that the member `keyword` of `struct` denotes: a field's declared type, or — because
   // a `select` reference is flattened so its variants appear as sibling keywords — the variant
   // type of a matching variant of a referenced select.
   private def memberType(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Type] =
-    struct.members.stdlib.collectFirst { case f: Tels.Field if f.keyword == keyword => f.fieldType }
-    . orElse:
-        struct.members.stdlib.to(scala.List).collect { case ref: Tels.SelectRef => ref }
-        . flatMap(ref => schema.selects.stdlib.find(_.name == ref.reference).to(scala.List))
-        . flatMap(_.variants.stdlib.to(scala.List))
-        . collectFirst { case variant if variant.keyword == keyword => variant.variantType }
-    . getOrElse(Unset)
+    val members = struct.members.to[List]
+
+    members.reap { case field: Tels.Field if field.keyword == keyword => field.fieldType }.or:
+      members.flatMap:
+        case reference: Tels.SelectRef => variantsOf(reference.reference, schema)
+        case _                         => Nil
+      . seek(_.keyword == keyword).let(_.variantType)
 
   // The struct that a member's own members live in, one keyword deeper.
   private def memberStruct(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Tels.Struct] =
@@ -568,10 +568,8 @@ object TelServer:
 
   // The struct reached by descending `schema.document` along a keyword path.
   private def structAt(schema: Tels, path: List[Text]): Optional[Tels.Struct] =
-    path.stdlib.foldLeft(schema.document: Optional[Tels.Struct]): (current, keyword) =>
-      current match
-        case struct: Tels.Struct => memberStruct(struct, keyword, schema)
-        case _                   => Unset
+    path.fold(schema.document: Optional[Tels.Struct]): (current, keyword) =>
+      current.let(memberStruct(_, keyword, schema))
 
   private def typeLabel(fieldType: Tels.Type, schema: Tels): Text =
     fieldType match
@@ -583,10 +581,10 @@ object TelServer:
       // scalar accepts — the codec's encoder and each pattern are further validity constraints —
       // so they belong in the label beside the validators.
       case Tels.Scalar(validators, encoding, patterns) =>
-        val base = if validators.length == 0 then t"scalar" else validators.stdlib.to(List).join(t"+")
+        val base = if validators.length == 0 then t"scalar" else validators.to[List].join(t"+")
         val constrained =
           if patterns.length == 0 then base
-          else t"$base ~ ${patterns.stdlib.to(List).map(pattern => t"/$pattern/").join(t" ")}"
+          else t"$base ~ ${patterns.to[List].map(pattern => t"/$pattern/").join(t" ")}"
 
         encoding.let(codec => t"$constrained [$codec]").or(constrained)
 
@@ -594,12 +592,14 @@ object TelServer:
   // polarity — it marks the field as its record's identifier — but it reads naturally in the same
   // list, and it is the one flag a reader most needs to see.
   private def cardinality(required: Tels.Polarity, repeatable: Tels.Polarity, key: Boolean): Text =
-    val flags: scala.List[Text] =
-      (if required == Tels.Polarity.Loose then scala.List(t"optional") else scala.Nil)
-      ::: (if repeatable == Tels.Polarity.Loose then scala.List(t"repeatable") else scala.Nil)
-      ::: (if key then scala.List(t"key") else scala.Nil)
+    val flags: List[Text] =
+      List
+        ( t"optional"   -> (required == Tels.Polarity.Loose),
+          t"repeatable" -> (repeatable == Tels.Polarity.Loose),
+          t"key"        -> key )
+      . filter(_(1)).map(_(0))
 
-    if flags.isEmpty then t"" else t" (${flags.to(List).join(t", ")})"
+    if flags.nil then t"" else t" (${flags.join(t", ")})"
 
   private def fieldMarkdown(field: Tels.Field, schema: Tels): Text =
     val header =
@@ -617,19 +617,17 @@ object TelServer:
 
   // Hover markup for the member `keyword` of `struct` (a `field`, or a `select` variant).
   private def fieldMarkup(struct: Tels.Struct, keyword: Text, schema: Tels): Optional[Text] =
-    val markup = struct.members.stdlib.to(List).flatMap:
+    struct.members.to[List].flatMap:
       case field: Tels.Field if field.keyword == keyword =>
         List(fieldMarkdown(field, schema))
 
       case reference: Tels.SelectRef =>
-        schema.selects.stdlib.find(_.name == reference.reference).toList
-        . flatMap(_.variants.stdlib.to(scala.List)).filter(_.keyword == keyword)
-        . map(variantMarkdown(_, reference.reference, schema)).to(List)
+        variantsOf(reference.reference, schema).filter(_.keyword == keyword)
+        . map(variantMarkdown(_, reference.reference, schema))
 
       case _ =>
         Nil
-
-    markup.stdlib.headOption.getOrElse(Unset)
+    . head
 
   // The built-in scalar type names (§20.5) with the §21.5 validator each one denotes.
   private val builtinScalars: List[(Text, Text)] =
@@ -682,35 +680,31 @@ object TelServer:
 
     memberType match
       case Tels.Reference(name) =>
-        schema.selects.stdlib.find(_.name == name) match
-          case Some(select) =>
-            select.variants.stdlib.to(scala.List).find(_.keyword == atom) match
-              case Some(variant) => variantMarkdown(variant, name, schema)
-              case None =>
-                val names = select.variants.stdlib.to(List).map: (variant: Tels.Variant) =>
-                  t"`${variant.keyword}`"
+        // A select-typed slot: the variant the atom names, or else the variants it could name.
+        def selected: Optional[Text] = schema.selects.seek(_.name == name).let: select =>
+          select.variants.seek(_.keyword == atom).lay
+            ( t"**$keyword** value — one of "
+              + select.variants.to[List].map(variant => t"`${variant.keyword}`").join(t", ") )
+            ( variantMarkdown(_, name, schema) )
 
-                t"**$keyword** value — one of ${names.join(t", ")}"
+        def defined: Optional[Text] = schema.scalars.seek(_.name == name).let: scalar =>
+          scalarValueMarkup
+            ( keyword, name, scalar.validators.to[List], default, scalar.description,
+              scalar.encoding, scalar.patterns.to[List] )
 
-          case None => schema.scalars.stdlib.find(_.name == name) match
-            case Some(scalar) =>
-              scalarValueMarkup
-                ( keyword, name, scalar.validators.stdlib.to(List), default,
-                  scalar.description, scalar.encoding, scalar.patterns.stdlib.to(List) )
+        def builtin: Optional[Text] = builtinScalars.seek(_(0) == name).let: (_, validator) =>
+          scalarValueMarkup(keyword, name, List(validator), default, Unset, Unset)
 
-            case None => builtinScalars.stdlib.find(_(0) == name) match
-              case Some((_, validator)) =>
-                scalarValueMarkup(keyword, name, List(validator), default, Unset, Unset)
+        // A record-typed member: an inline atom fills one of the record's atom-assignable
+        // members (§21) — a flag field or a flag-typed select variant — so describe that.
+        def record: Optional[Text] =
+          structOf(Tels.Reference(name), schema).let(fieldMarkup(_, atom, schema))
 
-              // A record-typed member: an inline atom fills one of the record's atom-assignable
-              // members (§21) — a flag field or a flag-typed select variant — so describe that.
-              case None => structOf(Tels.Reference(name), schema)
-                . let(fieldMarkup(_, atom, schema))
+        selected.or(defined).or(builtin).or(record)
 
       case Tels.Scalar(validators, encoding, patterns) =>
         scalarValueMarkup
-          ( keyword, Unset, validators.stdlib.to(List), default, Unset, encoding,
-            patterns.stdlib.to(List) )
+          ( keyword, Unset, validators.to[List], default, Unset, encoding, patterns.to[List] )
 
       case struct: Tels.Struct =>
         fieldMarkup(struct, atom, schema)
@@ -737,7 +731,7 @@ object TelServer:
       case _                                     => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
-    struct.members.stdlib.to(List).flatMap:
+    struct.members.to[List].flatMap:
       case field: Tels.Field =>
         List
           ( Lsp.CompletionItem
@@ -748,14 +742,7 @@ object TelServer:
                 insertText    = keywordInsertText(field.keyword, field.fieldType) ) )
 
       case reference: Tels.SelectRef =>
-        schema.selects.stdlib.find(_.name == reference.reference).toList
-        . flatMap(_.variants.stdlib.to(scala.List)).map: variant =>
-            Lsp.CompletionItem
-              ( label         = variant.keyword,
-                kind          = Lsp.CompletionItemKind.EnumMember,
-                detail        = t"variant of ${reference.reference}",
-                documentation = variant.description.let(text => Lsp.MarkupContent(value = text)) )
-        . to(List)
+        variantsOf(reference.reference, schema).map(variantCompletion(_, reference.reference))
 
       case _ =>
         Nil
@@ -765,27 +752,22 @@ object TelServer:
 
   // The schema a document is checked against: the built-in meta-schema for a schema document,
   // otherwise the registered schema its pragma resolves to.
-  private def documentSchema(lines: scala.IndexedSeq[String], resolver: PragmaResolver): Optional[Tels] =
+  private def documentSchema(lines: Sequence[Text], resolver: PragmaResolver): Optional[Tels] =
     resolver(pragmaOf(lines)).tels
 
-  private def isSchemaDocument(lines: scala.IndexedSeq[String]): Boolean =
+  private def isSchemaDocument(lines: Sequence[Text]): Boolean =
     pragmaOf(lines).identifier.lay(false)(id => namesTels(id.name))
 
   // The line's indentation, its keyword (the first token, if any), and how many whole atoms precede
   // the cursor: 0 = keyword position, 1 = first value/atom, 2 = second atom, and so on.
-  private def completionContext(line: String, character: Int): (Int, Optional[Text], Int) =
-    val indent = leadingSpaces(line)
+  private def completionContext(line: Text, character: Int): (Int, Optional[Text], Int) =
     val lineTokens = tokens(line)
-    val keyword = lineTokens.stdlib.headOption.map((token, _, _) => token.tt).getOrElse(Unset)
-    val atomsBefore = lineTokens.count((_, _, end) => character > end)
-    (indent, keyword, atomsBefore)
+    (leadingSpaces(line), lineTokens.head.let(_.text), lineTokens.count(character > _.end))
 
   // Type-name completions for a schema document: the document's own definitions plus the built-ins.
   private def typeNameCompletions(tree: List[Node]): List[Lsp.CompletionItem] =
-    (definitions(tree).keys.stdlib.to(scala.List) ::: builtinTypeNames.stdlib).distinct.sortBy(_.s)
-    . map: name =>
-        Lsp.CompletionItem(label = name, kind = Lsp.CompletionItemKind.Class)
-    . to(List)
+    (definitions(tree).keys.to[List] + builtinTypeNames).distinct.order(identity).map: name =>
+      Lsp.CompletionItem(label = name, kind = Lsp.CompletionItemKind.Class)
 
   // The schema struct enclosing `line`: the compound tree's ancestors above `indent`, descended
   // from the schema's document root.
@@ -804,41 +786,34 @@ object TelServer:
   // variants; a record completes to its atom-assignable members (§21) — flag fields and flag-typed
   // variants of its select references.
   private def atomCompletions(atomType: Tels.Type, schema: Tels): List[Lsp.CompletionItem] =
+    def flag(fieldType: Tels.Type): Boolean = fieldType match
+      case Tels.Flag => true
+      case _         => false
+
     atomType match
       case Tels.Reference(name) if schema.selects.exists(_.name == name) =>
-        schema.selects.stdlib.find(_.name == name).map(_.variants.stdlib.to(List)).getOrElse(Nil)
-        . map(variantCompletion(_, name))
+        variantsOf(name, schema).map(variantCompletion(_, name))
 
-      case other => structOf(other, schema) match
-        case struct: Tels.Struct =>
-          struct.members.stdlib.to(List).flatMap:
-            case field: Tels.Field => field.fieldType match
-              case Tels.Flag =>
-                List(Lsp.CompletionItem
-                  ( label         = field.keyword,
-                    kind          = Lsp.CompletionItemKind.Field,
-                    detail        = t"Flag",
-                    documentation =
-                      field.description.let(text => Lsp.MarkupContent(value = text)) ))
-
-              case _ => Nil
+      case other =>
+        structOf(other, schema).lay(Nil): struct =>
+          struct.members.to[List].flatMap:
+            case field: Tels.Field if flag(field.fieldType) =>
+              List(Lsp.CompletionItem
+                ( label         = field.keyword,
+                  kind          = Lsp.CompletionItemKind.Field,
+                  detail        = t"Flag",
+                  documentation =
+                    field.description.let(text => Lsp.MarkupContent(value = text)) ))
 
             case reference: Tels.SelectRef =>
-              schema.selects.stdlib.find(_.name == reference.reference).toList
-              . flatMap(_.variants.stdlib.to(scala.List))
-              . filter: variant =>
-                  variant.variantType match
-                    case Tels.Flag => true
-                    case _         => false
-              . map(variantCompletion(_, reference.reference)).to(List)
+              variantsOf(reference.reference, schema).filter(variant => flag(variant.variantType))
+              . map(variantCompletion(_, reference.reference))
 
             case _ => Nil
 
-        case _ => Nil
-
   // Value completions: what may fill the inline-atom slot after `keyword`.
   private def atomValueCompletions
-     ( lines:    scala.IndexedSeq[String],
+     ( lines:    Sequence[Text],
        tree:     List[Node],
        line:     Int,
        indent:   Int,
@@ -846,47 +821,41 @@ object TelServer:
        resolver: PragmaResolver )
   :   Lsp.CompletionList =
 
-    documentSchema(lines, resolver) match
-      case schema: Tels =>
-        memberType(enclosingStruct(tree, line, indent, schema), keyword, schema) match
-          case memberType: Tels.Type =>
-            Lsp.CompletionList(items = atomCompletions(memberType, schema))
+    val items: Optional[List[Lsp.CompletionItem]] = documentSchema(lines, resolver).let: schema =>
+      memberType(enclosingStruct(tree, line, indent, schema), keyword, schema)
+      . let(atomCompletions(_, schema))
 
-          case _ => Lsp.CompletionList()
-      case _ => Lsp.CompletionList()
+    Lsp.CompletionList(items = items.or(Nil))
 
   // Flag completions after a member declaration in a schema document: the Flag-typed members of
   // the meta-schema record that describes the declaration (`optional`, `required`, `repeatable`,
   // `irrepeatable`), derived from the meta-schema rather than hardcoded, minus any already given.
   private def flagCompletions
-     ( lines:    scala.IndexedSeq[String],
+     ( lines:    Sequence[Text],
        tree:     List[Node],
        line:     Int,
        indent:   Int,
        keyword:  Text,
-       content:  String,
+       content:  Text,
        resolver: PragmaResolver )
   :   List[Lsp.CompletionItem] =
 
-    documentSchema(lines, resolver) match
-      case schema: Tels =>
-        val struct = enclosingStruct(tree, line, indent, schema)
-        val present = tokens(content).stdlib.map((token, _, _) => token.tt)
+    documentSchema(lines, resolver).lay(Nil): schema =>
+      val struct = enclosingStruct(tree, line, indent, schema)
+      val present = tokens(content).map(_.text)
 
-        memberStruct(struct, keyword, schema).lay(Nil): member =>
-          member.members.stdlib.to(List).flatMap:
-            case field: Tels.Field if !present.contains(field.keyword) => field.fieldType match
-              case Tels.Flag =>
-                List(Lsp.CompletionItem
-                  ( label         = field.keyword,
-                    kind          = Lsp.CompletionItemKind.Keyword,
-                    detail        = t"Flag",
-                    documentation = field.description.let(text => Lsp.MarkupContent(value = text)) ))
+      memberStruct(struct, keyword, schema).lay(Nil): member =>
+        member.members.to[List].flatMap:
+          case field: Tels.Field if !present.has(field.keyword) => field.fieldType match
+            case Tels.Flag =>
+              List(Lsp.CompletionItem
+                ( label         = field.keyword,
+                  kind          = Lsp.CompletionItemKind.Keyword,
+                  detail        = t"Flag",
+                  documentation = field.description.let(text => Lsp.MarkupContent(value = text)) ))
 
-              case _ => Nil
             case _ => Nil
-
-      case _ => Nil
+          case _ => Nil
 
   // Pragma schema-identifier completions: each registered schema, inserted as its BASE-256
   // signature — the only bare identifier form the pragma grammar admits (§8) that the registry
@@ -896,7 +865,7 @@ object TelServer:
       Lsp.CompletionItem
         ( label      = entry.name,
           kind       = Lsp.CompletionItemKind.Module,
-          detail     = if entry.layers.s.isEmpty then t"BASE-256 signature"
+          detail     = if entry.layers == t"" then t"BASE-256 signature"
                        else t"BASE-256 signature; layers: ${entry.layers}",
           insertText = entry.id )
 
@@ -906,9 +875,9 @@ object TelServer:
   private def layerCompletions(pragma: Pragma, resolver: PragmaResolver): List[Lsp.CompletionItem] =
     resolver(pragma) match
       case Resolution.Resolved(entry, _, _, _, _) =>
-        val selected = pragma.layerNames.stdlib
+        val selected = pragma.layerNames
 
-        resolver.layersOf(entry.name).filter(!selected.contains(_)).map: (layer: Text) =>
+        resolver.layersOf(entry.name).filter(!selected.has(_)).map: (layer: Text) =>
           val selection: Text = t"+$layer"
 
           Lsp.CompletionItem
@@ -933,7 +902,7 @@ object TelServer:
 
     val (lines, tree) = structure(text)
     val pragma = pragmaOf(lines)
-    val line = lines.lift(position.line).getOrElse("")
+    val line = lines.at(position.line.z).or(t"")
     val (indent, keyword, atomsBefore) = completionContext(line, position.character)
 
     // The pragma line's schema-identifier slot completes to the registered schemas; once the
@@ -954,7 +923,7 @@ object TelServer:
         case _ => Lsp.CompletionList()
 
       // Type-name slot in a schema document — `field <name> <type>`, `variant <name> <type>`.
-      case (kw: Text, 2) if isSchemaDocument(lines) && memberKeywords.stdlib.contains(kw) =>
+      case (kw: Text, 2) if isSchemaDocument(lines) && memberKeywords.has(kw) =>
         Lsp.CompletionList(items = typeNameCompletions(tree))
 
       // Validator slot in a schema document — `validate <name>`.
@@ -991,13 +960,9 @@ object TelServer:
 
     if range.start.line == pragma.line
     then signatureAction(uri, lines, pragma, resolver).lay(Nil)(List(_))
-    else documentSchema(lines, resolver) match
-      case schema: Tels =>
-        ( expandAtomAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_)).stdlib
-          ::: inlineChildAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
-              .stdlib ).to(List)
-
-      case _ => Nil
+    else documentSchema(lines, resolver).lay(Nil): schema =>
+      expandAtomAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
+      + inlineChildAction(uri, text, lines, tree, range.start.line, schema).lay(Nil)(List(_))
 
   // Rubber-stamping (§8.1): a document whose pragma names its schema by reference alone is
   // portable nowhere, since a bare reference resolves only against local state; appending the
@@ -1006,7 +971,7 @@ object TelServer:
   // layer selections and before any sigil, in the pragma's positional order. Offered only when
   // the pragma carries no signature yet.
   private def signatureAction
-     ( uri: Text, lines: scala.IndexedSeq[String], pragma: Pragma, resolver: PragmaResolver )
+     ( uri: Text, lines: Sequence[Text], pragma: Pragma, resolver: PragmaResolver )
   :   Optional[Lsp.CodeAction] =
 
     if !pragma.wellFormed || pragma.signature.present then Unset
@@ -1017,17 +982,12 @@ object TelServer:
         case _                                          => Unset
 
       signature.let: signature =>
-        val line = lines.lift(pragma.line).getOrElse("")
-        val lineTokens = tokens(line).stdlib
+        val line = lines.at(pragma.line.z).or(t"")
+        val lineTokens = tokens(line)
 
         // Insert before a trailing sigil phrase, else at the end of the line.
-        val at = lineTokens.lastOption match
-          case Some((token, start, _))
-               if lineTokens.length > 2 && token.length == 1
-                  && !Character.isLetterOrDigit(token.charAt(0)) && token.charAt(0) != '+' =>
-            start
-
-          case _ => line.length
+        val at = lineTokens.last.lay(line.length): token =>
+          if lineTokens.size > 2 && isSigilToken(token.text) then token.start else line.length
 
         val insertion = if at == line.length then t" $signature" else t"$signature "
         val position = Lsp.Position(pragma.line, at)
@@ -1035,8 +995,8 @@ object TelServer:
         Lsp.CodeAction
           ( title = t"Append the schema signature to the pragma",
             kind  = t"refactor.rewrite",
-            edit  = Lsp.WorkspaceEdit(changes = Map.from(scala.Predef.Map(uri -> List(
-              Lsp.TextEdit(Lsp.Range(position, position), insertion))))) )
+            edit  = Lsp.WorkspaceEdit(changes = Map(uri -> List(
+              Lsp.TextEdit(Lsp.Range(position, position), insertion)))) )
 
   // The inline-atom spans of a compound line after `keywordEnd`, per §10.3 phrase separation:
   // initially a single space terminates a phrase, but from the start of the first hard-space run
@@ -1046,46 +1006,33 @@ object TelServer:
   // conservative, since a sigil can legitimately sit inside a hard-mode phrase, but never wrong.
   // If this tokenisation ever disagrees with Stratiform's, the generated candidate fails semantic
   // verification and the action is declined, so correctness does not rest on it.
-  private def inlineAtomSpans(line: String, keywordEnd: Int): scala.List[(String, Int, Int)] =
-    val out = scm.ListBuffer[(String, Int, Int)]()
-    var i = keywordEnd
-    var hard = false
+  private def inlineAtomSpans(line: Text, keywordEnd: Int): List[Token] =
+    // `hard` is whether a hard-space run has been seen before `from`.
+    def recur(from: Int, hard: Boolean): List[Token] =
+      val start = column(line, from)(_ != ' ')
 
-    while i < line.length do
-      val gapStart = i
-      while i < line.length && line.charAt(i) == ' ' do i += 1
-      if i - gapStart >= 2 then hard = true
+      if start >= line.length then Nil else
+        val hardened = hard || start - from >= 2
 
-      if i < line.length then
-        val start = i
-        var end = i
+        // In hard mode the phrase runs to the next hard run, or to the end of the line less a
+        // trailing single space (which would be E108 anyway, and verification catches the
+        // invalid document); otherwise it runs to the next space.
+        val end =
+          if !hardened then column(line, start)(_ == ' ')
+          else
+            line.skip(start).offsetOf(t"  ").lay(line.length - (if line.ends(t" ") then 1 else 0)):
+              offset => start + offset.n0
 
-        if !hard then
-          while i < line.length && line.charAt(i) != ' ' do i += 1
-          end = i
-        else
-          // `end` tracks the last non-space seen, so a trailing single space is left out of the
-          // phrase (it would be E108 anyway, and verification catches the invalid document).
-          var scanning = true
-          while scanning && i < line.length do
-            if line.charAt(i) == ' ' then
-              var j = i
-              while j < line.length && line.charAt(j) == ' ' do j += 1
-              if j - i >= 2 || j >= line.length then scanning = false else i = j
-            else
-              i += 1
-              end = i
+        Token(line.skip(start).keep(end - start), start, end) :: recur(end, hardened)
 
-        out += ((line.substring(start, end).nn, start, end))
-
-    out.to(scala.List)
+    recur(keywordEnd, false)
 
   // The separator to place before `atom` when writing it after `keyword` (or appending it to a
   // line): a hard gap whenever the atom contains a space — so §10.3 keeps it one phrase — or when
   // the line is already in hard mode, where a single space would merge the atom into the phrase
   // before it.
   private def gapFor(atom: Text, hardMode: Boolean): Text =
-    if hardMode || atom.s.contains(" ") then t"  " else t" "
+    if hardMode || atom.contains(t" ") then t"  " else t" "
 
   // Move the LAST inline atom of the compound at `line` onto a child compound line. Restricted to
   // the last atom so that no other atom's position — and hence its §20.2 positional binding —
@@ -1097,53 +1044,55 @@ object TelServer:
   private def expandAtomAction
      ( uri:    Text,
        text:   Text,
-       lines:  scala.IndexedSeq[String],
+       lines:  Sequence[Text],
        tree:   List[Node],
        line:   Int,
        schema: Tels )
   :   Optional[Lsp.CodeAction] =
 
-    flatten(tree).stdlib.find(_.line == line).map: node =>
-      val lineText = lines.lift(line).getOrElse("")
-      val payload = lines.lift(line + 1).exists: next =>
-        leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
-
-      val sigil = pragmaOf(lines).sigil.toString
-      val remark = tokens(lineText).stdlib.exists(_(0) == sigil)
+    flatten(tree).seek(_.line == line).let: node =>
+      val lineText = lines.at(line.z).or(t"")
       val spans = inlineAtomSpans(lineText, node.keywordEnd)
 
       // The last phrase must run to the end of the line: with remarks declined, anything after it
       // would be trailing space (E108), and verification would reject the document anyway.
-      if spans.isEmpty || payload || remark || spans.last(2) != lineText.length then Unset
-      else
-        val struct = enclosingStruct(tree, node.line, node.indent, schema)
+      spans.last.let: moved =>
+        if declined(lines, node) || moved.end != lineText.length then Unset else
+          val struct = enclosingStruct(tree, node.line, node.indent, schema)
 
-        memberStruct(struct, node.keyword, schema).let: owner =>
-          val atoms = spans.map((atom, _, _) => atom.tt).to(List)
+          memberStruct(struct, node.keyword, schema).let: owner =>
+            expansionOf(owner, spans.map(_.text), schema).let: childText =>
+              // Where the line ends once the atom has gone: after the atom before it, if any.
+              val previousEnd = spans.reverse match
+                case _ :: previous :: _ => previous.end
+                case _                  => node.keywordEnd
 
-          expansionOf(owner, atoms, schema).let: childText =>
-            val atomText = spans.last(0).tt
-            val previousEnd =
-              if spans.length >= 2 then spans(spans.length - 2)(2) else node.keywordEnd
-            val indent = lineText.substring(0, node.indent).nn + "  "
+              val indent = t"${lineText.keep(node.indent)}  "
 
-            val patched =
-              (lines.take(line)
-               :+ lineText.substring(0, previousEnd).nn
-               :+ s"$indent$childText")
-              ++ lines.drop(line + 1)
+              val patched =
+                lines.to[List].keep(line) + List(lineText.keep(previousEnd), t"$indent$childText")
+                + lines.to[List].skip(line + 1)
 
-            verifiedAction(text, patched.mkString("\n").tt, schema):
-              Lsp.CodeAction
-                ( title = t"Move `$atomText` to a child compound line",
-                  kind  = t"refactor.rewrite",
-                  edit  = Lsp.WorkspaceEdit(changes = Map.from(scala.Predef.Map(uri -> List(
-                    Lsp.TextEdit
-                      ( Lsp.Range
-                          ( Lsp.Position(line, previousEnd),
-                            Lsp.Position(line, lineText.length) ),
-                        t"\n$indent$childText" ))))) )
-    . getOrElse(Unset)
+              verifiedAction(text, patched.join(t"\n"), schema):
+                Lsp.CodeAction
+                  ( title = t"Move `${moved.text}` to a child compound line",
+                    kind  = t"refactor.rewrite",
+                    edit  = Lsp.WorkspaceEdit(changes = Map(uri -> List(
+                      Lsp.TextEdit
+                        ( Lsp.Range
+                            ( Lsp.Position(line, previousEnd),
+                              Lsp.Position(line, lineText.length) ),
+                          t"\n$indent$childText" )))) )
+
+  // Whether the code actions must leave the compound `node` alone: it carries a source- or
+  // literal-atom payload (which must immediately follow its compound, §14/§15), or a bare sigil
+  // among its tokens, which may begin a remark.
+  private def declined(lines: Sequence[Text], node: Node): Boolean =
+    val payload = lines.at((node.line + 1).z).lay(false): next =>
+      leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
+
+    val sigil = pragmaOf(lines).sigil.show
+    payload || lines.at(node.line.z).lay(false)(tokens(_).exists(_.text == sigil))
 
   // The inverse of `expandAtomAction`: fold the child compound at `line` back onto its parent's
   // line as an inline atom. The child must be the parent's FIRST child and on the line immediately
@@ -1156,58 +1105,48 @@ object TelServer:
   private def inlineChildAction
      ( uri:    Text,
        text:   Text,
-       lines:  scala.IndexedSeq[String],
+       lines:  Sequence[Text],
        tree:   List[Node],
        line:   Int,
        schema: Tels )
   :   Optional[Lsp.CodeAction] =
 
-    val sigil = pragmaOf(lines).sigil.toString
-
-    def declined(node: Node): Boolean =
-      val nodeLine = lines.lift(node.line).getOrElse("")
-      val payload = lines.lift(node.line + 1).exists: next =>
-        leadingSpaces(next) < next.length && leadingSpaces(next) >= node.indent + 4
-
-      payload || tokens(nodeLine).stdlib.exists(_(0) == sigil)
-
     nodeChain(tree, line).reverse match
       case child :: parent :: _
           if child.line == line && child.line == parent.line + 1 && child.children.nil
-             && parent.children.stdlib.headOption.exists(_.line == line)
-             && !declined(child) && !declined(parent) =>
+             && parent.children.head.lay(false)(_.line == line)
+             && !declined(lines, child) && !declined(lines, parent) =>
 
         val owner = enclosingStruct(tree, parent.line, parent.indent, schema)
 
         memberStruct(owner, parent.keyword, schema).let: parentStruct =>
-          val childLine = lines.lift(child.line).getOrElse("")
+          val childLine = lines.at(child.line.z).or(t"")
           val childSpans = inlineAtomSpans(childLine, child.keywordEnd)
 
           val atom: Optional[Text] =
             memberType(parentStruct, child.keyword, schema).let(resolvedType(_, schema)).let:
-              case _: Tels.Scalar =>
-                if childSpans.length == 1 then childSpans.head(0).tt else Unset
-
-              case Tels.Flag => if childSpans.isEmpty then child.keyword else Unset
-              case _         => Unset
+              case _: Tels.Scalar => childSpans.unique.let(_.text)
+              case Tels.Flag      => if childSpans.nil then child.keyword else Unset
+              case _              => Unset
 
           atom.let: atom =>
-            val parentLine = lines.lift(parent.line).getOrElse("")
+            val parentLine = lines.at(parent.line.z).or(t"")
 
             // A hard gap is needed when the parent line is already in hard mode — a single space
             // would merge the atom into the phrase before it — or when the atom itself contains a
             // space and must stay one phrase.
-            val parentHard = parentLine.substring(parent.keywordEnd).nn.contains("  ")
+            val parentHard = parentLine.skip(parent.keywordEnd).contains(t"  ")
             val gap = gapFor(atom, parentHard)
 
             val patched =
-              (lines.take(parent.line) :+ s"$parentLine$gap$atom") ++ lines.drop(child.line + 1)
+              lines.to[List].keep(parent.line) + List(t"$parentLine$gap$atom")
+              + lines.to[List].skip(child.line + 1)
 
-            verifiedAction(text, patched.mkString("\n").tt, schema):
+            verifiedAction(text, patched.join(t"\n"), schema):
               Lsp.CodeAction
                 ( title = t"Inline `$atom` onto the `${parent.keyword}` line",
                   kind  = t"refactor.inline",
-                  edit  = Lsp.WorkspaceEdit(changes = Map.from(scala.Predef.Map(uri -> List
+                  edit  = Lsp.WorkspaceEdit(changes = Map(uri -> List
                     ( Lsp.TextEdit
                         ( Lsp.Range
                             ( Lsp.Position(parent.line, parentLine.length),
@@ -1217,7 +1156,7 @@ object TelServer:
                         ( Lsp.Range
                             ( Lsp.Position(child.line, 0),
                               Lsp.Position(child.line + 1, 0) ),
-                          t"" ))))) )
+                          t"" )))) )
 
       case _ => Unset
 
@@ -1256,8 +1195,7 @@ object TelServer:
     case (Tel.Element.Value(i, _, s), Tel.Element.Value(j, _, t)) => i == j && s == t
 
     case (Tel.Element.Node(i, _, as), Tel.Element.Node(j, _, bs)) =>
-      i == j && as.length == bs.length
-      && as.stdlib.to(scala.List).zip(bs.stdlib.to(scala.List)).forall(sameModel(_, _))
+      i == j && as.length == bs.length && as.to[List].zip(bs.to[List]).all(sameModel(_, _))
 
     case _ => false
 
@@ -1274,37 +1212,38 @@ object TelServer:
   private def resolvedType(fieldType: Tels.Type, schema: Tels): Optional[Tels.Type] =
     fieldType match
       case Tels.Reference(name) =>
-        schema.records.stdlib.find(_.name == name)
-        . map(record => Tels.Struct(record.members, record.validators): Tels.Type)
-        . orElse:
-            schema.scalars.stdlib.find(_.name == name)
-            . map: definition =>
-                val scalar: Tels.Type =
-                  Tels.Scalar(definition.validators, definition.encoding, definition.patterns)
+        def record: Optional[Tels.Type] = schema.records.seek(_.name == name).let: record =>
+          Tels.Struct(record.members, record.validators)
 
-                scalar
-        . getOrElse(Unset)
+        def scalar: Optional[Tels.Type] = schema.scalars.seek(_.name == name).let: definition =>
+          Tels.Scalar(definition.validators, definition.encoding, definition.patterns)
+
+        record.or(scalar)
 
       case other => other
 
+  // Where the §20.2 atom phase has reached: the position of the next member to try, and what
+  // the atom last assigned expands to.
+  private case class Walk(position: Int, expansion: Optional[Text])
+
   private def expansionOf(struct: Tels.Struct, atoms: List[Text], schema: Tels): Optional[Text] =
-    val members = struct.members.stdlib.to(scala.List).toVector
+    val members = struct.members
 
     def resolved(fieldType: Tels.Type): Optional[Tels.Type] = resolvedType(fieldType, schema)
 
     def required(member: Tels.Member): Boolean = member match
-      case field: Tels.Field    => field.required != Tels.Polarity.Loose
+      case field: Tels.Field      => field.required != Tels.Polarity.Loose
       case select: Tels.SelectRef => select.required != Tels.Polarity.Loose
-      case _: Tels.Exclude      => false
+      case _: Tels.Exclude        => false
 
     def repeatable(member: Tels.Member): Boolean = member match
-      case field: Tels.Field    => field.repeatable == Tels.Polarity.Loose
+      case field: Tels.Field      => field.repeatable == Tels.Polarity.Loose
       case select: Tels.SelectRef => select.repeatable == Tels.Polarity.Loose
-      case _: Tels.Exclude      => false
+      case _: Tels.Exclude        => false
 
-    def variantsOf(select: Tels.SelectRef): scala.List[Tels.Variant] =
-      schema.selects.stdlib.find(_.name == select.reference)
-      . map(_.variants.stdlib.to(scala.List)).getOrElse(scala.Nil)
+    def flag(fieldType: Tels.Type): Boolean = resolved(fieldType) match
+      case Tels.Flag => true
+      case _         => false
 
     def atomAssignable(member: Tels.Member): Boolean = member match
       case field: Tels.Field => resolved(field.fieldType) match
@@ -1313,25 +1252,19 @@ object TelServer:
         case _              => false
 
       case select: Tels.SelectRef =>
-        val variants = variantsOf(select)
-        variants.nonEmpty && variants.forall: variant =>
-          resolved(variant.variantType) match
-            case Tels.Flag => true
-            case _         => false
+        val variants = variantsOf(select.reference, schema)
+        !variants.nil && variants.all(variant => flag(variant.variantType))
 
       case _: Tels.Exclude => false
 
     def flagShaped(member: Tels.Member): Boolean = member match
-      case field: Tels.Field => resolved(field.fieldType) match
-        case Tels.Flag => true
-        case _         => false
-
+      case field: Tels.Field      => flag(field.fieldType)
       case select: Tels.SelectRef => atomAssignable(select)
       case _: Tels.Exclude        => false
 
     def matches(member: Tels.Member, atom: Text): Boolean = member match
       case field: Tels.Field      => field.keyword == atom
-      case select: Tels.SelectRef => variantsOf(select).exists(_.keyword == atom)
+      case select: Tels.SelectRef => variantsOf(select.reference, schema).exists(_.keyword == atom)
       case _: Tels.Exclude        => false
 
     def skippable(member: Tels.Member, atom: Text): Boolean = member match
@@ -1340,42 +1273,36 @@ object TelServer:
         !required(member)
         && (!atomAssignable(member) || (flagShaped(member) && !matches(member, atom)))
 
-    var pos = 0
-    var ok = true
-    var result: Optional[Text] = Unset
+    // The first member at or after `position` which `atom` may not skip (step 3a).
+    @tailrec
+    def settle(position: Int, atom: Text): Int = members.at(position.z) match
+      case member: Tels.Member if skippable(member, atom) => settle(position + 1, atom)
+      case _                                              => position
 
-    atoms.stdlib.foreach: atom =>
-      if ok then
-        while pos < members.length && skippable(members(pos), atom) do pos += 1
+    // Assigning `atom` to the member the walk settles on; a repeatable member's position is not
+    // advanced (step 3d). `Unset` when the atom does not assign.
+    def assign(walk: Walk, atom: Text): Optional[Walk] =
+      val position = settle(walk.position, atom)
 
-        if pos >= members.length then ok = false
-        else members(pos) match
+      members.at(position.z).let: member =>
+        val next = if repeatable(member) then position else position + 1
+
+        member match
           case field: Tels.Field => resolved(field.fieldType) match
-            case _: Tels.Scalar =>
-              result = t"${field.keyword}${gapFor(atom, false)}$atom"
-              if !repeatable(field) then pos += 1
+            case _: Tels.Scalar => Walk(next, t"${field.keyword}${gapFor(atom, false)}$atom")
+            case Tels.Flag      => if atom == field.keyword then Walk(next, atom) else Unset
+            case _              => Unset
 
-            case Tels.Flag =>
-              if atom == field.keyword then
-                result = atom
-                if !repeatable(field) then pos += 1
-              else ok = false
+          case select: Tels.SelectRef => if matches(select, atom) then Walk(next, atom) else Unset
+          case _: Tels.Exclude        => Unset
 
-            case _ => ok = false
-
-          case select: Tels.SelectRef =>
-            if matches(select, atom) then
-              result = atom
-              if !repeatable(select) then pos += 1
-            else ok = false
-
-          case _: Tels.Exclude => ok = false
-
-    if ok then result else Unset
+    atoms.fold(Walk(0, Unset): Optional[Walk]): (walk, atom) =>
+      walk.let(assign(_, atom))
+    . let(_.expansion)
 
   private def diagnostic
      ( entry:    (Optional[Tel.Focus], Tel.Error),
-       lines:    scala.IndexedSeq[String],
+       lines:    Sequence[Text],
        document: Optional[Tel] )
   :   Lsp.Diagnostic =
 
@@ -1418,7 +1345,7 @@ object TelServer:
   private def errorRange
      ( focus:    Optional[Tel.Focus],
        error:    Tel.Error,
-       lines:    scala.IndexedSeq[String],
+       lines:    Sequence[Text],
        document: Optional[Tel] )
   :   Lsp.Range =
 
@@ -1429,7 +1356,7 @@ object TelServer:
         else document.lay(Span.empty)(_.locate(focus.pointer).lay(Span.empty)(_.span))
 
     val fallback =
-      val end = lines.headOption.fold(1)(_.length.max(1))
+      val end = lines.head.lay(1)(_.length.max(1))
       Lsp.Range(Lsp.Position(0, 0), Lsp.Position(0, end))
 
     Lsp.Range.from(span).lay(fallback)(fit(_, lines))
@@ -1439,7 +1366,7 @@ object TelServer:
   // a saturated span) has to be pulled back within the line, and a range left with no width — a
   // located compound whose length was not recorded — is widened to one character, so that the
   // client has something to underline. A range that spans lines is left alone.
-  private def fit(range: Lsp.Range, lines: scala.IndexedSeq[String]): Lsp.Range =
+  private def fit(range: Lsp.Range, lines: Sequence[Text]): Lsp.Range =
     if range.start.line != range.end.line then range else
       val length = lineLength(lines, range.start.line)
       val start = range.start.character.min(length).max(0)
@@ -1460,19 +1387,18 @@ object TelServer:
     val pragma = pragmaOf(lines)
 
     if position.line == pragma.line && pragma.wellFormed then pragmaHover(pragma, lines, resolver)
-    else wordAt(position, lines) match
-      case Some((word, start, end)) =>
-        val range = Lsp.Range(Lsp.Position(position.line, start), Lsp.Position(position.line, end))
-        val index = lines.lift(position.line).fold(0):
-          line => tokens(line).stdlib.indexWhere((_, tokenStart, _) => tokenStart == start).max(0)
+    else wordAt(position, lines).let: word =>
+      val range =
+        Lsp.Range(Lsp.Position(position.line, word.start), Lsp.Position(position.line, word.end))
 
-        hoverMarkup(lines, tree, position, index, word, resolver)
-        . let(value => Lsp.Hover(Lsp.MarkupContent(value = value), range))
+      // The word's place on its line: as many tokens as begin before it.
+      val index = lines.at(position.line.z).lay(0)(tokens(_).count(_.start < word.start))
 
-      case None => Unset
+      hoverMarkup(lines, tree, position, index, word.text, resolver)
+      . let(value => Lsp.Hover(Lsp.MarkupContent(value = value), range))
 
   // Hover on the pragma line reports the schema-resolution status.
-  private def pragmaHover(pragma: Pragma, lines: scala.IndexedSeq[String], resolver: PragmaResolver)
+  private def pragmaHover(pragma: Pragma, lines: Sequence[Text], resolver: PragmaResolver)
   :   Lsp.Hover =
 
     val range = pragma.identifier.let: id =>
@@ -1485,7 +1411,7 @@ object TelServer:
           else t"the base with the layers ${selected.map(layer => t"`$layer`").join(t", ")}"
 
         val declared =
-          if entry.layers.s.isEmpty then t""
+          if entry.layers == t"" then t""
           else t"; the schema declares the layers ${entry.layers}"
 
         t"**TEL document** — schema `${entry.name}`: $composition, signature `$signature`"
@@ -1502,7 +1428,7 @@ object TelServer:
         t"**TEL document** — schema `$identifier` resolves, but $detail."
 
       case Resolution.NoSchema =>
-        t"**TEL document** — pragma `${lines.lift(pragma.line).getOrElse("").tt}`"
+        t"**TEL document** — pragma `${lines.at(pragma.line.z).or(t"")}`"
 
     Lsp.Hover(Lsp.MarkupContent(value = markup), range)
 
@@ -1510,7 +1436,7 @@ object TelServer:
   // member's declaration; a value slot shows what the schema says about the atom; named-type
   // references and built-in validator names show their own descriptions.
   private def hoverMarkup
-     ( lines:    scala.IndexedSeq[String],
+     ( lines:    Sequence[Text],
        tree:     List[Node],
        position: Lsp.Position,
        index:    Int,
@@ -1518,61 +1444,48 @@ object TelServer:
        resolver: PragmaResolver )
   :   Optional[Text] =
 
-    if index == 0 then
-      keywordMarkup(lines, tree, position, resolver)
-      . or(definitions(tree).stdlib.get(word).map(describe).getOrElse(Unset))
-    else definitions(tree).stdlib.get(word) match
-      case Some(node) => describe(node)
-      case None =>
-        builtinValidatorMarkup(lines, position, word)
-        . or(valueSlotMarkup(lines, tree, position, word, resolver))
+    def definition: Optional[Text] = definitions(tree).at(word).let(describe)
+
+    if index == 0 then keywordMarkup(lines, tree, position, resolver).or(definition)
+    else
+      definition.or(builtinValidatorMarkup(lines, position, word))
+      . or(valueSlotMarkup(lines, tree, position, word, resolver))
 
   private def keywordMarkup
-     ( lines: scala.IndexedSeq[String], tree: List[Node], position: Lsp.Position,
-       resolver: PragmaResolver )
+     ( lines: Sequence[Text], tree: List[Node], position: Lsp.Position, resolver: PragmaResolver )
   :   Optional[Text] =
 
-    documentSchema(lines, resolver) match
-      case schema: Tels => enclosing(tree, position, schema) match
-        case Slot(struct, node) => fieldMarkup(struct, node.keyword, schema)
-        case _                  => Unset
-      case _ => Unset
+    documentSchema(lines, resolver).let: schema =>
+      enclosing(tree, position, schema).let: slot =>
+        fieldMarkup(slot.struct, slot.node.keyword, schema)
 
   private def valueSlotMarkup
-     ( lines: scala.IndexedSeq[String], tree: List[Node], position: Lsp.Position, atom: Text,
+     ( lines: Sequence[Text], tree: List[Node], position: Lsp.Position, atom: Text,
        resolver: PragmaResolver )
   :   Optional[Text] =
 
-    documentSchema(lines, resolver) match
-      case schema: Tels => enclosing(tree, position, schema) match
-        case Slot(struct, node) =>
-          val default = struct.members.stdlib.collectFirst:
-            case field: Tels.Field if field.keyword == node.keyword => field.default
-          . getOrElse(Unset)
+    documentSchema(lines, resolver).let: schema =>
+      enclosing(tree, position, schema).let: slot =>
+        val keyword = slot.node.keyword
 
-          memberType(struct, node.keyword, schema)
-          . let(valueMarkup(node.keyword, _, default, atom, schema))
+        val default: Optional[Text] = slot.struct.members.to[List].reap:
+          case field: Tels.Field if field.keyword == keyword => field.default
 
-        case _ => Unset
-      case _ => Unset
+        memberType(slot.struct, keyword, schema).let(valueMarkup(keyword, _, default, atom, schema))
 
   // A validator name on a `validate` line gets the §21.5 blurb for the built-in validators.
-  private def builtinValidatorMarkup
-     ( lines: scala.IndexedSeq[String], position: Lsp.Position, word: Text )
+  private def builtinValidatorMarkup(lines: Sequence[Text], position: Lsp.Position, word: Text)
   :   Optional[Text] =
 
-    val onValidate = lines.lift(position.line).exists: line =>
-      tokens(line).stdlib.headOption.exists(_(0) == "validate")
+    val onValidate = lines.at(position.line.z).lay(false): line =>
+      tokens(line).head.lay(false)(_.text == t"validate")
 
-    if onValidate then
-      builtinValidators.stdlib.find(_(0) == word)
-      . map((name, blurb) => t"**$name** — built-in validator: $blurb")
-      . getOrElse(Unset)
-    else Unset
+    if !onValidate then Unset else builtinValidators.seek(_(0) == word).let: (name, blurb) =>
+      t"**$name** — built-in validator: $blurb"
 
   private def describe(node: Node): Text =
-    val members = node.children.stdlib.map(_.keyword).distinct.to(List)
-    val head = t"**${node.keyword} ${node.atoms.stdlib.headOption.getOrElse(t"")}**"
+    val members = node.children.map(_.keyword).distinct
+    val head = t"**${node.keyword} ${node.atoms.head.or(t"")}**"
     if members.nil then head else t"$head — ${members.join(t", ")}"
 
   // ── Structure (source scan) ───────────────────────────────────────────────────────────────────
@@ -1595,13 +1508,27 @@ object TelServer:
         endLine:    Int,
         children:   List[Node] )
 
-  private def lineLength(lines: scala.IndexedSeq[String], line: Int): Int =
-    lines.lift(line).fold(0)(_.length)
+  // A whitespace-delimited token of a line, with its column span.
+  private[tel] case class Token(text: Text, start: Int, end: Int)
 
-  private def leadingSpaces(line: String): Int =
-    var i = 0
-    while i < line.length && line.charAt(i) == ' ' do i += 1
-    i
+  // The document's lines, as an editor counts them: ended by a line feed, a carriage return or
+  // the two together, and without the empty line which a final terminator would leave.
+  private[tel] def linesOf(text: Text): Sequence[Text] =
+    val lines = text.sub(t"\r\n", t"\n").sub(t"\r", t"\n").cut(t"\n")
+    (if lines.last == t"" then lines.lead else lines).to[Sequence]
+
+  // Each line paired with its zero-based line number.
+  private def numbered(lines: Sequence[Text]): List[(Text, Int)] =
+    lines.to[List].indexed.map((line, ordinal) => (line, ordinal.n0))
+
+  private def lineLength(lines: Sequence[Text], line: Int): Int = lines.at(line.z).lay(0)(_.length)
+
+  // The first column at or after `from` whose character satisfies `predicate`, or the line's
+  // length if there is none.
+  private def column(line: Text, from: Int)(predicate: Char => Boolean): Int =
+    line.pinpoint(predicate, from.z).lay(line.length)(_.n0)
+
+  private def leadingSpaces(line: Text): Int = column(line, 0)(_ != ' ')
 
   // A compound line, keeping its source line index, indentation, keyword and inline atoms.
   // `payloadEnd` is the last line of the compound's source- or literal-atom payload (§14, §15), or
@@ -1610,87 +1537,80 @@ object TelServer:
       ( index: Int, indent: Int, keyword: Text, keywordEnd: Int, detail: Text, payloadEnd: Int )
 
   // The full document as `lines` plus a nested tree of compound `Node`s.
-  private[tel] def structure(text: Text): (scala.IndexedSeq[String], List[Node]) =
-    val lines = text.s.linesIterator.toIndexedSeq
+  private[tel] def structure(text: Text): (Sequence[Text], List[Node]) =
+    val lines = linesOf(text)
     val pragma = pragmaOf(lines)
-    val sigil = pragma.sigil
+    val count = lines.size
 
-    val raws: scm.ListBuffer[Raw] = scm.ListBuffer()
-    var index = 0
+    def blank(line: Text): Boolean = leadingSpaces(line) >= line.length
 
-    // The compound on the immediately preceding line, if any: only such a compound can introduce a
-    // source-atom payload (+2 indent levels = +4 spaces, §14) or a literal-atom payload (+3 levels
-    // = +6 spaces, §15) on the current line. The payload trigger is checked before the comment
-    // rule, because the sigil has no special meaning on the first payload line.
-    var adjacent: Optional[Raw] = Unset
+    // Source atom (§14): captured lines run to the first non-blank line with fewer leading
+    // spaces than the first payload line; interior blank lines are permitted. Yields the last
+    // non-blank line captured, and the line the scan resumes at.
+    @tailrec
+    def sourcePayload(index: Int, indent: Int, last: Int): (Int, Int) = lines.at(index.z) match
+      case line: Text if blank(line)                   => sourcePayload(index + 1, indent, last)
+      case line: Text if leadingSpaces(line) >= indent => sourcePayload(index + 1, indent, index)
+      case _                                           => (last, index)
 
-    while index < lines.length do
-      val line = lines(index)
-      val indent = leadingSpaces(line)
+    // Literal atom (§15): the payload runs verbatim from the delimiter line to the first line
+    // whose content matches it exactly (inclusive), or to end of input. Yields its last line.
+    @tailrec
+    def literalPayload(index: Int, delimiter: Text): Int = lines.at(index.z) match
+      case line: Text if line != delimiter => literalPayload(index + 1, delimiter)
+      case _: Text                         => index
+      case _                               => count - 1
 
-      if indent >= line.length || index == pragma.line then
+    // `raws` holds the compounds found so far, latest first. `adjacent` is whether the latest is
+    // on the immediately preceding line: only such a compound can introduce a source-atom
+    // payload (+2 indent levels = +4 spaces, §14) or a literal-atom payload (+3 levels = +6
+    // spaces, §15) on the current line. The payload trigger is checked before the comment rule,
+    // because the sigil has no special meaning on the first payload line.
+    @tailrec
+    def scan(index: Int, raws: List[Raw], adjacent: Boolean): List[Raw] = lines.at(index.z) match
+      case line: Text =>
+        val indent = leadingSpaces(line)
+
         // A blank line (or the pragma) is no compound, and ends payload adjacency.
-        adjacent = Unset
-        index += 1
-      else adjacent match
-        case previous: Raw if indent == previous.indent + 4 =>
-          // Source atom (§14): captured lines run to the first non-blank line with fewer leading
-          // spaces than the first payload line; interior blank lines are permitted.
-          var last = index
-          while index < lines.length && {
-            val candidate = lines(index)
-            val leading = leadingSpaces(candidate)
-            leading >= candidate.length || leading >= indent
-          } do
-            if leadingSpaces(lines(index)) < lines(index).length then last = index
-            index += 1
+        if blank(line) || index == pragma.line then scan(index + 1, raws, false)
+        else raws match
+          case previous :: earlier if adjacent && indent == previous.indent + 4 =>
+            val (last, next) = sourcePayload(index, indent, index)
+            scan(next, previous.copy(payloadEnd = last) :: earlier, false)
 
-          raws(raws.length - 1) = previous.copy(payloadEnd = last)
-          adjacent = Unset
+          case previous :: earlier if adjacent && indent == previous.indent + 6 =>
+            val last = literalPayload(index + 1, line)
+            scan(last + 1, previous.copy(payloadEnd = last) :: earlier, false)
 
-        case previous: Raw if indent == previous.indent + 6 =>
-          // Literal atom (§15): the current line is the delimiter line; the payload runs verbatim
-          // to the first line whose content matches it exactly (inclusive), or to end of input.
-          var end = index + 1
-          while end < lines.length && lines(end) != line do end += 1
-          val last = if end < lines.length then end else lines.length - 1
-          raws(raws.length - 1) = previous.copy(payloadEnd = last)
-          adjacent = Unset
-          index = last + 1
+          case _ =>
+            // A comment/separator line is no compound; it also ends payload adjacency.
+            if line.at(indent.z).lay(false)(_ == pragma.sigil) then scan(index + 1, raws, false)
+            else
+              val end = column(line, indent)(_ == ' ')
+              val detail = line.skip(column(line, end)(_ != ' '))
+              val keyword = line.skip(indent).keep(end - indent)
+              scan(index + 1, Raw(index, indent, keyword, end, detail, index) :: raws, true)
 
-        case _ =>
-          if line.charAt(indent) == sigil then
-            // A comment/separator line; it also ends payload adjacency.
-            adjacent = Unset
-          else
-            var end = indent
-            while end < line.length && line.charAt(end) != ' ' do end += 1
-            var detailStart = end
-            while detailStart < line.length && line.charAt(detailStart) == ' ' do detailStart += 1
-            val raw = Raw(index, indent, line.substring(indent, end).nn.tt, end,
-                line.substring(detailStart).nn.tt, index)
-            raws += raw
-            adjacent = raw
+      case _ =>
+        raws.reverse
 
-          index += 1
-
-    // Proscenium's `List` is opaque, so the compiler cannot see that `Nil` and `::` exhaust it;
-    // matching the stdlib view instead would collide with the imported cons extractor.
-    @scala.annotation.nowarn("msg=match may not be exhaustive")
     def build(items: List[Raw]): List[Node] = items match
-      case Nil => Nil
       case head :: tail =>
         val (descendants, rest) = tail.span(_.indent > head.indent)
-        val endLine = descendants.stdlib.lastOption.fold(head.payloadEnd)(_.payloadEnd)
+        val endLine = descendants.last.lay(head.payloadEnd)(_.payloadEnd)
         val atoms = head.detail.cut(t" ").filter(_ != t"")
+
         Node(head.index, head.indent, head.keyword, head.keywordEnd, head.detail, atoms, endLine,
             build(descendants))
         :: build(rest)
 
-    (lines, build(raws.to(scala.List).to(List)))
+      case _ =>
+        Nil
+
+    (lines, build(scan(0, Nil, false)))
 
   private[tel] def flatten(nodes: List[Node]): List[Node] =
-    nodes.stdlib.flatMap(node => node +: flatten(node.children).stdlib).to(List)
+    nodes.flatMap(node => node :: flatten(node.children))
 
   // ── Structure features ────────────────────────────────────────────────────────────────────────
 
@@ -1707,8 +1627,7 @@ object TelServer:
 
   // Declaration-keyword kinds for a schema document's outline.
   private val schemaDocumentKinds: Map[Text, Lsp.SymbolKind] =
-    Map.from:
-      scala.Predef.Map
+    Map
         ( t"record"   -> Lsp.SymbolKind.Struct,
           t"scalar"   -> Lsp.SymbolKind.Class,
           t"select"   -> Lsp.SymbolKind.Enum,
@@ -1723,43 +1642,40 @@ object TelServer:
   // `path`: select variants are EnumMembers, flags Booleans, scalar-typed members Strings,
   // record-typed members Objects.
   private def schemaKind(schema: Tels, path: List[Text], keyword: Text): Lsp.SymbolKind =
-    structAt(schema, path) match
-      case struct: Tels.Struct =>
-        val isVariant = struct.members.stdlib.to(scala.List).exists:
-          case reference: Tels.SelectRef =>
-            schema.selects.stdlib.find(_.name == reference.reference)
-            . exists(_.variants.stdlib.exists(_.keyword == keyword))
-          case _ => false
+    structAt(schema, path).lay(Lsp.SymbolKind.Field): struct =>
+      val isVariant = struct.members.to[List].exists:
+        case reference: Tels.SelectRef =>
+          variantsOf(reference.reference, schema).exists(_.keyword == keyword)
 
-        if isVariant then Lsp.SymbolKind.EnumMember
-        else memberType(struct, keyword, schema) match
-          case Tels.Flag            => Lsp.SymbolKind.Boolean
-          case Tels.Scalar(_, _, _) => Lsp.SymbolKind.String
-          case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
-          case Tels.Reference(name) =>
-            if schema.records.stdlib.exists(_.name == name) then Lsp.SymbolKind.Object
-            else if schema.selects.stdlib.exists(_.name == name) then Lsp.SymbolKind.Enum
-            else Lsp.SymbolKind.String
+        case _ => false
 
-          case _ => Lsp.SymbolKind.Field
+      if isVariant then Lsp.SymbolKind.EnumMember
+      else memberType(struct, keyword, schema) match
+        case Tels.Flag            => Lsp.SymbolKind.Boolean
+        case Tels.Scalar(_, _, _) => Lsp.SymbolKind.String
+        case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
+        case Tels.Reference(name) =>
+          if schema.records.exists(_.name == name) then Lsp.SymbolKind.Object
+          else if schema.selects.exists(_.name == name) then Lsp.SymbolKind.Enum
+          else Lsp.SymbolKind.String
 
-      case _ => Lsp.SymbolKind.Field
+        case _ => Lsp.SymbolKind.Field
 
   private def symbol
      ( node:      Node,
-       lines:     scala.IndexedSeq[String],
+       lines:     Sequence[Text],
        schema:    Optional[Tels],
        schemaDoc: Boolean,
        path:      List[Text] )
   :   Lsp.DocumentSymbol =
 
     val kind =
-      if schemaDoc then schemaDocumentKinds.stdlib.get(node.keyword).getOrElse(Lsp.SymbolKind.Field)
+      if schemaDoc then schemaDocumentKinds.at(node.keyword).or(Lsp.SymbolKind.Field)
       else schema.lay(Lsp.SymbolKind.Field)(schemaKind(_, path, node.keyword))
 
     Lsp.DocumentSymbol
       ( name           = node.keyword,
-        detail         = if node.detail.s.isEmpty then Unset else node.detail,
+        detail         = node.detail.puncture(t""),
         kind           = kind,
         range          = Lsp.Range
                            ( Lsp.Position(node.line, node.indent),
@@ -1777,34 +1693,29 @@ object TelServer:
       then List(Lsp.FoldingRange(startLine = node.line, endLine = node.endLine, kind = t"region"))
       else Nil
 
-    (self.stdlib ::: node.children.flatMap(folds).stdlib).to(List)
+    self + node.children.flatMap(folds)
 
-  private def selectionRange(position: Lsp.Position, tree: List[Node], lines: scala.IndexedSeq[String])
+  private def selectionRange(position: Lsp.Position, tree: List[Node], lines: Sequence[Text])
   :   Lsp.SelectionRange =
-    def path(nodes: List[Node]): List[Node] =
-      nodes.stdlib.find(n => position.line >= n.line && position.line <= n.endLine) match
-        case Some(node) => node :: path(node.children)
-        case None       => Nil
 
-    val ranges = path(tree).map: node =>
-      Lsp.Range(Lsp.Position(node.line, node.indent), Lsp.Position(node.endLine, lineLength(lines, node.endLine)))
+    val ranges = nodeChain(tree, position.line).map: node =>
+      Lsp.Range
+        ( Lsp.Position(node.line, node.indent),
+          Lsp.Position(node.endLine, lineLength(lines, node.endLine)) )
 
-    val nested = ranges.stdlib.foldLeft(Unset: Optional[Lsp.SelectionRange]): (parent, range) =>
+    ranges.fold(Unset: Optional[Lsp.SelectionRange]): (parent, range) =>
       Lsp.SelectionRange(range, parent)
-
-    nested.lay(Lsp.SelectionRange(Lsp.Range(position, position)))(identity)
+    . or(Lsp.SelectionRange(Lsp.Range(position, position)))
 
   private def highlights(text: Text, position: Lsp.Position): List[Lsp.DocumentHighlight] =
-    val nodes = flatten(structure(text)._2)
-    nodes.stdlib.find(_.line == position.line) match
-      case Some(target) =>
-        nodes.filter(_.keyword == target.keyword).map: node =>
-          Lsp.DocumentHighlight
-            ( Lsp.Range(Lsp.Position(node.line, node.indent), Lsp.Position(node.line, node.keywordEnd)),
-              Lsp.DocumentHighlightKind.Text )
+    val nodes = flatten(structure(text)(1))
 
-      case None =>
-        Nil
+    nodes.seek(_.line == position.line).lay(Nil): target =>
+      nodes.filter(_.keyword == target.keyword).map: node =>
+        Lsp.DocumentHighlight
+          ( Lsp.Range
+              ( Lsp.Position(node.line, node.indent), Lsp.Position(node.line, node.keywordEnd) ),
+            Lsp.DocumentHighlightKind.Text )
 
   // ── Navigation ────────────────────────────────────────────────────────────────────────────────
   //
@@ -1816,38 +1727,35 @@ object TelServer:
   private val definitionKeywords = Set(t"record", t"scalar", t"select")
 
   // The whitespace-delimited tokens of a line, each with its start/end column.
-  private def tokens(line: String): List[(String, Int, Int)] =
-    val out = scm.ListBuffer[(String, Int, Int)]()
-    var i = 0
-    while i < line.length do
-      if line.charAt(i) == ' ' then i += 1
-      else
-        val start = i
-        while i < line.length && line.charAt(i) != ' ' do i += 1
-        out += ((line.substring(start, i).nn, start, i))
+  private[tel] def tokens(line: Text): List[Token] =
+    def recur(from: Int): List[Token] =
+      val start = column(line, from)(_ != ' ')
 
-    out.to(scala.List).to(List)
+      if start >= line.length then Nil else
+        val end = column(line, start)(_ == ' ')
+        Token(line.skip(start).keep(end - start), start, end) :: recur(end)
 
-  // The token under a cursor position, with its column span.
-  private def wordAt(position: Lsp.Position, lines: scala.IndexedSeq[String]): Option[(Text, Int, Int)] =
-    val found = lines.lift(position.line).flatMap: line =>
-      tokens(line).stdlib.find((_, start, end) => position.character >= start && position.character <= end)
+    recur(0)
 
-    found.map((token, start, end) => (token.tt, start, end))
+  // The token under a cursor position.
+  private def wordAt(position: Lsp.Position, lines: Sequence[Text]): Optional[Token] =
+    lines.at(position.line.z).let: line =>
+      tokens(line).seek(token => position.character >= token.start && position.character <= token.end)
 
-  // Named-type definitions in the document, keyed by name (the first atom of a `record`/`scalar`/
-  // `select` compound).
-  private def definitions(nodes: List[Node]): Map[Text, Node] =
-    Map.from:
-      flatten(nodes).stdlib.flatMap: node =>
-        if definitionKeywords.stdlib.contains(node.keyword) then node.atoms.stdlib.headOption.map(_ -> node) else None
-      . toMap
+  // The named types which `nodes` define, keyed by name: the first atom of each
+  // `record`/`scalar`/`select` compound among them.
+  private def defined(nodes: List[Node]): Map[Text, Node] =
+    nodes.filter(node => definitionKeywords.has(node.keyword)).flatMap: node =>
+      node.atoms.head.lay(Nil)(name => List(name -> node))
+    . to[Map]
+
+  // Named-type definitions anywhere in the document, keyed by name.
+  private def definitions(nodes: List[Node]): Map[Text, Node] = defined(flatten(nodes))
 
   // Every whitespace-delimited occurrence of `word` as a whole token, with line and column span.
-  private def occurrences(word: Text, lines: scala.IndexedSeq[String]): List[(Int, Int, Int)] =
-    lines.zipWithIndex.to(scala.List).flatMap: (line, index) =>
-      tokens(line).stdlib.collect { case (token, start, end) if token.tt == word => (index, start, end) }
-    . to(List)
+  private def occurrences(word: Text, lines: Sequence[Text]): List[(Int, Int, Int)] =
+    numbered(lines).flatMap: (line, index) =>
+      tokens(line).filter(_.text == word).map(token => (index, token.start, token.end))
 
   private def location(uri: Text, line: Int, start: Int, end: Int): Lsp.Location =
     Lsp.Location(uri, Lsp.Range(Lsp.Position(line, start), Lsp.Position(line, end)))
@@ -1865,73 +1773,67 @@ object TelServer:
   // Top-level named-type definitions of a schema document, keyed by name. Unlike `definitions`, this
   // considers only the top level, so a nested *reference* (e.g. `select Status` inside `document`)
   // never shadows the real, child-bearing definition.
-  private def topLevelDefinitions(nodes: List[Node]): Map[Text, Node] =
-    Map.from:
-      nodes.stdlib.flatMap: node =>
-        if definitionKeywords.stdlib.contains(node.keyword) then node.atoms.stdlib.headOption.map(_ -> node) else None
-      . toMap
+  private def topLevelDefinitions(nodes: List[Node]): Map[Text, Node] = defined(nodes)
+
+  // Whether the compound's first atom is `name`.
+  private def named(node: Node, name: Text): Boolean = node.atoms.head.lay(false)(_ == name)
+
+  // The name atom of the compound on `line`: its second token.
+  private def nameToken(lines: Sequence[Text], line: Int): Optional[Token] =
+    lines.at(line.z).let(tokens(_).skip(1).head)
 
   private def fieldNode(nodes: List[Node], name: Text): Optional[Node] =
-    nodes.stdlib.find(node => node.keyword == t"field" && node.atoms.stdlib.headOption.contains(name)).getOrElse(Unset)
+    nodes.seek(node => node.keyword == t"field" && named(node, name))
 
   // Descend a schema document from its `document` block along the ancestor keywords of a compound
   // (each a field whose type names a record), yielding the child nodes of the enclosing struct.
-  @scala.annotation.nowarn("msg=match may not be exhaustive")
   private def descend(schemaTree: List[Node], context: List[Node], ancestors: List[Text])
   :   Optional[List[Node]] =
     ancestors match
-      case Nil => context
-      case keyword :: rest => fieldNode(context, keyword) match
-        case field: Node => field.atoms.stdlib.lift(1) match
-          case Some(typeName) => topLevelDefinitions(schemaTree).stdlib.get(typeName) match
-            case Some(definition) => descend(schemaTree, definition.children, rest)
-            case None             => Unset
+      case keyword :: rest =>
+        fieldNode(context, keyword).let(_.atoms.skip(1).head).let: typeName =>
+          topLevelDefinitions(schemaTree).at(typeName).let: definition =>
+            descend(schemaTree, definition.children, rest)
 
-          case None => Unset
-        case _ => Unset
+      case _ =>
+        context
 
   // The schema-document node that declares `keyword`: a `field`/`variant` in `context` named
   // `keyword`, or a `variant` of a `select` referenced from `context`.
-  private def locateMember(schemaTree: List[Node], context: List[Node], keyword: Text): Optional[Node] =
-    context.stdlib.find(node => memberKeywords.stdlib.contains(node.keyword) && node.atoms.stdlib.headOption.contains(keyword))
-    . orElse:
-        context.stdlib.filter(_.keyword == t"select").flatMap: reference =>
-          reference.atoms.stdlib.headOption.toList
-          . flatMap(name => topLevelDefinitions(schemaTree).stdlib.get(name).toList)
-          . flatMap(_.children.stdlib)
-          . filter(node => node.keyword == t"variant" && node.atoms.stdlib.headOption.contains(keyword))
-        . headOption
-    . getOrElse(Unset)
+  private def locateMember(schemaTree: List[Node], context: List[Node], keyword: Text)
+  :   Optional[Node] =
+    context.seek(node => memberKeywords.has(node.keyword) && named(node, keyword)).or:
+      context.filter(_.keyword == t"select").flatMap: reference =>
+        reference.atoms.head.let(topLevelDefinitions(schemaTree).at(_)).lay(Nil)(_.children)
+        . filter(node => node.keyword == t"variant" && named(node, keyword))
+      . head
 
   private def schemaDefinition
-     ( lines:    scala.IndexedSeq[String],
+     ( lines:    Sequence[Text],
        tree:     List[Node],
        position: Lsp.Position,
        resolver: PragmaResolver )
   :   List[Lsp.Location] =
 
     val pragma = pragmaOf(lines)
-    resolver(pragma).schemaFile match
-      case file: (Path on Linux) => SchemaCache.readText(file).lay(Nil): text =>
-          val (schemaLines, schemaTree) = structure(text)
-          val uri = t"file://${file.encode}"
 
-          if position.line == pragma.line then List(location(uri, 0, 0, 0))
-          else nodeChain(tree, position.line).reverse match
-            case node :: ancestors if node.line == position.line =>
-              val documentBlock =
-                schemaTree.stdlib.find(_.keyword == t"document").map(_.children).getOrElse(Nil)
+    resolver(pragma).schemaFile.let(file => SchemaCache.readText(file).let(file -> _)).lay(Nil):
+      (file, text) =>
+        val (schemaLines, schemaTree) = structure(text)
+        val uri = t"file://${file.encode}"
 
-              descend(schemaTree, documentBlock, ancestors.reverse.map(_.keyword)).lay(Nil):
-                context =>
-                  locateMember(schemaTree, context, node.keyword).lay(Nil): target =>
-                    tokens(schemaLines(target.line)).stdlib.drop(1).headOption match
-                      case Some((_, start, end)) => List(location(uri, target.line, start, end))
-                      case None                  =>
-                        List(location(uri, target.line, target.indent, target.keywordEnd))
+        if position.line == pragma.line then List(location(uri, 0, 0, 0))
+        else nodeChain(tree, position.line).reverse match
+          case node :: ancestors if node.line == position.line =>
+            val documentBlock = schemaTree.seek(_.keyword == t"document").lay(Nil)(_.children)
 
-            case _ => Nil
-      case _ => Nil
+            descend(schemaTree, documentBlock, ancestors.reverse.map(_.keyword))
+            . let(locateMember(schemaTree, _, node.keyword)).lay(Nil): target =>
+                nameToken(schemaLines, target.line)
+                . lay(List(location(uri, target.line, target.indent, target.keywordEnd))): name =>
+                    List(location(uri, target.line, name.start, name.end))
+
+          case _ => Nil
 
   private[tel] def definitionAt
      ( uri:      Text,
@@ -1942,17 +1844,12 @@ object TelServer:
 
     val (lines, tree) = structure(text)
 
-    wordAt(position, lines) match
-      // A local named-type reference (schema documents) jumps within the file.
-      case Some((word, _, _)) => definitions(tree).stdlib.get(word) match
-        case Some(node) => tokens(lines(node.line)).stdlib.drop(1).headOption match
-          case Some((_, start, end)) => List(location(uri, node.line, start, end))
-          case None                  => Nil
-
-        // Otherwise, try to jump across into the registered schema file.
-        case None => schemaDefinition(lines, tree, position, resolver)
-
-      case None => schemaDefinition(lines, tree, position, resolver)
+    // A local named-type reference (schema documents) jumps within the file; anything else
+    // tries to jump across into the registered schema file.
+    wordAt(position, lines).let(word => definitions(tree).at(word.text))
+    . lay(schemaDefinition(lines, tree, position, resolver)): node =>
+        nameToken(lines, node.line).lay(Nil): name =>
+          List(location(uri, node.line, name.start, name.end))
 
   // ── Validation report (`tel validate`) ──────────────────────────────────────────────────────
   //
@@ -1978,20 +1875,21 @@ object TelServer:
     case Lsp.DiagnosticSeverity.Hint        => e"${WebColors.Gray}($text)"
 
   // `1 error, 2 warnings` — only the categories that occur, in severity order.
-  private def problemCounts(diagnostics: scala.List[Lsp.Diagnostic]): Text =
-    scala.List
+  private def problemCounts(diagnostics: List[Lsp.Diagnostic]): Text =
+    List
       ( Lsp.DiagnosticSeverity.Error, Lsp.DiagnosticSeverity.Warning,
         Lsp.DiagnosticSeverity.Information, Lsp.DiagnosticSeverity.Hint )
     . map(severity => severity -> diagnostics.count(severityOf(_) == severity))
-    . collect { case (severity, n) if n > 0 =>
-        s"$n ${severityWord(severity)}${if n == 1 then "" else "s"}" }
-    . mkString(", ").tt
+    . filter(_(1) > 0)
+    . map: (severity, count) =>
+        t"$count ${severityWord(severity)}${if count == 1 then t"" else t"s"}"
+    . join(t", ")
 
   // One line per problem, positions 1-based, no source text. Columns are inclusive on both ends,
   // so `columns 5-7` names three characters; a zero-width range names the single column at which
   // the problem begins.
-  private[tel] def llmReport(path: Text, diagnostics: scala.List[Lsp.Diagnostic]): scala.List[Text] =
-    if diagnostics.isEmpty then scala.List(t"$path: no problems")
+  private[tel] def llmReport(path: Text, diagnostics: List[Lsp.Diagnostic]): List[Text] =
+    if diagnostics.nil then List(t"$path: no problems")
     else
       val header = t"$path: ${problemCounts(diagnostics)}"
 
@@ -2010,13 +1908,13 @@ object TelServer:
 
   // Each problem quotes its source line with the offending span coloured, above a caret line —
   // colour for terminals that show it, carets for those that do not.
-  private[tel] def humanReport
-     ( path: Text, lines: scala.IndexedSeq[String], diagnostics: scala.List[Lsp.Diagnostic] )
-  :   scala.List[Teletype] =
+  private[tel] def humanReport(path: Text, lines: Sequence[Text], diagnostics: List[Lsp.Diagnostic])
+  :   List[Teletype] =
 
-    if diagnostics.isEmpty then scala.List(e"${WebColors.MediumSeaGreen}(✓) $path: no problems found")
+    if diagnostics.nil then List(e"${WebColors.MediumSeaGreen}(✓) $path: no problems found")
     else
-      val width = diagnostics.map(_.range.start.line + 1).max.toString.length
+      // The gutter is as wide as the highest line number quoted.
+      val width = diagnostics.fold(0)((most, next) => most.max(next.range.start.line + 1)).show.length
 
       diagnostics.flatMap: diagnostic =>
         val severity = severityOf(diagnostic)
@@ -2027,28 +1925,24 @@ object TelServer:
         val header =
           e"${tinted(severity, severityWord(severity))} $Bold($location)$code: ${diagnostic.message}"
 
-        lines.lift(start.line) match
-          case Some(line) =>
-            // The span to highlight: to the range's end on a single-line range, or to the end of
-            // the line when the range continues past it. A zero-width range still gets one caret.
-            val from = start.character.min(line.length)
-            val to =
-              if diagnostic.range.end.line == start.line
-              then diagnostic.range.end.character.min(line.length).max(from)
-              else line.length
+        lines.at(start.line.z).lay(List(header)): line =>
+          // The span to highlight: to the range's end on a single-line range, or to the end of
+          // the line when the range continues past it. A zero-width range still gets one caret.
+          val from = start.character.min(line.length)
+          val to =
+            if diagnostic.range.end.line == start.line
+            then diagnostic.range.end.character.min(line.length).max(from)
+            else line.length
 
-            val number = (start.line + 1).toString
-            val gutter = " ".repeat(width - number.length).nn + number
-            val carets = "^".repeat((to - from).max(1)).nn
+          val gutter = (start.line + 1).show.pad(width, Rtl)
+          val carets = t"".pad((to - from).max(1), char = '^')
+          val quoted = tinted(severity, line.skip(from).keep(to - from))
 
-            scala.List
-              ( header,
-                e"  $gutter │ ${line.substring(0, from).nn}${tinted(severity, line.substring(from, to).nn.tt)}${line.substring(to).nn}",
-                e"  ${" ".repeat(width).nn} │ ${" ".repeat(from).nn}${tinted(severity, carets.tt)}" )
-
-          case None => scala.List(header)
-      :+ e""
-      :+ e"$path: ${problemCounts(diagnostics)}"
+          List
+            ( header,
+              e"  $gutter │ ${line.keep(from)}$quoted${line.skip(to)}",
+              e"  ${t"".pad(width)} │ ${t"".pad(from)}${tinted(severity, carets)}" )
+      + List(e"", e"$path: ${problemCounts(diagnostics)}")
 
   private def validateFile(file: Path on Local, llm: Boolean)
       (using Stdio, Environment, System)
@@ -2063,13 +1957,11 @@ object TelServer:
           case text: Text =>
             val registry: Registry = safely(SchemaCache.directory)
             val resolver = PragmaResolver(registry)
-            val lines = text.s.linesIterator.toIndexedSeq
-
-            val diagnostics = diagnose(text, resolver).stdlib.sortBy: diagnostic =>
+            val diagnostics = diagnose(text, resolver).order: diagnostic =>
               (diagnostic.range.start.line, diagnostic.range.start.character)
 
-            if llm then llmReport(file.encode, diagnostics).foreach(Out.println(_))
-            else humanReport(file.encode, lines, diagnostics).foreach(Out.println(_))
+            if llm then llmReport(file.encode, diagnostics).each(Out.println(_))
+            else humanReport(file.encode, linesOf(text), diagnostics).each(Out.println(_))
 
             val errors = diagnostics.count(severityOf(_) == Lsp.DiagnosticSeverity.Error)
             if errors > 0 then DocumentInvalid else Exit.Ok
@@ -2087,10 +1979,10 @@ object TelServer:
   // broadcasts every message, tagged `recv` (client → server) or `send` (server → client), to all
   // subscribers.
 
-  private val logSubscribers: scm.HashSet[Relay[Text]] = scm.HashSet()
+  private val logSubscribers = Atomic(List[Relay[Text]]())
 
   private def broadcastLog(marker: Text, message: Text): Unit =
-    logSubscribers.synchronized(logSubscribers.foreach(_.put(t"$marker $message")))
+    logSubscribers().each(_.put(t"$marker $message"))
 
   private object TrafficLog extends Lsp.Observer:
     def received(message: Text): Unit = broadcastLog(t"recv", message)
@@ -2099,7 +1991,7 @@ object TelServer:
   // Streams messages to stdout until interrupted (Ctrl-C); used by `tel lsp --log`.
   private def streamLog()(using Stdio): Unit =
     val spool = Relay[Text]()
-    logSubscribers.synchronized(logSubscribers.add(spool))
+    logSubscribers.ere(spool :: _)
     try
       Out.println(t"Streaming messages sent/received by the tel language server. Press Ctrl-C to stop.")
       spool.chain.each: message =>
@@ -2108,7 +2000,7 @@ object TelServer:
     // signal (Ctrl-C, here), not a `Tactic` obligation, so there is nothing for a statically-checked
     // handler to discharge.
     catch case _: InterruptedException => ()
-    finally logSubscribers.synchronized(logSubscribers.remove(spool))
+    finally logSubscribers.ere(_.filter(!_.eq(spool)))
 
   // ── Command-line interface ──────────────────────────────────────────────────────────────────
   //
@@ -2192,7 +2084,7 @@ object TelServer:
   private given SchemaCache.Entry is Suggestible = entry =>
     Suggestion
       ( entry.name,
-        if entry.layers.s.isEmpty then t"schema ${entry.id}" else t"layers: ${entry.layers}" )
+        if entry.layers == t"" then t"schema ${entry.id}" else t"layers: ${entry.layers}" )
 
   private given Text is Suggestible = Suggestion(_)
 
@@ -2209,7 +2101,7 @@ object TelServer:
   // `arguments` carries flags alongside operands, so the positional operands are those that do not
   // look like flags. (A leading `--` terminates flag parsing upstream, per POSIX.)
   private def operands(arguments: List[Argument]): List[Argument] =
-    arguments.stdlib.filterNot(_().starts(t"-")).to(List)
+    arguments.filter(!_().starts(t"-"))
 
   // The command dispatch. The `@main` entry point and burdock's `externalize` wrapper live alone
   // in the `launcher` module (`src/launcher/tel_launcher.scala`), which depends on THIS module as a
@@ -2299,19 +2191,15 @@ object TelServer:
                 definition(definitionAt(document.uri, document.text, position, resolver))
 
                 references:
-                  val lines = structure(document.text)._1
+                  val lines = linesOf(document.text)
 
-                  wordAt(position, lines) match
-                    case Some((word, _, _)) =>
-                      occurrences(word, lines).map: (line, start, end) =>
-                        location(document.uri, line, start, end)
-
-                    case None =>
-                      Nil
+                  wordAt(position, lines).lay(Nil): word =>
+                    occurrences(word.text, lines).map: (line, start, end) =>
+                      location(document.uri, line, start, end)
 
                 documentSymbols(outline(document.text, resolver))
 
-                foldingRanges(structure(document.text)._2.flatMap(folds))
+                foldingRanges(structure(document.text)(1).flatMap(folds))
 
                 selectionRanges:
                   val (lines, tree) = structure(document.text)
@@ -2344,16 +2232,15 @@ object TelServer:
 
             // The menu title applies only once the cursor has moved past the schema name, where
             // the operands being completed really are that schema's layers.
-            if !layers.stdlib.isEmpty && !declared.stdlib.isEmpty
+            if !layers.nil && !declared.nil
             then explain(t"layers of schema `${name()}`, in declaration order")
 
             // Register a completion for each layer operand, excluding those already given: a layer
             // may be selected at most once. The fold's accumulator exists to narrow each
             // subsequent operand's suggestions, not to supply the values — a half-typed operand
             // selects nothing but must still reach `schemaSignature` verbatim.
-            layers.stdlib.foldLeft(Nil: List[Text]): (taken, argument) =>
-              val remaining = declared.stdlib.filterNot(taken.stdlib.contains(_)).to(List)
-              argument.select(remaining).lay(taken)(taken :+ _)
+            layers.fold(Nil: List[Text]): (taken, argument) =>
+              argument.select(declared.filter(!taken.has(_))).lay(taken)(taken :+ _)
 
             execute(schemaSignature(name(), layers.map(_())))
 
