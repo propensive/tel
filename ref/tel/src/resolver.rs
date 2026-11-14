@@ -449,8 +449,8 @@ fn validate_schema_body(body: &str) -> Result<(), ResolutionError> {
 }
 
 /// True when the selected layer names appear in the schema's declaration
-/// order (§8.1). A selection out of declaration order is **E124** at
-/// parse time; its recovery is to reorder and continue, which
+/// order (§8.1). A selection out of declaration order is **E124**, raised
+/// at schema resolution; its recovery is to reorder and continue, which
 /// `compose_with_selected_layers` performs unconditionally.
 pub fn layers_in_declaration_order(doc: &Document, selected: &[String]) -> bool {
     let declared = declared_layer_names(doc);
