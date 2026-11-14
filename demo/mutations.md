@@ -144,9 +144,9 @@ to the parent compound only.
 ## Operation 5: `delete` the `country` line
 
 Alice withdraws her country. `delete` requires that the removal leave the
-document schema-valid — that it not raise E307 (§22.2). The schema makes
+document schema-valid — that it not raise ↯/t.3.7 (§22.2). The schema makes
 `country` required *with a default* of `unknown`, so eliding it is exactly
-the case the default exists for: no E307 arises, and the deletion is
+the case the default exists for: no ↯/t.3.7 arises, and the deletion is
 permitted:
 
 ```

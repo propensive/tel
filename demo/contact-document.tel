@@ -3,7 +3,7 @@ tel 1.0 example.org/contact
 # A TEL document conforming to the `contact` schema in
 # `demo/contact-schema.tel`.
 #
-# The pragma must be the first non-blank line of the document (§8, E102), so
+# The pragma must be the first non-blank line of the document (§8, ↯/t.1.2), so
 # these notes follow it rather than preceding it.
 #
 # The pragma's schema identifier is a LIRA *bare reference* — a coordinate

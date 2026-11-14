@@ -72,7 +72,7 @@ pub fn decode_varint(bytes: &[u8]) -> Option<(u64, usize)> {
         let chunk = (b & 0x7F) as u64;
         // §4 pins the representable range to [0, 2^64 − 1]. Ten bytes carry
         // 70 bits, so a tenth byte may contribute only the low bit; anything
-        // wider is B02 rather than a silently truncated value.
+        // wider is ↯/t.4.2 rather than a silently truncated value.
         if shift >= 64 || (shift == 63 && chunk > 1) {
             return None;
         }
@@ -218,7 +218,7 @@ pub(crate) fn enumerate_children<'a>(
                     if !f.repeatable.effective_repeatable() { pos += 1; }
                 }
                 _ => {
-                    // Non-atom-assignable; type assignment would flag E303.
+                    // Non-atom-assignable; type assignment would flag ↯/t.3.3.
                     break;
                 }
             },
@@ -231,7 +231,7 @@ pub(crate) fn enumerate_children<'a>(
                     atom_assignments.push((pos, Element::AtomFlag { keyword: &v.keyword }));
                     if !s.repeatable.effective_repeatable() { pos += 1; }
                 } else {
-                    // E304 territory; skip the atom.
+                    // ↯/t.3.4 territory; skip the atom.
                     break;
                 }
             }
@@ -246,7 +246,7 @@ pub(crate) fn enumerate_children<'a>(
             if let Some(i) = member_index(members, &c.keyword, schema) {
                 compound_by_member[i].push(c);
             }
-            // Unknown keyword would trigger E306 at type-assignment time.
+            // Unknown keyword would trigger ↯/t.3.6 at type-assignment time.
         }
     }
 
@@ -424,7 +424,7 @@ fn encode_element<'a>(
     match elem {
         Element::Compound(c) => {
             let kidx = keyword_index(parent_members, &c.keyword, schema)
-                .expect("keyword must resolve; type assignment should have caught E306");
+                .expect("keyword must resolve; type assignment should have caught ↯/t.3.6");
             let t = keyword_type(parent_members, &c.keyword, schema)
                 .expect("keyword must resolve");
             out.extend(encode_varint(kidx as u64));
@@ -742,7 +742,7 @@ pub fn decode_document_self_contained(
 /// `decode_document_self_contained` with a codec binding (TEL §21.7).
 /// The embedded schema body is governed by `tels`, which declares
 /// no encodings, so the bootstrap never needs the binding; only the outer
-/// data root does (B13/B14/B15 semantics as in
+/// data root does (↯/t.4.13/↯/t.4.14/↯/t.4.15 semantics as in
 /// `decode_document_with_codecs`).
 pub fn decode_document_self_contained_with_codecs(
     bytes: &[u8],
@@ -752,7 +752,7 @@ pub fn decode_document_self_contained_with_codecs(
     let codecs = CodecResolver::new(codec_binding);
     let mut cur = 0;
 
-    // B01: magic — self-contained mode only.
+    // ↯/t.4.1: magic — self-contained mode only.
     if bytes.len() < MAGIC_SELF_CONTAINED.len() {
         return Err(DecodeError::new(BCode::B09, "magic number truncated"));
     }
@@ -821,7 +821,7 @@ pub fn decode_document_self_contained_with_codecs(
             format!("embedded schema fails composition: {} error(s)", compose_errors.len())));
     }
 
-    // B11: verify the recomputed signature matches the carried one.
+    // ↯/t.4.11: verify the recomputed signature matches the carried one.
     let recomputed = schema_full_signature(&schema_document);
     if recomputed != signature {
         return Err(DecodeError::new(BCode::B11,
@@ -834,7 +834,7 @@ pub fn decode_document_self_contained_with_codecs(
         decode_root_into_blocks_with_codecs(&bytes[cur..], &composed, &codecs, check_canonical)?;
     cur += root_consumed;
 
-    // B16: the declared and structural extents must agree exactly.
+    // ↯/t.4.16: the declared and structural extents must agree exactly.
     if cur != end {
         return Err(DecodeError::new(BCode::B16,
             format!("declared length {} but the structure consumed {}",
@@ -951,71 +951,78 @@ pub struct Decoded {
     ///
     /// §6.3 requires a decoder to expose this. [`decode_stream`] is the
     /// recursion on it; a whole-document reader rejects a non-empty
-    /// continuation as B08 (see [`decode_document_whole`]).
+    /// continuation as ↯/t.4.8 (see [`decode_document_whole`]).
     pub continuation: usize,
 }
 
 /// BinTEL decoder error code, corresponding to §10 of the BinTEL
-/// Specification (B01–B16).
+/// Specification (↯/t.4.1–↯/t.4.16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BCode {
-    /// B01: Magic number absent, or matching neither `B2 C4 B5 BB`
+    /// ↯/t.4.1: Magic number absent, or matching neither `B2 C4 B5 BB`
     /// (external-schema mode, §6.1) nor `B2 C4 B5 BC` (self-contained
     /// mode, §6.2).
     B01,
-    /// B02: A variable-length integer extends beyond end of input,
+    /// ↯/t.4.2: A variable-length integer extends beyond end of input,
     /// exceeds the pinned range `[0, 2^64 − 1]`, or is not in the
     /// minimal form §4 requires.
     B02,
-    /// B03: Schema signature length is not `33` (n=1) and not
+    /// ↯/t.4.3: Schema signature length is not `33` (n=1) and not
     /// `37 + 2·(n − 2)` for any `n ≥ 2`, or the XOR of every signature
     /// byte does not equal the BinTEL-pinned cadence byte `0x79`.
     B03,
-    /// B04: Schema signature does not decode against the available
+    /// ↯/t.4.4: Schema signature does not decode against the available
     /// hash library. (Currently surfaced only when a layered signature
     /// cannot be reconstructed; non-applicable for single-component
     /// signatures, which a decoder can use verbatim.)
     B04,
-    /// B05: A keyword index read from the stream is out of range.
+    /// ↯/t.4.5: A keyword index read from the stream is out of range.
     B05,
-    /// B06: A Scalar value's byte length extends beyond end of input.
+    /// ↯/t.4.6: A Scalar value's byte length extends beyond end of input.
     B06,
-    /// B07: A Scalar value's UTF-8 bytes are not a valid UTF-8 sequence.
+    /// ↯/t.4.7: A Scalar value's UTF-8 bytes are not a valid UTF-8 sequence.
     B07,
-    /// B08: The document-root decoding procedure terminates with input
+    /// ↯/t.4.8: The document-root decoding procedure terminates with input
     /// bytes remaining (framing error).
     B08,
-    /// B09: The document-root decoding procedure requests bytes beyond
+    /// ↯/t.4.9: The document-root decoding procedure requests bytes beyond
     /// end of input.
     B09,
-    /// B10: A `Reference` type appears in the schema but resolves to
+    /// ↯/t.4.10: A `Reference` type appears in the schema but resolves to
     /// no `Definition` (schema configuration error).
     B10,
-    /// B11: In self-contained mode (§6.2), the composed signature
+    /// ↯/t.4.11: In self-contained mode (§6.2), the composed signature
     /// recomputed from the embedded schema body does not equal the
     /// carried signature byte-for-byte.
     B11,
-    /// B12: In self-contained mode (§6.2), the embedded schema body
+    /// ↯/t.4.12: In self-contained mode (§6.2), the embedded schema body
     /// does not decode as a valid TEL document under `tels`
     /// (structural error during bootstrap).
     B12,
-    /// B13: The composed schema declares an `encoding` for a Scalar but
+    /// ↯/t.4.13: The composed schema declares an `encoding` for a Scalar but
     /// the decoder's codec binding (TEL §21.7) does not resolve that name.
     B13,
-    /// B14: An encoded Scalar's value bytes are rejected by the bound
+    /// ↯/t.4.14: An encoded Scalar's value bytes are rejected by the bound
     /// codec's decoder — the bytes are not the encoding of any accepted
     /// text (including corrupt or non-canonical bytes, per law C3).
     B14,
-    /// B15: The OPTIONAL re-encode verification of TEL §21.7 found
+    /// ↯/t.4.15: The OPTIONAL re-encode verification of TEL §21.7 found
     /// `encode(decode(b)) ≠ b` — a canonicality violation indicating a
     /// non-conforming codec or corrupted input.
     B15,
-    /// B16: The document length declared in §6.1 field 2 / §6.2 field 2
+    /// ↯/t.4.16: The document length declared in §6.1 field 2 / §6.2 field 2
     /// disagrees with the extent the structural decode consumed.
     B16,
 }
 
 impl BCode {
+    /// The error's bolt code: BinTEL's errors are the family `↯/t.4` of
+    /// TEL's, so that `B05` is `↯/t.4.5`.
+    pub fn bolt(&self) -> String {
+        let number: u32 = format!("{:?}", self)[1..].parse().expect("an error code is B and a number");
+        format!("↯/t.4.{}", number)
+    }
+
     pub fn description(&self) -> &'static str {
         match self {
             BCode::B01 => "magic number absent or invalid",
@@ -1038,7 +1045,7 @@ impl BCode {
     }
 }
 
-/// A decoder error carries a B-code (§10 of the BinTEL Specification)
+/// A decoder error carries a ↯/t.4 code (§10 of the BinTEL Specification)
 /// plus a human-readable context describing where in the stream the
 /// error was detected.
 #[derive(Debug, Clone, PartialEq)]
@@ -1059,8 +1066,8 @@ pub fn decode_document(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeE
 
 /// `decode_document` with a codec binding (TEL §21.7). Required whenever
 /// the composed schema declares any encoding: an unresolved encoding name
-/// is B13 and a codec decode failure is B14. With `check_canonical` set,
-/// the OPTIONAL re-encode verification runs on every encoded scalar (B15
+/// is ↯/t.4.13 and a codec decode failure is ↯/t.4.14. With `check_canonical` set,
+/// the OPTIONAL re-encode verification runs on every encoded scalar (↯/t.4.15
 /// on mismatch) — a hardening measure with a per-value cost.
 pub fn decode_document_with_codecs(
     bytes: &[u8],
@@ -1071,7 +1078,7 @@ pub fn decode_document_with_codecs(
     let codecs = CodecResolver::new(codec_binding);
     let mut cur = 0;
 
-    // B01: magic. This entry point handles external-schema mode only
+    // ↯/t.4.1: magic. This entry point handles external-schema mode only
     // (§6.1). Self-contained mode (§6.2) is handled by
     // `decode_document_self_contained`; encountering its magic here is
     // a usage error (the caller supplied an external-mode schema).
@@ -1110,7 +1117,7 @@ pub fn decode_document_with_codecs(
         decode_root_into_blocks_with_codecs(&bytes[cur..end], schema, &codecs, check_canonical)?;
     cur += root_consumed;
 
-    // B16: the declared and structural extents must agree exactly.
+    // ↯/t.4.16: the declared and structural extents must agree exactly.
     if cur != end {
         return Err(DecodeError::new(BCode::B16,
             format!("declared length {} but the structure consumed {}",
@@ -1131,7 +1138,7 @@ pub fn decode_document_with_codecs(
 
 /// Read the schema-signature field (length varint + signature bytes)
 /// starting at `bytes[0]`. Returns the signature bytes and the number of
-/// input bytes consumed. Performs the B02 / B03 / B09 checks of §6 and §8.2.
+/// input bytes consumed. Performs the ↯/t.4.2 / ↯/t.4.3 / ↯/t.4.9 checks of §6 and §8.2.
 fn read_signature(bytes: &[u8]) -> Result<(Vec<u8>, usize), DecodeError> {
     let mut cur = 0;
     let (sig_len, n) = decode_varint(&bytes[cur..])
@@ -1664,32 +1671,32 @@ mod tests {
         let bytes = b"XXXX\x20\x01\x00";  // wrong magic
         let err = decode_document(bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B01,
-                   "expected B01 for bad magic, got: {:?}", err);
+                   "expected ↯/t.4.1 for bad magic, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b03_bad_signature_length() {
         // Magic + a signature length of 35 (not a valid n=1 or n≥2 length
-        // under the BinTEL-pinned parameters) → B03. Varint for 35 is 0x23.
+        // under the BinTEL-pinned parameters) → ↯/t.4.3. Varint for 35 is 0x23.
         let mut bytes = MAGIC.to_vec();
         bytes.push(0x23);                  // sig_len = 35
         bytes.extend_from_slice(&[0u8; 35]);
         bytes.push(0x00);                  // root child_count = 0
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B03,
-                   "expected B03 for sig_len 35, got: {:?}", err);
+                   "expected ↯/t.4.3 for sig_len 35, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b03_bad_signature_cadence_xor() {
-        // Magic + 33-byte signature whose byte-XOR is NOT 0x79 → B03.
+        // Magic + 33-byte signature whose byte-XOR is NOT 0x79 → ↯/t.4.3.
         let mut bytes = MAGIC.to_vec();
         bytes.push(0x21);                  // sig_len = 33
         bytes.extend_from_slice(&[0u8; 33]); // XOR = 0x00, expected 0x79
         bytes.push(0x00);                  // root child_count = 0
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B03,
-                   "expected B03 for bad signature XOR, got: {:?}", err);
+                   "expected ↯/t.4.3 for bad signature XOR, got: {:?}", err);
     }
 
     /// Build a hand-crafted 33-byte BinTEL signature whose first 32 bytes are
@@ -1722,7 +1729,7 @@ mod tests {
         let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B05,
-                   "expected B05 for out-of-range keyword index, got: {:?}", err);
+                   "expected ↯/t.4.5 for out-of-range keyword index, got: {:?}", err);
     }
 
     // ── §6.1 field 2 / §6.3: document length, continuation, streams ────────
@@ -1745,7 +1752,7 @@ mod tests {
         assert_eq!(declared as usize, 1 + 33 + root.len());
     }
 
-    /// B16: the declared and structural extents must agree. A forged length
+    /// ↯/t.4.16: the declared and structural extents must agree. A forged length
     /// must not be able to conceal bytes inside a document or expose bytes of
     /// the next one.
     #[test]
@@ -1770,7 +1777,7 @@ mod tests {
         long.push(0xAB);
         let err = decode_document(&long, &schema).unwrap_err();
         assert_eq!(err.code, BCode::B16,
-                   "an over-long declared length is B16, got {:?}", err);
+                   "an over-long declared length is ↯/t.4.16, got {:?}", err);
     }
 
     /// §6.3: stream decoding is recursion on the continuation.
@@ -1880,7 +1887,7 @@ mod tests {
         // The whole-document reader rejects it.
         let err = decode_document_whole(&bytes, &schema).unwrap_err();
         assert_eq!(err.code, BCode::B08,
-                   "expected B08 for trailing bytes, got: {:?}", err);
+                   "expected ↯/t.4.8 for trailing bytes, got: {:?}", err);
 
         // The single-document reader hands it back as the continuation, and
         // the document it decoded is exactly the clean one.
@@ -1898,27 +1905,27 @@ mod tests {
         let bytes = MAGIC.to_vec();
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         // §10 precedence: the truncation falls inside the signature-length
-        // varint, so B02 is required — not merely one of B02/B09.
+        // varint, so ↯/t.4.2 is required — not merely one of ↯/t.4.2/↯/t.4.9.
         assert_eq!(err.code, BCode::B02,
-                   "expected B02 for a truncation inside a varint, got: {:?}", err);
+                   "expected ↯/t.4.2 for a truncation inside a varint, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b02_malformed_varint() {
         // Magic + a varint byte with the continuation bit set but no
-        // following byte → B02 (malformed varint).
+        // following byte → ↯/t.4.2 (malformed varint).
         let mut bytes = MAGIC.to_vec();
         bytes.push(0x80);  // continuation bit set, but no follow-up byte
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B02,
-                   "expected B02 for malformed varint, got: {:?}", err);
+                   "expected ↯/t.4.2 for malformed varint, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b06_scalar_length_overruns_input() {
         // Magic + valid 33-byte signature + root child_count=1 +
         // keyword_index=0 (the only `name` field, Scalar string) +
-        // value_length = 99, but no value bytes follow → B06.
+        // value_length = 99, but no value bytes follow → ↯/t.4.6.
         let mut body = vec![0x21];              // sig_len = 33
         body.extend_from_slice(&craft_signature([0u8; 32]));
         body.push(0x01);                        // root child_count = 1
@@ -1928,13 +1935,13 @@ mod tests {
         let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B06,
-                   "expected B06 for scalar overruns, got: {:?}", err);
+                   "expected ↯/t.4.6 for scalar overruns, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b07_scalar_invalid_utf8() {
         // Magic + 33-byte sig + root child_count=1 + keyword_index=0 +
-        // value_length=2 + two invalid UTF-8 bytes → B07.
+        // value_length=2 + two invalid UTF-8 bytes → ↯/t.4.7.
         let mut body = vec![0x21];              // sig_len = 33
         body.extend_from_slice(&craft_signature([0u8; 32]));
         body.push(0x01);                        // root child_count = 1
@@ -1945,14 +1952,14 @@ mod tests {
         let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B07,
-                   "expected B07 for invalid UTF-8, got: {:?}", err);
+                   "expected ↯/t.4.7 for invalid UTF-8, got: {:?}", err);
     }
 
     #[test]
     fn bcode_b10_reference_does_not_resolve() {
         // Construct a malformed schema whose document has a Reference Field
         // pointing at a Definition that doesn't exist. The decoder treats
-        // this as a resolver-configuration error and emits B10.
+        // this as a resolver-configuration error and emits ↯/t.4.10.
         let bad_schema = crate::Schema {
             name: "bad".to_string(),
             document: crate::Struct {
@@ -1974,10 +1981,10 @@ mod tests {
         body.push(0x00);                        // keyword_index = 0 (child)
         let bytes = frame(&MAGIC, &body);
         // The decoder will look up `child`'s type, see Reference("missing-definition"),
-        // attempt to resolve, fail, and emit B10.
+        // attempt to resolve, fail, and emit ↯/t.4.10.
         let err = decode_document(&bytes, &bad_schema).unwrap_err();
         assert_eq!(err.code, BCode::B10,
-                   "expected B10 for dangling Reference, got: {:?}", err);
+                   "expected ↯/t.4.10 for dangling Reference, got: {:?}", err);
     }
 
     // ── Self-contained mode (§6.2) ───────────────────────────────────────
@@ -2073,25 +2080,25 @@ mod tests {
         // Flip a byte in the middle of the embedded schema body.
         let mid = schema_start + (schema_len as usize) / 2;
         bytes[mid] ^= 0xFF;
-        // Decoder should now report B11 (recomputed signature mismatch) or
-        // B12 (decode of corrupted schema failed). Either is acceptable;
+        // Decoder should now report ↯/t.4.11 (recomputed signature mismatch) or
+        // ↯/t.4.12 (decode of corrupted schema failed). Either is acceptable;
         // both are fatal and indicate the embedded body is corrupt.
         let err = decode_document_self_contained(&bytes).unwrap_err();
         assert!(matches!(err.code, BCode::B11 | BCode::B12),
-                "expected B11 or B12 after tampering, got: {:?}", err);
+                "expected ↯/t.4.11 or ↯/t.4.12 after tampering, got: {:?}", err);
     }
 
     #[test]
     fn decode_document_rejects_self_contained_magic() {
         // The external-mode decoder must not silently accept self-contained
-        // bytes; it should emit B01 with a hint pointing at the right entry.
+        // bytes; it should emit ↯/t.4.1 with a hint pointing at the right entry.
         let (schema_doc, composed, hashes) = small_schema();
         let data = name_doc("Dana");
         let bytes = encode_document_self_contained(&data, &schema_doc, &composed, &hashes);
         let err = decode_document(&bytes, &composed).unwrap_err();
         assert_eq!(err.code, BCode::B01);
         assert!(err.context.contains("self-contained"),
-                "B01 message should hint at self-contained mode; got: {}", err.context);
+                "↯/t.4.1 message should hint at self-contained mode; got: {}", err.context);
     }
 
     #[test]
@@ -2102,7 +2109,7 @@ mod tests {
         let err = decode_document_self_contained(&bytes).unwrap_err();
         assert_eq!(err.code, BCode::B01);
         assert!(err.context.contains("external"),
-                "B01 message should hint at external mode; got: {}", err.context);
+                "↯/t.4.1 message should hint at external mode; got: {}", err.context);
     }
 
     #[test]
@@ -2132,7 +2139,7 @@ mod tests {
 
     /// Toy codec for tests: canonical decimal integer text ↔ BinTEL varint
     /// bytes. The decoder is deliberately lenient about overlong varints,
-    /// which the B15 canonicality test exploits.
+    /// which the ↯/t.4.15 canonicality test exploits.
     struct DecimalVarint;
     impl Codec for DecimalVarint {
         fn encode(&self, text: &str) -> Result<Vec<u8>, Diagnostic> {
@@ -2152,7 +2159,7 @@ mod tests {
         }
         fn decode(&self, bytes: &[u8]) -> Result<String, String> {
             // Deliberately *lenient*: this toy codec accepts overlong
-            // encodings so that the B15 canonicality check has something to
+            // encodings so that the ↯/t.4.15 canonicality check has something to
             // catch. It must not reuse BinTEL's framing `decode_varint`,
             // which §4 requires to be strict about minimality — a codec is
             // application-defined and independent of BinTEL's own framing.
@@ -2275,7 +2282,7 @@ mod tests {
         let schema = amount_schema();
         // Overlong varint for 300: AC 82 00 — DecimalVarint's lenient
         // decoder accepts it, but re-encoding yields AC 02, so the
-        // OPTIONAL canonicality check reports B15.
+        // OPTIONAL canonicality check reports ↯/t.4.15.
         let signature = schema_signature_from_hashes(&[[0u8; 32]]);
         let mut body = Vec::new();
         body.extend(encode_varint(signature.len() as u64));

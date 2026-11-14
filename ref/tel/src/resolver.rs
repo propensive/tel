@@ -87,7 +87,7 @@ impl SchemaIdentifier {
     /// - `<domain>/<name>[:<version>|:<tag>]` — LIRA reference.
     /// - `<BASE-256>` — bare signature.
     ///
-    /// Returns `None` for inputs that match neither form (E121 at parse
+    /// Returns `None` for inputs that match neither form (↯/t.1.21 at parse
     /// time).
     pub fn parse(s: &str) -> Option<Self> {
         if s.contains('/') && s.chars().count() > 1 {
@@ -129,7 +129,7 @@ pub enum ResolutionError {
     /// A selected layer name matches no layer declared by the resolved
     /// schema (§8.1).
     UnknownLayer { name: String },
-    /// The identification could not be parsed (would be E121 at TEL
+    /// The identification could not be parsed (would be ↯/t.1.21 at TEL
     /// parse time, surfaced here for completeness).
     BadIdentifier,
 }
@@ -449,7 +449,7 @@ fn validate_schema_body(body: &str) -> Result<(), ResolutionError> {
 }
 
 /// True when the selected layer names appear in the schema's declaration
-/// order (§8.1). A selection out of declaration order is **E124**, raised
+/// order (§8.1). A selection out of declaration order is **↯/t.1.24**, raised
 /// at schema resolution; its recovery is to reorder and continue, which
 /// `compose_with_selected_layers` performs unconditionally.
 pub fn layers_in_declaration_order(doc: &Document, selected: &[String]) -> bool {
@@ -472,7 +472,7 @@ fn declared_layer_names(doc: &Document) -> Vec<String> {
 /// Compose a validated schema document with only the selected layers
 /// (§8.1). Layer names are matched against the declared layer names;
 /// composition follows the schema's declaration order regardless of
-/// selection order (E124 recovery). An empty selection composes the base
+/// selection order (↯/t.1.24 recovery). An empty selection composes the base
 /// schema alone: layers are OPTIONAL, and a document opts into exactly
 /// the layers it names. Returns the composed `Schema` together with its
 /// composed signature (the palimpsest of the base hash plus the selected

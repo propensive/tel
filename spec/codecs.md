@@ -44,7 +44,7 @@ them. Each is independent of the others: `tels` declares no encodings, so the Bi
 
 **Reserved names.** The following names are reserved for future revisions of this specification
 and MUST NOT be bound to any other behaviour: `f32`, `f16`, `u128`, `i128`, `bool`, `timestamp`,
-`duration`. A schema naming a reserved-but-undefined encoding is E313 (TEL §21.7) until the name
+`duration`. A schema naming a reserved-but-undefined encoding is ↯/t.3.13 (TEL §21.7) until the name
 is defined.
 
 **Validator role.** Because the namespace is shared (TEL §21.1), a standard codec name MAY also be
@@ -56,7 +56,7 @@ texts, so that `validate u64` and `encoding u64` never disagree.
 - `encode` is total on the accepted texts and rejects every other text. The accepted texts are
   **canonical**: a text that denotes an in-range value but is not in canonical form — leading
   zeros, a `+` sign, uppercase hexadecimal, `-0` for an integer type, surrounding or embedded
-  whitespace, a trailing `.` or `.0` on a float — is rejected, and the value is **E312**.
+  whitespace, a trailing `.` or `.0` on a float — is rejected, and the value is **↯/t.3.12**.
 - `decode` succeeds on exactly the image of `encode` (C3). For every codec but `f64` the image
   is the whole byte space of the codec's width; `f64` excludes the NaN patterns (§6).
 - The byte form has a fixed **width**, stated per codec and summarised in §9. `decode` MUST
@@ -80,7 +80,7 @@ For `uN` with `N ∈ {8, 16, 32, 64}`:
 | `u64` | 8     | `1`           | `0000000000000001`     |
 | `u64` | 8     | `18446744073709551615` | `FFFFFFFFFFFFFFFF` |
 
-`256` under `u8`, `007`, `+1`, `-0` and `1 ` are each E312.
+`256` under `u8`, `007`, `+1`, `-0` and `1 ` are each ↯/t.3.12.
 
 ## 5. Signed Integers: `i8`, `i16`, `i32`, `i64`
 
@@ -147,7 +147,7 @@ float    ::= "-"? ( "0" | [1-9][0-9]* ) ( "." [0-9]+ )? ( "e" ( "+" | "-" ) [0-9
 (b) parsing `t` as a decimal under round-to-nearest-even yields a binary64 value `x`, and (c)
 the canonical rendering of `x`, defined below, is code-point-identical to `t`. Condition (c) is
 what makes the mapping a bijection (C2, C3): `1.0`, `01`, `1e5`, `.5`, `1E5`, `+1`, `1e+05`,
-`0.10` and `100000.0` are all E312, while `1`, `100000`, `0.5` and `0.1` are accepted.
+`0.10` and `100000.0` are all ↯/t.3.12, while `1`, `100000`, `0.5` and `0.1` are accepted.
 
 **Canonical rendering of `x`.**
 
@@ -225,7 +225,7 @@ mis-adapted host; an implementation SHOULD run them at start-up or in its test s
 
 - **Accepted texts.** `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` — the
   RFC 9562 hyphenated form in lowercase only. Uppercase or mixed-case hexadecimal, braces, the
-  `urn:uuid:` prefix and the unhyphenated 32-digit form are E312.
+  `urn:uuid:` prefix and the unhyphenated 32-digit form are ↯/t.3.12.
 - **Byte form.** The 32 hexadecimal digits, hyphens removed, as 16 bytes in textual order.
 - **Width.** 16. Every one of the `2^128` byte patterns is accepted by `decode`; no version or
   variant check is made, so the nil and max UUIDs and non-RFC layouts round-trip.
@@ -241,7 +241,7 @@ mis-adapted host; an implementation SHOULD run them at start-up or in its test s
 ## 8. BLAKE3-256 Digest: `blake3-256`
 
 - **Accepted texts.** `[0-9a-f]{64}` — 64 lowercase hexadecimal digits. Uppercase digits are
-  E312.
+  ↯/t.3.12.
 - **Byte form.** The 32 bytes the digits denote, in textual order.
 - **Width.** 32. Every byte pattern is accepted by `decode`. The codec does not verify that the
   value is a digest of anything; it is the natural encoding for any 256-bit value written as
@@ -280,7 +280,7 @@ Reserved, not yet defined: `f32`, `f16`, `u128`, `i128`, `bool`, `timestamp`, `d
 *This section is informative.*
 
 - **TEL §21.7** defines the `Codec` interface, laws C1–C4, the `CodecBinding` mechanism, and the
-  validation outcome of a rejected text (E312) or an unresolved name (E313). This document adds
+  validation outcome of a rejected text (↯/t.3.12) or an unresolved name (↯/t.3.13). This document adds
   bindings; it changes nothing about the contract.
 - **BinTEL §7.1** carries an encoded scalar as the codec's bytes preceded by their length. For a
   standard codec the length is constant and is nonetheless written: BinTEL's framing is
@@ -292,7 +292,7 @@ Reserved, not yet defined: `f32`, `f16`, `u128`, `i128`, `bool`, `timestamp`, `d
   `memcmp` and no type dispatch. A RaTEL implementation therefore MUST bind every name in §9.
 - **Width declarations.** Where a schema declares a `width` for a scalar (TEL §20), a value that
   restates a standard codec's width (§9) is a no-op; a value that differs from it is a schema
-  error, **E226**. A width for a codec not defined here is the schema author's assertion about
+  error, **↯/t.2.26**. A width for a codec not defined here is the schema author's assertion about
   an application codec and is outside this document's scope.
 - **Validators.** The built-in validators of TEL §21.5 are unrelated to these codecs; a standard
   codec name bound additionally as a validator follows §3 above.
@@ -309,7 +309,7 @@ decoding is a bounded, branch-light operation:
   patterns (§6.3). A decoder MUST NOT substitute a default or a canonical NaN for a rejected
   pattern; the value is unrepresentable, and the containing document is malformed.
 - Decoded texts are canonical by construction (C2), so `encode(decode(b)) = b`; an
-  implementation that hardens by re-encoding (BinTEL §7.8, B15) pays one fixed-size
+  implementation that hardens by re-encoding (BinTEL §7.8, ↯/t.4.15) pays one fixed-size
   comparison per value.
 - The `f64` text parser accepts at most 17 significant digits in a canonical rendering, but the
   grammar of §6.2 permits longer digit strings and large exponents before condition (c) rejects

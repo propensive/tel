@@ -1,6 +1,6 @@
 //! RE2 pattern constraints (§21.8): syntax checking, whole-value matching,
 //! and the containment decision procedure backing MergeScalar's checked
-//! pattern replacement (§20.3, E223).
+//! pattern replacement (§20.3, ↯/t.2.23).
 //!
 //! The `regex` crate approximates the specification's RE2 syntax pin: like
 //! RE2 it excludes backreferences and lookaround, so every accepted pattern
@@ -14,7 +14,7 @@
 //! product state whose `new` components are all EOI-accepting and whose
 //! `old` component is not is reachable from the anchored start. The DFAs
 //! come from `regex-automata`; the walk is bounded by a state budget and
-//! FAILS CLOSED (`Err`, surfaced as E223) when the budget is exceeded or a
+//! FAILS CLOSED (`Err`, surfaced as ↯/t.2.23) when the budget is exceeded or a
 //! pattern cannot be compiled to a DFA (e.g. Unicode word boundaries),
 //! never silently accepting.
 
@@ -30,13 +30,13 @@ use regex_automata::{
 const STATE_BUDGET: usize = 100_000;
 
 /// Check that `pattern` is a valid pattern in the supported (RE2-style)
-/// syntax. E222 on failure.
+/// syntax. ↯/t.2.22 on failure.
 pub fn check_syntax(pattern: &str) -> Result<(), String> {
     regex::Regex::new(&anchored(pattern)).map(|_| ()).map_err(|error| error.to_string())
 }
 
 /// Whether `value` (in its entirety) matches `pattern` (§21.8). `Err` when
-/// the pattern does not compile — a schema error (E222) reported
+/// the pattern does not compile — a schema error (↯/t.2.22) reported
 /// elsewhere, so callers skip rather than double-report.
 pub fn matches_whole(pattern: &str, value: &str) -> Result<bool, String> {
     // Compiled per call for clarity, not speed: this is the reference

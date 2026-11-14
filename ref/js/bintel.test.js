@@ -117,9 +117,9 @@ test("varint round-trip random small/medium/large values", () => {
   }
 });
 
-test("varint malformed input → B02", () => {
-  // §10 precedence: a truncation falling inside a varint is B02, not the
-  // general end-of-input code B09.
+test("varint malformed input → ↯/t.4.2", () => {
+  // §10 precedence: a truncation falling inside a varint is ↯/t.4.2, not the
+  // general end-of-input code ↯/t.4.9.
   assert.throws(() => decodeVarint(Uint8Array.from([0x80])),
     e => e instanceof BintelDecodeError && e.code === BCode.B02);
 });
@@ -201,13 +201,13 @@ test("encode/decodeDocument: external-mode round trip with stub hash", () => {
   assert.deepEqual(decoded.children, children);
 });
 
-test("decodeDocument: bad magic → B01", () => {
+test("decodeDocument: bad magic → ↯/t.4.1", () => {
   const bytes = Uint8Array.from([0xDE, 0xAD, 0xBE, 0xEF, 0x21]);
   assert.throws(() => decodeDocument(bytes, nameSchema),
     e => e instanceof BintelDecodeError && e.code === BCode.B01);
 });
 
-test("decodeDocument: self-contained magic on external decoder → B01 with hint", () => {
+test("decodeDocument: self-contained magic on external decoder → ↯/t.4.1 with hint", () => {
   // Build a self-contained document and try to decode it as external mode.
   const children = [{ keyword: "name", kind: "scalar", text: "Bob" }];
   const baseHash = valueHash(children, nameSchema, stubBlake3);
@@ -218,7 +218,7 @@ test("decodeDocument: self-contained magic on external decoder → B01 with hint
   });
   try {
     decodeDocument(bytes, nameSchema);
-    assert.fail("expected B01");
+    assert.fail("expected ↯/t.4.1");
   } catch (e) {
     assert.ok(e instanceof BintelDecodeError);
     assert.equal(e.code, BCode.B01);
@@ -226,7 +226,7 @@ test("decodeDocument: self-contained magic on external decoder → B01 with hint
   }
 });
 
-test("decodeDocument: bad signature length → B03", () => {
+test("decodeDocument: bad signature length → ↯/t.4.3", () => {
   // magic + sig_len=35 (invalid: not 33 and not 37+2(n-2)) + 35 zero bytes.
   const body = new Uint8Array(1 + 35);
   body[0] = 35;
@@ -235,7 +235,7 @@ test("decodeDocument: bad signature length → B03", () => {
     e => e instanceof BintelDecodeError && e.code === BCode.B03);
 });
 
-test("decodeDocument: bad cadence XOR → B03", () => {
+test("decodeDocument: bad cadence XOR → ↯/t.4.3", () => {
   // magic + sig_len=33 + 33 zero bytes (XOR=0, not 0x79).
   const body = new Uint8Array(1 + 33);
   body[0] = 33;
@@ -244,7 +244,7 @@ test("decodeDocument: bad cadence XOR → B03", () => {
     e => e instanceof BintelDecodeError && e.code === BCode.B03 && /XOR/.test(e.context));
 });
 
-test("decodeDocument: keyword index out of range → B05", () => {
+test("decodeDocument: keyword index out of range → ↯/t.4.5", () => {
   // magic + valid 33-byte sig + child_count=1 + kidx=99.
   const sig = craftValidSignature();
   const body = new Uint8Array(1 + 33 + 1 + 1);
@@ -272,7 +272,7 @@ test("document length counts the bytes after itself (§6.1 field 2)", () => {
   assert.equal(declared, 1 + 33 + root.length);
 });
 
-test("B16: declared length disagreeing with the structural extent", () => {
+test("↯/t.4.16: declared length disagreeing with the structural extent", () => {
   const children = [{ keyword: "name", kind: "scalar", text: "Alice" }];
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const good = encodeDocument(children, nameSchema, [baseHash]);
@@ -344,7 +344,7 @@ function concat(parts) {
   return out;
 }
 
-test("decodeDocumentWhole: trailing bytes → B08, but decodeDocument returns them as the continuation", () => {
+test("decodeDocumentWhole: trailing bytes → ↯/t.4.8, but decodeDocument returns them as the continuation", () => {
   const children = [{ keyword: "name", kind: "scalar", text: "Alice" }];
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const valid = encodeDocument(children, nameSchema, [baseHash]);
@@ -457,7 +457,7 @@ test("encode/decodeDocumentSelfContained: round trip", () => {
   assert.deepEqual(decoded.embeddedSchemaChildren, schemaChildren);
 });
 
-test("decodeDocumentSelfContained: tampered embedded body → B11 or B12", () => {
+test("decodeDocumentSelfContained: tampered embedded body → ↯/t.4.11 or ↯/t.4.12", () => {
   const dataChildren = [{ keyword: "name", kind: "scalar", text: "Charlie" }];
   const schemaChildren = [{ keyword: "name", kind: "scalar", text: "schema" }];
   const baseHash = valueHash(schemaChildren, nameSchema, stubBlake3);
@@ -480,21 +480,21 @@ test("decodeDocumentSelfContained: tampered embedded body → B11 or B12", () =>
 
   try {
     decodeDocumentSelfContained(bytes, { tels: nameSchema, buildSchema });
-    assert.fail("expected B11 or B12 after tampering");
+    assert.fail("expected ↯/t.4.11 or ↯/t.4.12 after tampering");
   } catch (e) {
     assert.ok(e instanceof BintelDecodeError, `got ${e}`);
     assert.ok(e.code === BCode.B11 || e.code === BCode.B12,
-      `expected B11 or B12, got ${e.code}`);
+      `expected ↯/t.4.11 or ↯/t.4.12, got ${e.code}`);
   }
 });
 
-test("decodeDocumentSelfContained: external magic → B01 with hint", () => {
+test("decodeDocumentSelfContained: external magic → ↯/t.4.1 with hint", () => {
   const children = [{ keyword: "name", kind: "scalar", text: "X" }];
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const bytes = encodeDocument(children, nameSchema, [baseHash]);
   try {
     decodeDocumentSelfContained(bytes, { tels: nameSchema, buildSchema: () => ({}) });
-    assert.fail("expected B01");
+    assert.fail("expected ↯/t.4.1");
   } catch (e) {
     assert.ok(e instanceof BintelDecodeError);
     assert.equal(e.code, BCode.B01);
@@ -564,7 +564,7 @@ const codecSchema = {
 };
 
 // Toy codec: canonical decimal integer text ↔ varint bytes. The decoder is
-// deliberately lenient about overlong varints, which the B15 test exploits.
+// deliberately lenient about overlong varints, which the ↯/t.4.15 test exploits.
 const decimalVarintCodec = {
   encode(text) {
     const canonical = /^(0|[1-9][0-9]*)$/.test(text);
@@ -573,7 +573,7 @@ const decimalVarintCodec = {
   },
   decode(bytes) {
     // Deliberately *lenient*: this toy codec accepts overlong encodings so
-    // that the B15 canonicality check has something to catch. It must not
+    // that the ↯/t.4.15 canonicality check has something to catch. It must not
     // reuse BinTEL's framing decodeVarint, which §4 requires to be strict
     // about minimality — a codec is application-defined and independent of
     // BinTEL's own framing.
@@ -622,21 +622,21 @@ test("encode with codec-rejected value throws", () => {
     /rejected by codec/);
 });
 
-test("decode with unresolved encoding → B13", () => {
+test("decode with unresolved encoding → ↯/t.4.13", () => {
   const children = [{ keyword: "amount", kind: "scalar", text: "300" }];
   const doc = encodeDocument(children, codecSchema, [new Uint8Array(HASH_LEN)], codecBinding);
   assert.throws(() => decodeDocument(doc, codecSchema),
     (e) => e instanceof BintelDecodeError && e.code === BCode.B13);
 });
 
-test("decode with codec-rejected bytes → B14", () => {
+test("decode with codec-rejected bytes → ↯/t.4.14", () => {
   // Root: 1 child, kidx 0, len 1, byte 0x80 (a varint that never terminates).
   const badRoot = Uint8Array.from([0x01, 0x00, 0x01, 0x80]);
   assert.throws(() => decodeRoot(badRoot, codecSchema, codecBinding),
     (e) => e instanceof BintelDecodeError && e.code === BCode.B14);
 });
 
-test("non-canonical bytes pass leniently, then B15 with checkCanonical", () => {
+test("non-canonical bytes pass leniently, then ↯/t.4.15 with checkCanonical", () => {
   // Overlong varint for 300: AC 82 00 — decodes to "300" but re-encodes to AC 02.
   const overlong = Uint8Array.from([0x01, 0x00, 0x03, 0xAC, 0x82, 0x00]);
   const decoded = decodeRoot(overlong, codecSchema, codecBinding);

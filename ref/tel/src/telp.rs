@@ -8,7 +8,7 @@
 //! atom-derived elements before compound-derived ones.
 //!
 //! TELP is a query mechanism: it performs no mutation, and its failures are
-//! outcomes of this API rather than document errors, so they carry no E-codes
+//! outcomes of this API rather than document errors, so they carry no bolt codes
 //! (telp.md §7).
 
 use crate::bintel::{enumerate_children, member_index, Element};

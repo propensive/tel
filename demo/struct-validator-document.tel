@@ -7,7 +7,7 @@ tel 1.0 example.org/event-log
 # `start-precedes-end` struct validator: its end-date is BEFORE its
 # start-date. When parsed by a TEL implementation that has registered
 # the `start-precedes-end` validator, the second event produces an
-# E310 diagnostic against the struct, with a nested per-field
+# ↯/t.3.10 diagnostic against the struct, with a nested per-field
 # diagnostic pinpointing `end-date`.
 
 entry

@@ -514,11 +514,11 @@ bool tree_sitter_tel_external_scanner_scan(void *payload, TSLexer *lexer, const 
       indent = 0;
     } else {
       if (spaces < s->margin) {
-        // E106: less than margin. Treat as indent 0 for recovery.
+        // ↯/t.1.6: less than margin. Treat as indent 0 for recovery.
         indent = 0;
       } else {
         uint32_t excess = spaces - s->margin;
-        // Odd indentation → round down for recovery. (E107 is reported
+        // Odd indentation → round down for recovery. (↯/t.1.7 is reported
         // semantically by downstream tooling; the tree-sitter layer just
         // produces a parseable tree.)
         indent = (int32_t)(excess / 2);

@@ -40,11 +40,11 @@ name tels
 
 # A `field` declaration at a member position. The four loosen/tighten flags
 # yield the per-axis Polarity (§20). `key` marks the identifying field of the
-# enclosing struct (E219–E221; instance-level uniqueness is E314). It must
+# enclosing struct (↯/t.2.19–↯/t.2.21; instance-level uniqueness is ↯/t.3.14). It must
 # precede `default` in member order so that a trailing `key` atom is consumed
 # as a flag, not as a default value (§20.5). `default` is permitted only on
-# required Scalar-typed fields (E203). `index` declares a secondary index for
-# RaTEL (E228–E230): each `index` child is one index over the tuple of its
+# required Scalar-typed fields (↯/t.2.3). `index` declares a secondary index for
+# RaTEL (↯/t.2.28–↯/t.2.30): each `index` child is one index over the tuple of its
 # `path` atoms, each a TELP relative to an element of this field's type.
 # Layout only: it adds no document constraint and is ignored by subtyping
 # (§24.3). It follows `default`, so it is always written as a child line.
@@ -67,7 +67,7 @@ record Field
 # resolving within the enclosing field's type to a non-repeatable Scalar
 # member through non-repeatable Field members only. Written inline:
 # `index /country /city`. `path` is required and repeatable, so an `index`
-# with no paths is E307 structurally.
+# with no paths is ↯/t.3.7 structurally.
 
 record Index
   description
@@ -108,7 +108,7 @@ record Record
 # by named validators and/or RE2 pattern constraints, with an optional
 # binary encoding. A scalar with no constraints accepts every value, like
 # the built-in `String`. `width` (decimal byte count, meaningful only with an
-# `encoding`; E225–E227) and `intern` (E231) are RaTEL storage-layout
+# `encoding`; ↯/t.2.25–↯/t.2.27) and `intern` (↯/t.2.31) are RaTEL storage-layout
 # annotations; both follow the repeatable `validate` member and so are always
 # written as child lines (`width 16`, `intern`).
 
@@ -125,7 +125,7 @@ record Scalar
 
 # A top-level `select` declaration. `exclude` children are permitted
 # lexically but only valid inside a layer's select body; appearing in a
-# base-schema select body raises E216 during construction.
+# base-schema select body raises ↯/t.2.16 during construction.
 
 record Select
   description
@@ -166,7 +166,7 @@ select Member
   variant select SelectRef
   variant validate Identifier
 
-# Children admissible inside a Select body. `exclude` is layer-only (E216 in
+# Children admissible inside a Select body. `exclude` is layer-only (↯/t.2.16 in
 # a base) but is lexically permitted here.
 
 select SelectChild
@@ -214,7 +214,7 @@ name acceptance
 # A schema signature: a palimpsest of component hashes at the BinTEL-pinned
 # parameters. The codec rejects any byte sequence that is not structurally a
 # signature (a length other than 33, 37, 39, 41, …, or a cadence byte other
-# than 0x79), so a malformed signature is E312 at validation time.
+# than 0x79), so a malformed signature is ↯/t.3.12 at validation time.
 
 scalar Signature
   description

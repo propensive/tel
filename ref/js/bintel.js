@@ -10,7 +10,7 @@
 //   - §8 schema signature as a palimpsest at the BinTEL-pinned parameters
 //     (H, k_i, k_r) = (32, 4, 2)
 //   - §6.3 continuation and document streams
-//   - §10 decoder error taxonomy (B01–B16)
+//   - §10 decoder error taxonomy (↯/t.4.1–↯/t.4.16)
 //
 // BLAKE3 is pluggable: any function that takes a Uint8Array and returns a
 // 32-byte Uint8Array is accepted. The library carries no hashing dependency
@@ -40,22 +40,22 @@ export const SIGNATURE_CADENCE_BYTE = 0x79;
 
 // Decoder error codes correspond to §10 of the BinTEL Specification.
 export const BCode = Object.freeze({
-  B01: "B01", // magic absent or unrecognised
-  B02: "B02", // malformed varint
-  B03: "B03", // invalid signature length / cadence XOR
-  B04: "B04", // signature does not decode against the library (multi-component)
-  B05: "B05", // keyword index out of range
-  B06: "B06", // scalar value length overruns input
-  B07: "B07", // scalar bytes are not valid UTF-8
-  B08: "B08", // whole-document reader found a non-empty continuation (§6.3)
-  B09: "B09", // end of input mid-decode
-  B10: "B10", // Reference does not resolve to a Definition
-  B11: "B11", // embedded-schema signature mismatch (self-contained)
-  B12: "B12", // embedded schema does not decode under tels (self-contained)
-  B13: "B13", // scalar's declared encoding not resolved by the codec binding
-  B14: "B14", // encoded scalar's value bytes rejected by the codec decoder
-  B15: "B15", // codec canonicality check failed (re-encoded bytes differ)
-  B16: "B16", // declared document length disagrees with the structural extent
+  B01: "↯/t.4.1", // magic absent or unrecognised
+  B02: "↯/t.4.2", // malformed varint
+  B03: "↯/t.4.3", // invalid signature length / cadence XOR
+  B04: "↯/t.4.4", // signature does not decode against the library (multi-component)
+  B05: "↯/t.4.5", // keyword index out of range
+  B06: "↯/t.4.6", // scalar value length overruns input
+  B07: "↯/t.4.7", // scalar bytes are not valid UTF-8
+  B08: "↯/t.4.8", // whole-document reader found a non-empty continuation (§6.3)
+  B09: "↯/t.4.9", // end of input mid-decode
+  B10: "↯/t.4.10", // Reference does not resolve to a Definition
+  B11: "↯/t.4.11", // embedded-schema signature mismatch (self-contained)
+  B12: "↯/t.4.12", // embedded schema does not decode under tels (self-contained)
+  B13: "↯/t.4.13", // scalar's declared encoding not resolved by the codec binding
+  B14: "↯/t.4.14", // encoded scalar's value bytes rejected by the codec decoder
+  B15: "↯/t.4.15", // codec canonicality check failed (re-encoded bytes differ)
+  B16: "↯/t.4.16", // declared document length disagrees with the structural extent
 });
 
 export class BintelDecodeError extends Error {
@@ -89,7 +89,7 @@ export function encodeVarint(n) {
 }
 
 // Decode a varint starting at `bytes[offset]`. Returns { value, consumed }
-// on success; throws B02 / B09 on malformed input or truncation.
+// on success; throws ↯/t.4.2 / ↯/t.4.9 on malformed input or truncation.
 export function decodeVarint(bytes, offset = 0) {
   let value = 0;
   let shift = 1;
@@ -120,8 +120,8 @@ export function decodeVarint(bytes, offset = 0) {
       throw new BintelDecodeError(BCode.B02, "varint exceeds this decoder's safe integer range");
     }
   }
-  // §10 precedence: a truncation falling inside a varint is B02, not the
-  // general end-of-input code B09.
+  // §10 precedence: a truncation falling inside a varint is ↯/t.4.2, not the
+  // general end-of-input code ↯/t.4.9.
   throw new BintelDecodeError(BCode.B02, "varint extends past end of input");
 }
 
@@ -197,7 +197,7 @@ export function lookupByIndex(members, k, schema) {
   return null;
 }
 
-// Count of keywords contributed by a member list (used for B05 range checks).
+// Count of keywords contributed by a member list (used for ↯/t.4.5 range checks).
 export function keywordCount(members, schema) {
   let n = 0;
   for (const m of members) {
@@ -284,7 +284,7 @@ export function encodeRoot(children, schema, codecs) {
 
 // Encode a scalar payload (length varint + value bytes) per §7.1: UTF-8
 // text when the type declares no encoding, the bound codec's bytes
-// otherwise. Encode-side codec failures throw a plain Error (the E312/E313
+// otherwise. Encode-side codec failures throw a plain Error (the ↯/t.3.12/↯/t.3.13
 // conditions at the TEL layer): the encoder MUST fail without emitting a
 // document.
 function encodeScalarPayload(resolved, text, keyword, codecCache, parts) {
@@ -362,7 +362,7 @@ class Cursor {
       return value;
     } catch (e) {
       if (e instanceof BintelDecodeError) {
-        // Replace B02 context with our caller's context for clearer errors.
+        // Replace ↯/t.4.2 context with our caller's context for clearer errors.
         if (e.code === BCode.B02) throw new BintelDecodeError(BCode.B02, ctxIfMalformed);
         throw e;
       }
@@ -375,7 +375,7 @@ class Cursor {
 // children. Used both for the outer document root (in either mode) and for
 // the embedded schema body in self-contained mode. `codecs` (optional) is
 // the codec binding (TEL §21.7); `checkCanonical` enables the OPTIONAL
-// re-encode verification (B15 on mismatch).
+// re-encode verification (↯/t.4.15 on mismatch).
 export function decodeRoot(bytes, schema, codecs, checkCanonical = false) {
   const cur = new Cursor(bytes);
   const out = decodeRootFromCursor(cur, schema, makeCodecCache(codecs), checkCanonical);
@@ -535,7 +535,7 @@ function readDocumentLength(cur) {
   return cur.pos + declared;
 }
 
-// B16: the declared and structural extents must agree exactly.
+// ↯/t.4.16: the declared and structural extents must agree exactly.
 function checkExtent(cur, end) {
   if (cur.pos !== end) {
     throw new BintelDecodeError(BCode.B16,
@@ -667,13 +667,13 @@ export function encodeDocumentSelfContained({
 //   { composedSchema, componentHashes }
 //
 // where `componentHashes` is the ordered component hashes (used for the
-// B11 verification, recomputed against the carried signature) and
+// ↯/t.4.11 verification, recomputed against the carried signature) and
 // `composedSchema` is the composed Schema to decode the data root under.
 //
 // Returns { signature, embeddedSchemaChildren, composedSchema, children }.
 //
-// Throws B11 if the recomputed signature doesn't match the carried one,
-// B12 if the embedded schema body fails to decode or fails to construct.
+// Throws ↯/t.4.11 if the recomputed signature doesn't match the carried one,
+// ↯/t.4.12 if the embedded schema body fails to decode or fails to construct.
 export function decodeDocumentSelfContained(bytes, { tels, buildSchema, codecs, checkCanonical = false }) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC_SELF_CONTAINED, "selfContained");

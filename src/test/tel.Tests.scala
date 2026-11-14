@@ -55,7 +55,7 @@ document
     t"tel 1.0 $identifier\n\nname Alice\nemail alice@example.org\ncontact active\n"
 
   // A schema whose repeatable `pet` member is typed by a record with a `key` field (§20), so that
-  // sibling pets must have distinct names (§21.6, E314).
+  // sibling pets must have distinct names (§21.6, ↯/t.3.14).
   val keyedSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name keyed
@@ -107,7 +107,7 @@ layer
 """.tt
 
   // A schema whose scalar carries a `pattern` constraint (§21.8), so a value that does not match
-  // it is E315.
+  // it is ↯/t.3.15.
   val patternSchemaText: Text = """tel 1.0 specification.tel/tels:2.1.0
 
 name coded
@@ -248,7 +248,7 @@ field looks-like-a-compound
 
       test(m"An unresolved schema yields an information diagnostic on the identifier"):
         TelServer.diagnose(document(t"example.org/no-such-schema"), resolver)
-        . filter(_.code == t"schema-unresolved")
+        . filter(_.code == t"↯/t.6.1")
       . assert: diagnostics =>
           diagnostics.size == 1 && diagnostics.all: diagnostic =>
             diagnostic.severity == Lsp.DiagnosticSeverity.Information
@@ -256,11 +256,11 @@ field looks-like-a-compound
 
       test(m"A resolved schema yields no unresolved-schema diagnostic"):
         TelServer.diagnose(document(signature), resolver)
-        . count(_.code == t"schema-unresolved")
+        . count(_.code == t"↯/t.6.1")
       . assert(_ == 0)
 
       // Stratiform's schema reconstruction understands scalar `encoding` (§21.7), so a schema
-      // declaring one is simply valid — this used to raise a spurious E306 downgraded to a warning.
+      // declaring one is simply valid — this used to raise a spurious ↯/t.3.6 downgraded to a warning.
       test(m"A scalar `encoding` declaration is accepted"):
         val encodingSchema = List
           ( t"tel 1.0 specification.tel/tels:2.1.0", t"", t"name enc", t"",
@@ -273,56 +273,56 @@ field looks-like-a-compound
       . assert(_ == 0)
 
       // A `key` field (§20) is likewise part of the schema language now: the declaration is valid,
-      // and duplicate key values among repeatable siblings are E314 (§21.6).
+      // and duplicate key values among repeatable siblings are ↯/t.3.14 (§21.6).
       test(m"A `key` field declaration is accepted"):
         TelServer.diagnose(keyedSchemaText, resolver)
         . count(_.severity == Lsp.DiagnosticSeverity.Error)
       . assert(_ == 0)
 
-      test(m"Duplicate key values raise E314"):
+      test(m"Duplicate key values raise ↯/t.3.14"):
         TelServer.diagnose(keyedDocument(keyedSignature, t"amy"), resolver)
-        . filter(_.code == t"E314")
+        . filter(_.code == t"↯/t.3.14")
       . assert(_.size == 1)
 
-      test(m"Distinct key values raise no E314"):
+      test(m"Distinct key values raise no ↯/t.3.14"):
         TelServer.diagnose(keyedDocument(keyedSignature, t"cat"), resolver)
-        . count(_.code == t"E314")
+        . count(_.code == t"↯/t.3.14")
       . assert(_ == 0)
 
-      test(m"A duplicate definition (E210) is located on the second declaration"):
+      test(m"A duplicate definition (↯/t.2.10) is located on the second declaration"):
         val duplicated = List
           ( t"tel 1.0 specification.tel/tels:2.1.0", t"", t"name dup", t"",
             t"record Foo", t"  field a String", t"", t"record Foo", t"  field b String", t"",
             t"document", t"  field foo Foo optional" )
         . join(t"\n")
 
-        TelServer.diagnose(duplicated, resolver).filter(_.code == t"E210")
+        TelServer.diagnose(duplicated, resolver).filter(_.code == t"↯/t.2.10")
       . assert: diagnostics =>
           diagnostics.size == 1 && diagnostics.all(_.range.start.line == 7)
 
     suite(m"Validators, patterns and encodings"):
       // The four built-in validators (§21.5) run in the editor: `Identifier` rejects a capital.
-      test(m"A built-in validator rejection is E310"):
+      test(m"A built-in validator rejection is ↯/t.3.10"):
         TelServer.diagnose(keyedDocument(keyedSignature, t"Cat"), resolver).map(_.code)
-      . assert(_ == List(t"E310"))
+      . assert(_ == List(t"↯/t.3.10"))
 
-      test(m"A value failing a pattern constraint is E315"):
+      test(m"A value failing a pattern constraint is ↯/t.3.15"):
         TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode ab\n", resolver).map(_.code)
-      . assert(_ == List(t"E315"))
+      . assert(_ == List(t"↯/t.3.15"))
 
       test(m"A value matching its pattern constraint is accepted"):
         TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode AB\n", resolver).size
       . assert(_ == 0)
 
       // The editor binds only the codecs the specification defines; an application's encoding
-      // leaves its values unchecked, which is a warning here rather than the E313 error an
+      // leaves its values unchecked, which is a warning here rather than the ↯/t.3.13 error an
       // application raises.
-      test(m"An application-defined encoding is an E313 warning, not an error"):
+      test(m"An application-defined encoding is an ↯/t.3.13 warning, not an error"):
         TelServer.diagnose(t"tel 1.0 example.org/coded\n\ncode AB\nblob 0a0b\n", resolver)
         . map(diagnostic => (diagnostic.code, diagnostic.severity))
-      . assert(_ == List((t"E313", Lsp.DiagnosticSeverity.Warning)))
+      . assert(_ == List((t"↯/t.3.13", Lsp.DiagnosticSeverity.Warning)))
 
-      // E224 was withdrawn: a scalar with no constraint is valid (§20).
+      // ↯/t.2.24 was withdrawn: a scalar with no constraint is valid (§20).
       test(m"An unconstrained scalar declaration is valid"):
         val text = t"tel 1.0 specification.tel/tels:2.1.0\n\nname loose\n\nscalar Loose\n\ndocument\n  field x Loose\n"
         TelServer.diagnose(text, resolver).size
@@ -346,13 +346,13 @@ field looks-like-a-compound
         TelServer.diagnose(text, resolver).size
       . assert(_ == 0)
 
-      test(m"A malformed signature in an acceptance is E312 from the schema-signature codec"):
+      test(m"A malformed signature in an acceptance is ↯/t.3.12 from the schema-signature codec"):
         TelServer.diagnose(acceptance + t"accept ABCDEFG\n", resolver).map(_.code)
-      . assert(_ == List(t"E312"))
+      . assert(_ == List(t"↯/t.3.12"))
 
-      test(m"A component prefix shorter than four bytes is E315"):
+      test(m"A component prefix shorter than four bytes is ↯/t.3.15"):
         TelServer.diagnose(acceptance + t"accept $signature ABC\n", resolver).map(_.code)
-      . assert(_ == List(t"E315"))
+      . assert(_ == List(t"↯/t.3.15"))
 
     suite(m"Registry preloading"):
       test(m"A stale built-in copy is refreshed from the embedded source"):
@@ -488,7 +488,7 @@ field looks-like-a-compound
       // ── Hard gaps (§10.3): a 2+-space run starts an atom and locks the line into hard mode ──
 
       // `contact  fluffy cat` is ONE atom, `fluffy cat`, binding Contact's optional `label` (a
-      // `String`; a `key` field's `Identifier` would reject the space, E310, and no refactoring is
+      // `String`; a `key` field's `Identifier` would reject the space, ↯/t.3.10, and no refactoring is
       // offered on an invalid document); the generated child line must also use a hard gap so the
       // value stays a single phrase.
       test(m"Expanding a hard-gap atom preserves it as one phrase"):
@@ -558,7 +558,7 @@ field looks-like-a-compound
       . assert:
           case List(header, problem) =>
             header.starts(t"pets.tel: 1 error")
-            && problem.starts(t"line 3, columns 1-3 [E314] error: ")
+            && problem.starts(t"line 3, columns 1-3 [↯/t.3.14] error: ")
             && !problem.contains(t"pet amy")
 
           case _ => false
@@ -583,22 +583,22 @@ field looks-like-a-compound
     suite(m"Schema coherence"):
       def schemaDoc(body: Text): Text = t"tel 1.0 specification.tel/tels:2.1.0\n\n$body"
 
-      test(m"An unresolved type reference is E209, located on the TypeName atom"):
+      test(m"An unresolved type reference is ↯/t.2.9, located on the TypeName atom"):
         val text = schemaDoc(t"name x\n\ndocument\n  field foo Widget\n")
         TelServer.diagnose(text, resolver)
         . map(d => (d.code.or(t"?"), d.range.start.line, d.range.start.character))
-      . assert(_ == List((t"E209", 5, 12)))
+      . assert(_ == List((t"↯/t.2.9", 5, 12)))
 
-      test(m"A field referencing a select is E217, not the SelectRef form"):
+      test(m"A field referencing a select is ↯/t.2.17, not the SelectRef form"):
         val text = schemaDoc:
           t"name x\n\nselect Status\n  variant on Flag\n  variant off Flag\n\ndocument\n  field s Status\n"
         TelServer.diagnose(text, resolver).map(_.code.or(t"?"))
-      . assert(_ == List(t"E217"))
+      . assert(_ == List(t"↯/t.2.17"))
 
-      test(m"A default on an optional member is E203 (the §20.1 battery is wired in)"):
+      test(m"A default on an optional member is ↯/t.2.3 (the §20.1 battery is wired in)"):
         val text = schemaDoc(t"name x\n\ndocument\n  field foo String optional fallback\n")
         TelServer.diagnose(text, resolver).map(_.code.or(t"?"))
-      . assert(_ == List(t"E203"))
+      . assert(_ == List(t"↯/t.2.3"))
 
       test(m"A coherent schema stays diagnostic-free"):
         TelServer.diagnose(keyedSchemaText, resolver).size
@@ -647,17 +647,17 @@ field looks-like-a-compound
         . count(_.severity == Lsp.DiagnosticSeverity.Error)
       . assert(_ > 0)
 
-      // §8.1: an undeclared layer name is a runtime resolution error, which carries no E-code;
-      // only a selection out of declaration order is E124.
-      test(m"An unknown layer selection is a resolution error, not E124"):
+      // §8.1: an undeclared layer name is a runtime resolution error, which carries no code of the specification;
+      // only a selection out of declaration order is ↯/t.1.24.
+      test(m"An unknown layer selection is a resolution error, not ↯/t.1.24"):
         TelServer.diagnose(t"tel 1.0 example.org/themed +bogus\n\ntitle Hello\n", resolver)
         . map(diagnostic => (diagnostic.code, diagnostic.severity))
-      . assert(_ == List((t"layer-unknown", Lsp.DiagnosticSeverity.Error)))
+      . assert(_ == List((t"↯/t.6.2", Lsp.DiagnosticSeverity.Error)))
 
-      test(m"A layer selection out of declaration order is E124"):
+      test(m"A layer selection out of declaration order is ↯/t.1.24"):
         TelServer.diagnose(t"tel 1.0 example.org/themed +footer +extras\n\ntitle Hello\n", resolver)
         . map(_.code)
-      . assert(_ == List(t"E124"))
+      . assert(_ == List(t"↯/t.1.24"))
 
       test(m"A signature naming a non-prefix subset of the layers resolves by decoding"):
         resolver(themedFooterSignature)
@@ -691,12 +691,12 @@ field looks-like-a-compound
           ( t"tel 1.0 example.org/themed +extras $themedFooterSignature\n\ntitle Hello\n",
             resolver )
         . map(_.code)
-      . assert(_ == List(t"signature-disagrees"))
+      . assert(_ == List(t"↯/t.6.3"))
 
       test(m"A signature belonging to another schema than the reference is reported"):
         TelServer.diagnose(t"tel 1.0 example.org/themed $signature\n\ntitle Hello\n", resolver)
         . map(_.code)
-      . assert(_.has(t"signature-disagrees"))
+      . assert(_.has(t"↯/t.6.3"))
 
     suite(m"Outline"):
       def kinds(text: Text): Map[Text, Lsp.SymbolKind] =

@@ -95,7 +95,7 @@ has a key field, a primary index (§9.1).
 
 As in BinTEL, a required Scalar member supplied by its `default` is a value like any other and
 is stored (BinTEL §7.6); an explicitly empty text and a defaulted empty text are the same value
-(BinTEL §7.5); and an invalid document (any E3xx condition of TEL §21.9) is never encoded — a
+(BinTEL §7.5); and an invalid document (any ↯/t.3 condition of TEL §21.9) is never encoded — a
 RaTEL writer MUST fail rather than emit one.
 
 Unlike BinTEL, RaTEL is **not byte-deterministic**: two conforming writers MAY lay out the same
@@ -117,17 +117,17 @@ The header occupies bytes `0..144` of the file:
 
 | Offset | Size | Field |
 | -----: | ---: | ----- |
-| 0 | 4 | **Magic number**: the bytes `B1 C4 B5 BB`. In the BASE-256 alphabet ([BASE-256](base256.md) §4) these are `ᾱ` (`U+1FB1`), `τ`, `ε`, `λ` — `ᾱτελ`, with the alpha of *access* beside BinTEL's `βτελ`. Every byte is `≥ 0x80`, so the file cannot be mistaken for text. Any other value is **R01**. |
-| 4 | 1 | **Version**: `0x01`. Any other value is **R02**. |
-| 5 | 1 | Reserved; MUST be `0x00` (**R03**). |
-| 6 | 2 | **Flags** (`u16`): bit 0 — a digests section is present (§5.7); bit 1 — the value hash field holds the document's value hash. All other bits MUST be clear (**R03**). |
-| 8 | 8 | **Committed length** (`u64`): the number of bytes of the file a reader may use. MUST be `≥ 144`, a multiple of 8, and `≤` the file's actual length (**R04**). Bytes at or beyond the committed length MUST NOT be read. |
+| 0 | 4 | **Magic number**: the bytes `B1 C4 B5 BB`. In the BASE-256 alphabet ([BASE-256](base256.md) §4) these are `ᾱ` (`U+1FB1`), `τ`, `ε`, `λ` — `ᾱτελ`, with the alpha of *access* beside BinTEL's `βτελ`. Every byte is `≥ 0x80`, so the file cannot be mistaken for text. Any other value is **↯/t.5.1**. |
+| 4 | 1 | **Version**: `0x01`. Any other value is **↯/t.5.2**. |
+| 5 | 1 | Reserved; MUST be `0x00` (**↯/t.5.3**). |
+| 6 | 2 | **Flags** (`u16`): bit 0 — a digests section is present (§5.7); bit 1 — the value hash field holds the document's value hash. All other bits MUST be clear (**↯/t.5.3**). |
+| 8 | 8 | **Committed length** (`u64`): the number of bytes of the file a reader may use. MUST be `≥ 144`, a multiple of 8, and `≤` the file's actual length (**↯/t.5.4**). Bytes at or beyond the committed length MUST NOT be read. |
 | 16 | 96 | **Section directory**: six entries of `(offset: u64, length: u64)`, in the fixed order *schema*, *strings*, *variable*, *tables*, *indexes*, *digests*. |
 | 112 | 32 | **Value hash**: the BLAKE3-256 value hash of the document (BinTEL §3) when flag bit 1 is set; otherwise 32 zero bytes. |
 
-Directory constraints, each **R05** when violated: every `offset` is a multiple of 8 and
+Directory constraints, each **↯/t.5.5** when violated: every `offset` is a multiple of 8 and
 `≥ 144`; every `length` is a multiple of 8; `offset + length ≤ committed length` (computed
-without overflow). Non-empty sections MUST NOT overlap (**R06**). A section MAY have `length = 0`
+without overflow). Non-empty sections MUST NOT overlap (**↯/t.5.6**). A section MAY have `length = 0`
 — the strings, variable, indexes and digests sections are empty when the document needs nothing
 of them — and a zero-length section does not overlap anything, whatever its offset. Bytes below
 the committed length that belong to no section are padding.
@@ -142,21 +142,21 @@ verbatim:
 
 1. the byte length of the schema signature (BinTEL integer, §4 there) and the signature bytes —
    a palimpsest at the BinTEL-pinned parameters, whose length MUST be `33` or `37 + 2·(n − 2)`,
-   `n ≥ 2`, and whose bytes MUST XOR to `0x79` (**R08**; the B03 conditions);
+   `n ≥ 2`, and whose bytes MUST XOR to `0x79` (**↯/t.5.8**; the ↯/t.4.3 conditions);
 2. the byte length of the schema body (BinTEL integer) and the body — the bare document-root
    encoding of the schema document under `tels` (TEL §20.5), with the root member list taken to
    be `tels.document.members`;
 3. zero padding to the section length.
 
-A reader decodes the body under its built-in `tels` axiom (**R09** if it does not decode; the B12
+A reader decodes the body under its built-in `tels` axiom (**↯/t.5.9** if it does not decode; the ↯/t.4.12
 condition), composes the schema per TEL §20.3 — the body MAY contain `layer` compounds — and
 recomputes the composed signature per BinTEL §8, which MUST equal the carried signature
-byte-for-byte (**R10**; the B11 condition). A reader MUST NOT interpret any table, region or
-index before R10 has passed. Having composed the schema, the reader derives the **layout** of
-every table (§6.2); an unresolvable `Reference` or `SelectRef` (the B10 condition), a scalar
+byte-for-byte (**↯/t.5.10**; the ↯/t.4.11 condition). A reader MUST NOT interpret any table, region or
+index before ↯/t.5.10 has passed. Having composed the schema, the reader derives the **layout** of
+every table (§6.2); an unresolvable `Reference` or `SelectRef` (the ↯/t.4.10 condition), a scalar
 marked `intern` whose width is fixed, or a secondary-index path that does not resolve under §9.1
-means the schema cannot be laid out, and is **R11** — a configuration error of the schema, as
-B10 is, not of the file's data.
+means the schema cannot be laid out, and is **↯/t.5.11** — a configuration error of the schema, as
+↯/t.4.10 is, not of the file's data.
 
 The embedded schema is always present: RaTEL has no external-schema mode. A file is read by many
 processes over a long life, and the one thing every reader must agree on is the schema; carrying
@@ -194,7 +194,7 @@ no tag is stored:
 | *select list* | `count` | `count` × `(u32 tag, u32 payload)` pairs, as §6.1 defines for a `SELECT` slot |
 
 An item's extent — header, then body as computed from the header — MUST lie within the region
-(**R14**), and a ref MUST be a multiple of 4 (**R14**). A reader checks the header's extent before
+(**↯/t.5.14**), and a ref MUST be a multiple of 4 (**↯/t.5.14**). A reader checks the header's extent before
 reading the header, and the body's extent before reading the body.
 
 ### 5.5 Tables Section
@@ -217,9 +217,9 @@ u8  layout        0 = row-major; every other value is reserved
 u8  reserved[7]   MUST be zero
 ```
 
-Violations are **R12**: `rowSize` differing from the computed value, an unknown `layout` byte,
+Violations are **↯/t.5.12**: `rowSize` differing from the computed value, an unknown `layout` byte,
 non-zero reserved bytes, a misaligned `offset`, or `offset + count·rowSize` (computed in 64 bits)
-exceeding the section length. Table 0 MUST have `count = 1` (**R13**).
+exceeding the section length. Table 0 MUST have `count = 1` (**↯/t.5.13**).
 
 Rows follow the directory at the offsets it gives. Row storage is **row-major**: row `r` of a
 table is the `rowSize` bytes at `offset + r·rowSize`, laid out per §6. The `layout` byte is
@@ -245,12 +245,12 @@ position one past the last entry, so that entry `i` occupies
 `entryRegion[offsets[i] .. offsets[i + 1])` with no special case. The `offsets` MUST be
 non-decreasing and `offset + 4·(count + 1) + offsets[count]` MUST not exceed the section length;
 an unknown `kind`, a directory whose entry count differs from `M`, non-zero reserved bytes, or any
-violation of these constraints is **R23**.
+violation of these constraints is **↯/t.5.23**.
 
 ### 5.7 Digests Section
 
 When flag bit 0 is set, the digests section holds six BLAKE3-256 digests, `6 × 32 = 192` bytes
-in all, and its length MUST be exactly `192` (**R07** otherwise). The first five are the digests
+in all, and its length MUST be exactly `192` (**↯/t.5.7** otherwise). The first five are the digests
 of the first five sections (schema, strings, variable, tables, indexes), in directory order, each
 computed over exactly the `length` bytes the directory gives for that section (an empty section
 digests the empty input); the sixth is the digest of header bytes `0..144`:
@@ -269,8 +269,8 @@ the committed length, every directory entry — that of the digests section itse
 the value hash field. The digests section is the input of none of its own digests, so nothing is
 circular: a writer completes the header, then computes the header digest and writes it.
 
-A reader that verifies digests MUST report a mismatch as **R07**. When flag bit 0 is clear, the
-digests section's length MUST be `0` (**R07** otherwise).
+A reader that verifies digests MUST report a mismatch as **↯/t.5.7**. When flag bit 0 is clear, the
+digests section's length MUST be `0` (**↯/t.5.7** otherwise).
 
 Digest verification is OPTIONAL and a reader MAY defer it, but a reader that advertises
 integrity checking MUST complete it before trusting any section's contents. Digests detect
@@ -311,16 +311,16 @@ repeatable member's emptiness is its count of zero.
 **Select tag and payload.** `tag` is the **keyword index** (BinTEL §5) of the chosen variant in
 the keyword order of the Struct that declares the SelectRef — the same number the semantic model
 records (TEL §18.2) and BinTEL encodes. It MUST fall within the range of keyword indices that the
-member's variants occupy (**R17**). `payload` depends on the variant's resolved type: a Struct `R`
+member's variants occupy (**↯/t.5.17**). `payload` depends on the variant's resolved type: a Struct `R`
 → a record index into `R`'s table (variant instances are never flattened); a Scalar → a ref to a
 value item holding the value's bytes (in the string table if that scalar is `intern`, otherwise in
 the variable region — fixed-width scalars included, for uniformity); `Flag` → `0`.
 
 **Width and intern.** `width w` is a promise that every value of the scalar encodes to exactly
 `w` bytes; a writer MUST refuse to encode a document containing a value whose byte length differs
-(**R22**) — it is a configuration failure of the writer, as an unresolved encoding is (TEL §21.7),
+(**↯/t.5.22**) — it is a configuration failure of the writer, as an unresolved encoding is (TEL §21.7),
 never a padding instruction and never a document error. `intern` on a fixed-width scalar has no
-meaning and is **R11**. Neither annotation changes the semantic model, the value hash, or the
+meaning and is **↯/t.5.11**. Neither annotation changes the semantic model, the value hash, or the
 BinTEL encoding.
 
 ### 6.2 Layout Algorithm
@@ -377,7 +377,7 @@ Points to note:
 
 - An **absent** optional member has its presence bit clear. Its slot bytes MUST be zero when
   written and MUST be ignored when read; a verifying reader MAY report non-zero bytes there, or in
-  any pad, as **R26**.
+  any pad, as **↯/t.5.26**.
 - An **empty** repeatable member has a count of `0`: a `RANGE` with `count = 0` (its `start` is
   then irrelevant and SHOULD be `0`), a `FLAG_COUNT` of `0`, or a ref to an array or list item
   whose header is `0`. Absence (presence bit) and emptiness (count) are distinct and never
@@ -395,21 +395,21 @@ Points to note:
 
 ```
 open(bytes):
-  if len(bytes) < 144: report R04
+  if len(bytes) < 144: report ↯/t.5.4
   header = copy of bytes[0 .. 144]            // a mapped file may change beneath the reader (§11)
-  check magic (R01), version (R02), reserved byte and flag bits (R03)
-  check committed length (R04); check every directory entry (R05); check overlap (R06)
-  if flags.digests: verify §5.7 (R07)         // MAY be deferred; MUST precede trust
-  read the schema section: signature (R08), body (R09), recomputed signature (R10)
+  check magic (↯/t.5.1), version (↯/t.5.2), reserved byte and flag bits (↯/t.5.3)
+  check committed length (↯/t.5.4); check every directory entry (↯/t.5.5); check overlap (↯/t.5.6)
+  if flags.digests: verify §5.7 (↯/t.5.7)         // MAY be deferred; MUST precede trust
+  read the schema section: signature (↯/t.5.8), body (↯/t.5.9), recomputed signature (↯/t.5.10)
   schema = compose(body)                      // TEL §20.3
-  L = layout-document(schema)                 // R11 if the schema cannot be laid out
-  check the table directory against L (R12); check tables[0].count == 1 (R13)
-  check the index directory: M entries (§9.1), each well-formed (R23)
-  check the codec binding resolves every encoding the schema names (R19)
+  L = layout-document(schema)                 // ↯/t.5.11 if the schema cannot be laid out
+  check the table directory against L (↯/t.5.12); check tables[0].count == 1 (↯/t.5.13)
+  check the index directory: M entries (§9.1), each well-formed (↯/t.5.23)
+  check the codec binding resolves every encoding the schema names (↯/t.5.19)
   return Reader { bytes, schema, L }
 ```
 
-Every condition in `open` is fatal: a reader MUST NOT return a `Reader` on any of R01–R13 or R19.
+Every condition in `open` is fatal: a reader MUST NOT return a `Reader` on any of ↯/t.5.1–↯/t.5.13 or ↯/t.5.19.
 After `open`, a reader needs no further validation to serve accesses; what remains is the
 per-access bounds checking of §7.2.
 
@@ -418,22 +418,22 @@ per-access bounds checking of §7.2.
 With `L` in hand, every non-repeatable step is a constant number of loads:
 
 - **Row address.** `row(T, r) = tablesSection + tables[T].offset + r·rowSize(T)`, after checking
-  `r < tables[T].count` (**R15**).
+  `r < tables[T].count` (**↯/t.5.15**).
 - **Presence.** For a slot with presence bit `b`, test `bytes[row + (b >> 3)] & (1 << (b & 7))`.
 - **Slot load.** Read the slot's `size` bytes at `row + slot.offset`.
 - **Ref.** For a `REF`, `ARRAY_REF` or `SELECT_LIST_REF`, resolve the `u32` against the slot's
   region: the ref MUST be a multiple of 4 with `ref + 4 ≤ regionLength`, and the item's body as
-  given by its header MUST end within the region (**R14**).
-- **Range.** For a `RANGE(R)`, `start + count ≤ tables[R].count`, computed in 64 bits (**R15**).
-- **Record.** For a `RECORD(R)` or a Struct-variant payload, `r < tables[R].count` (**R15**).
-- **Tag.** A `SELECT` tag MUST be a keyword index of one of the member's variants (**R17**).
-- **Value.** A text scalar's bytes MUST be valid UTF-8 (**R18**; the B07 condition). An encoded
-  scalar's bytes are given to the bound codec's `decode` (**R19** if the encoding is unresolved —
-  normally caught at open; **R20** if the codec rejects the bytes, the B14 condition; and
-  OPTIONALLY **R21** if `encode(decode(b)) ≠ b`, the B15 condition).
+  given by its header MUST end within the region (**↯/t.5.14**).
+- **Range.** For a `RANGE(R)`, `start + count ≤ tables[R].count`, computed in 64 bits (**↯/t.5.15**).
+- **Record.** For a `RECORD(R)` or a Struct-variant payload, `r < tables[R].count` (**↯/t.5.15**).
+- **Tag.** A `SELECT` tag MUST be a keyword index of one of the member's variants (**↯/t.5.17**).
+- **Value.** A text scalar's bytes MUST be valid UTF-8 (**↯/t.5.18**; the ↯/t.4.7 condition). An encoded
+  scalar's bytes are given to the bound codec's `decode` (**↯/t.5.19** if the encoding is unresolved —
+  normally caught at open; **↯/t.5.20** if the codec rejects the bytes, the ↯/t.4.14 condition; and
+  OPTIONALLY **↯/t.5.21** if `encode(decode(b)) ≠ b`, the ↯/t.4.15 condition).
 
-A **lazy** reader performs these checks at the access that needs them and reports R14–R18,
-R20–R21 and R23 as failures of that access, continuing to serve others; a **verifying** reader
+A **lazy** reader performs these checks at the access that needs them and reports ↯/t.5.14–↯/t.5.18,
+↯/t.5.20–↯/t.5.21 and ↯/t.5.23 as failures of that access, continuing to serve others; a **verifying** reader
 performs the full materialisation of §8 and the index verification of §9.5 at open and refuses
 the file on any failure. Both are conforming; which a tool offers is its contract.
 
@@ -451,10 +451,10 @@ materialise(reader):
   return root
 
 struct-children(T, r, S, depth):
-  if depth > 256: resource error (outside the R-codes, as BinTEL §11)
-  if visited[T][r]: report R16                // the same row reached twice: aliasing or a cycle
+  if depth > 256: resource error (outside the ↯/t.5 codes, as BinTEL §11)
+  if visited[T][r]: report ↯/t.5.16                // the same row reached twice: aliasing or a cycle
   visited[T][r] = true
-  row = row(T, r)                             // R15
+  row = row(T, r)                             // ↯/t.5.15
   return members-of(row, S, S.members, path = [], depth)
 
 members-of(row, S, members, path, depth):
@@ -474,22 +474,22 @@ members-of(row, S, members, path, depth):
                          members-of(row, R.struct, R.struct.members, path ++ [i], depth)))
       RECORD(R):       if required(m) or present(row, slot):
                          r' = load-u32; out.push(Node(kidx(m), R, struct-children(tab(R), r', R.struct, depth + 1)))
-      RANGE(R):        (start, n) = load; check R15
+      RANGE(R):        (start, n) = load; check ↯/t.5.15
                        for k in 0 .. n: out.push(Node(kidx(m), R, struct-children(tab(R), start + k, R.struct, depth + 1)))
       SELECT:          if required(m) or present(row, slot): out.push(variant(load tag, load payload))
       SELECT_LIST_REF: for each (tag, payload) of item(ref), in order: out.push(variant(tag, payload))
   return out
 
 variant(tag, payload):
-  V = the variant with keyword index tag (R17)
+  V = the variant with keyword index tag (↯/t.5.17)
   switch resolved type of V:
     Struct R: return Node(tag, R, struct-children(tab(R), payload, R.struct, depth + 1))
     Scalar:   return Value(tag, decode(V, item(payload)))
     Flag:     return Flag(tag)
 
 decode(m, bytes):
-  if m's scalar has no encoding: UTF-8-decode(bytes)       // R18
-  else: codec-binding(encoding).decode(bytes)               // R19, R20; optional R21
+  if m's scalar has no encoding: UTF-8-decode(bytes)       // ↯/t.5.18
+  else: codec-binding(encoding).decode(bytes)               // ↯/t.5.19, ↯/t.5.20; optional ↯/t.5.21
 ```
 
 `kidx(m)` is the member's keyword index in `S`'s keyword order — for a Field its own, for a
@@ -501,7 +501,7 @@ is therefore `≡` to the model the writer encoded (§12).
 
 A row the walk never reaches is an **orphan**. Orphans are permitted — an appending writer will
 create them — and MUST be ignored; a verifying reader MAY report them informatively. A row reached
-twice (**R16**) is not permitted: it would make the materialised model larger than the file, or
+twice (**↯/t.5.16**) is not permitted: it would make the materialised model larger than the file, or
 infinite.
 
 ## 9. Indexes
@@ -528,14 +528,14 @@ A secondary index's **paths** are resolved statically against the child type at 
 is a TELP ([TELP](telp.md) §3) whose components, taken in order from the child Struct, each name a
 `Field` member (not a Select variant) whose effective `repeatable` is false; every non-final
 component resolves to a Struct and the final one to a Scalar, which MAY be optional, as MAY any
-intermediate Struct member. The schema constraints E228–E230 (TEL §20.1) guarantee this for a
-valid composed schema; a reader finding otherwise reports **R11**.
+intermediate Struct member. The schema constraints ↯/t.2.28–↯/t.2.30 (TEL §20.1) guarantee this for a
+valid composed schema; a reader finding otherwise reports **↯/t.5.11**.
 
 ### 9.2 Key Components
 
 Index keys are compared **bytewise**, with no knowledge of the scalar types involved. This is
 possible because text compares in code-point order under bytewise UTF-8 comparison — the exact
-code-point equality that TEL's key uniqueness (E314, TEL §21.6) and TELP use — and because the
+code-point equality that TEL's key uniqueness (↯/t.3.14, TEL §21.6) and TELP use — and because the
 standard codecs are order-preserving by construction. A **component** is the encoding of one
 scalar value, or of its absence:
 
@@ -573,7 +573,7 @@ secondary index there is one component per declared path, resolved from the chil
 components encoded as `00`.
 
 The entries of an index MUST be pairwise distinct — they are, by the `childRow` tiebreak — and
-MUST be sorted in strictly increasing bytewise order (**R24**). Secondary indexes impose no
+MUST be sorted in strictly increasing bytewise order (**↯/t.5.24**). Secondary indexes impose no
 uniqueness: two children with equal secondary components are adjacent entries distinguished by
 `childRow`.
 
@@ -588,7 +588,7 @@ find(index, hostRow, key₁, …, keⱼ):              // j ≤ k components giv
   lo = 0; hi = index.count
   while lo < hi:
     mid = (lo + hi) / 2
-    e = entry(mid)                                // R23 if offsets are inconsistent
+    e = entry(mid)                                // ↯/t.5.23 if offsets are inconsistent
     if compare-prefix(e, probe) < 0: lo = mid + 1 else: hi = mid
   first = lo
   // every entry from `first` on whose first len(probe) bytes equal `probe` matches;
@@ -600,17 +600,17 @@ find(index, hostRow, key₁, …, keⱼ):              // j ≤ k components giv
 than the probe compares as its own bytes followed by nothing, which sorts first). A probe of
 `u32BE(hostRow)` alone enumerates a parent's children in key order; a full primary probe returns
 zero or one child; a secondary probe returns a run. A reader MUST bounds-check every `offsets[i]`
-and entry it touches (**R23**).
+and entry it touches (**↯/t.5.23**).
 
 ### 9.5 Verification
 
 A verifying reader (§7.2) checks every index: each entry parses (presence bytes are `00` or
 `01`, each variable component is properly escaped and terminated, each fixed component has its
-width, the entry ends exactly after `childRow` — **R23**); entries are strictly increasing
-(**R24**); and each entry agrees with the rows: `hostRow` and `childRow` are in range, `childRow`
+width, the entry ends exactly after `childRow` — **↯/t.5.23**); entries are strictly increasing
+(**↯/t.5.24**); and each entry agrees with the rows: `hostRow` and `childRow` are in range, `childRow`
 lies within the `RANGE` that `hostRow`'s slot gives, the components recomputed from the child row
 equal the stored bytes, and the index's `count` equals the total number of children at the site
-over all host rows (**R25**).
+over all host rows (**↯/t.5.25**).
 
 ## 10. Writing
 
@@ -621,7 +621,7 @@ a writer:
   resolving every encoding the schema names (TEL §21.7), failing without output otherwise — as a
   BinTEL encoder does (BinTEL §7.1);
 - MUST refuse a document in which any value of a `width w` scalar encodes to other than `w` bytes
-  (**R22**);
+  (**↯/t.5.22**);
 - MUST compute every layout by §6.2, store every row by §6, every item by §5.3–§5.4, every index
   by §9, and zero every pad byte and every absent member's slot;
 - MUST store a repeatable Struct member's children as consecutive rows in semantic order, and
@@ -657,7 +657,7 @@ the count has been bounded by the file.
 
 **Termination.** Materialisation (§8) is bounded by the per-table visited bitmaps — each row is
 visited at most once, so the work is linear in the number of rows — and by the depth limit of
-256, matching BinTEL §11 and TEL §20.2; exceeding either is a resource error outside the R-code
+256, matching BinTEL §11 and TEL §20.2; exceeding either is a resource error outside the ↯/t.5
 taxonomy. Index search touches `log₂(count)` entries, each bounds-checked.
 
 **The file may change beneath the reader.** A memory-mapped file whose publisher rewrites it in
@@ -668,7 +668,7 @@ MUST copy the header before acting on it (§7.1), MUST NOT assume that a value l
 same value, and MUST tolerate a bounds check that passed once failing later.
 
 **The schema is executable structure.** As in BinTEL §6.2, the embedded schema decides how every
-other byte is interpreted and arrives from the same source. R10 confirms only that the body is
+other byte is interpreted and arrives from the same source. ↯/t.5.10 confirms only that the body is
 consistent with its signature. A reader that requires a trusted schema MUST compare the verified
 signature against the signatures it trusts, and MUST NOT infer trust from successful decoding.
 
@@ -677,7 +677,7 @@ identify content; a forger can recompute both. Authenticity, where needed, is a 
 for a published file, the publisher's lock and the directory's ownership.
 
 **Codecs run on attacker bytes.** As BinTEL §11: a codec's `decode` is invoked on value bytes
-taken from the file and MUST handle malformed input safely; R21 is a hardening check, not a
+taken from the file and MUST handle malformed input safely; ↯/t.5.21 is a hardening check, not a
 substitute.
 
 ## 12. Round-Trip and Conversion
@@ -692,7 +692,7 @@ materialise(open(ratel-encode(M, S, B))) ≡ M
 where `≡` is semantic-model equality (TEL §22.4). Consequently
 `value-hash(bintel-encode(materialise(F)))` is well defined for any valid RaTEL file `F`, is the
 same for every RaTEL file encoding `M`, and — when `F`'s header carries a value hash — MUST equal
-it; a verifying reader MAY check this (**R27**). The value hash, not the file's bytes, is a RaTEL
+it; a verifying reader MAY check this (**↯/t.5.27**). The value hash, not the file's bytes, is a RaTEL
 document's identity.
 
 **Conversion.** Text TEL, BinTEL and RaTEL are three encodings of one model. Converting between
@@ -791,48 +791,49 @@ presence bit says `info` is absent.
 
 ## 14. Reader Error Handling
 
-Codes are local to RaTEL; they do not overlap with the E1xx/E2xx/E3xx taxonomy of the TEL
-Specification or the B-codes of BinTEL, though several restate a B-code's condition.
+RaTEL's codes are the family **↯/t.5** of TEL's bolt codes (TEL §19.3), beside the ↯/t.1, ↯/t.2 and
+↯/t.3 of the TEL Specification and the ↯/t.4 of BinTEL, though several restate the condition of a
+↯/t.4 code.
 
-| Code | Condition | When |
-| ---- | --------- | ---- |
-| R01 | Magic number is not `B1 C4 B5 BB` | open |
-| R02 | Unsupported version byte | open |
-| R03 | Reserved header byte or reserved flag bit non-zero | open |
-| R04 | File shorter than 144 bytes; committed length `< 144`, greater than the file, or not a multiple of 8 | open |
-| R05 | A directory offset or length is not a multiple of 8, an offset is `< 144`, or `offset + length` exceeds the committed length | open |
-| R06 | Two non-empty sections overlap | open |
-| R07 | A section or header digest does not match, or the digests section's length is not `192` (flag bit 0 set); or flag bit 0 is clear and the digests section is non-empty | open / verify |
-| R08 | Schema signature structurally invalid — the B03 conditions | open |
-| R09 | Embedded schema body does not decode under `tels` — the B12 condition | open |
-| R10 | Recomputed composed signature differs from the carried signature — the B11 condition | open |
-| R11 | The schema cannot be laid out: unresolvable `Reference`/`SelectRef` (the B10 condition), `intern` on a fixed-width scalar, a secondary-index path that does not resolve per §9.1 | open (configuration) |
-| R12 | Table directory inconsistent with the layout: wrong `rowSize`, unknown `layout` byte, non-zero reserved bytes, misaligned offset, rows exceeding the section | open |
-| R13 | Table 0 does not have exactly one row | open |
-| R14 | A ref is not a multiple of 4, or an item's header or body extends beyond its region | access / verify |
-| R15 | A record index is `≥` its table's count, or a range's `start + count` exceeds it | access / verify |
-| R16 | A row reached twice during materialisation — aliasing or a cycle | materialise |
-| R17 | A select tag is not the keyword index of one of the member's variants | access / verify |
-| R18 | A text scalar's bytes are not valid UTF-8 — the B07 condition | access / verify |
-| R19 | An encoding named by the schema is not resolved by the codec binding — the B13 condition | open |
-| R20 | A codec's decoder rejects a value's bytes — the B14 condition | access / verify |
-| R21 | OPTIONAL re-encode check found `encode(decode(b)) ≠ b` — the B15 condition | access / verify |
-| R22 | *Writer:* a value of a `width w` scalar encodes to other than `w` bytes; the writer refuses. Never a reader condition | write |
-| R23 | Index directory or entries malformed: unknown kind, entry count differing from `M`, non-zero reserved bytes, offsets non-monotone or beyond the section, an entry that does not parse | open / lookup / verify |
-| R24 | Index entries not in strictly increasing bytewise order | verify |
-| R25 | An index entry disagrees with the rows: host or child out of range, child outside the host's range, recomputed components differ, or the count differs from the children at the site | verify |
-| R26 | Non-zero bytes in an absent member's slot or in padding | verify (optional) |
-| R27 | The header's value hash differs from the BLAKE3-256 value hash of the materialised document | verify (optional) |
+| Code     | Condition                                                                                                                                                                             | When                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| ↯/t.5.1  | Magic number is not `B1 C4 B5 BB`                                                                                                                                                     | open                   |
+| ↯/t.5.2  | Unsupported version byte                                                                                                                                                              | open                   |
+| ↯/t.5.3  | Reserved header byte or reserved flag bit non-zero                                                                                                                                    | open                   |
+| ↯/t.5.4  | File shorter than 144 bytes; committed length `< 144`, greater than the file, or not a multiple of 8                                                                                  | open                   |
+| ↯/t.5.5  | A directory offset or length is not a multiple of 8, an offset is `< 144`, or `offset + length` exceeds the committed length                                                          | open                   |
+| ↯/t.5.6  | Two non-empty sections overlap                                                                                                                                                        | open                   |
+| ↯/t.5.7  | A section or header digest does not match, or the digests section's length is not `192` (flag bit 0 set); or flag bit 0 is clear and the digests section is non-empty                 | open / verify          |
+| ↯/t.5.8  | Schema signature structurally invalid — the ↯/t.4.3 conditions                                                                                                                        | open                   |
+| ↯/t.5.9  | Embedded schema body does not decode under `tels` — the ↯/t.4.12 condition                                                                                                            | open                   |
+| ↯/t.5.10 | Recomputed composed signature differs from the carried signature — the ↯/t.4.11 condition                                                                                             | open                   |
+| ↯/t.5.11 | The schema cannot be laid out: unresolvable `Reference`/`SelectRef` (the ↯/t.4.10 condition), `intern` on a fixed-width scalar, a secondary-index path that does not resolve per §9.1 | open (configuration)   |
+| ↯/t.5.12 | Table directory inconsistent with the layout: wrong `rowSize`, unknown `layout` byte, non-zero reserved bytes, misaligned offset, rows exceeding the section                          | open                   |
+| ↯/t.5.13 | Table 0 does not have exactly one row                                                                                                                                                 | open                   |
+| ↯/t.5.14 | A ref is not a multiple of 4, or an item's header or body extends beyond its region                                                                                                   | access / verify        |
+| ↯/t.5.15 | A record index is `≥` its table's count, or a range's `start + count` exceeds it                                                                                                      | access / verify        |
+| ↯/t.5.16 | A row reached twice during materialisation — aliasing or a cycle                                                                                                                      | materialise            |
+| ↯/t.5.17 | A select tag is not the keyword index of one of the member's variants                                                                                                                 | access / verify        |
+| ↯/t.5.18 | A text scalar's bytes are not valid UTF-8 — the ↯/t.4.7 condition                                                                                                                     | access / verify        |
+| ↯/t.5.19 | An encoding named by the schema is not resolved by the codec binding — the ↯/t.4.13 condition                                                                                         | open                   |
+| ↯/t.5.20 | A codec's decoder rejects a value's bytes — the ↯/t.4.14 condition                                                                                                                    | access / verify        |
+| ↯/t.5.21 | OPTIONAL re-encode check found `encode(decode(b)) ≠ b` — the ↯/t.4.15 condition                                                                                                       | access / verify        |
+| ↯/t.5.22 | *Writer:* a value of a `width w` scalar encodes to other than `w` bytes; the writer refuses. Never a reader condition                                                                 | write                  |
+| ↯/t.5.23 | Index directory or entries malformed: unknown kind, entry count differing from `M`, non-zero reserved bytes, offsets non-monotone or beyond the section, an entry that does not parse | open / lookup / verify |
+| ↯/t.5.24 | Index entries not in strictly increasing bytewise order                                                                                                                               | verify                 |
+| ↯/t.5.25 | An index entry disagrees with the rows: host or child out of range, child outside the host's range, recomputed components differ, or the count differs from the children at the site  | verify                 |
+| ↯/t.5.26 | Non-zero bytes in an absent member's slot or in padding                                                                                                                               | verify (optional)      |
+| ↯/t.5.27 | The header's value hash differs from the BLAKE3-256 value hash of the materialised document                                                                                           | verify (optional)      |
 
-R01–R13 and R19 are **open-time** conditions: a reader MUST report them and MUST NOT return a
-reader. R14–R18, R20, R21 and R23 arise on access; they are fatal for the access that encounters
+↯/t.5.1–↯/t.5.13 and ↯/t.5.19 are **open-time** conditions: a reader MUST report them and MUST NOT return a
+reader. ↯/t.5.14–↯/t.5.18, ↯/t.5.20, ↯/t.5.21 and ↯/t.5.23 arise on access; they are fatal for the access that encounters
 them, and a lazy reader MAY continue to serve other accesses while a verifying reader rejects the
-file. R24–R27 arise only in verification. Resource limits (depth, memory) are outside the
+file. ↯/t.5.24–↯/t.5.27 arise only in verification. Resource limits (depth, memory) are outside the
 taxonomy, as in BinTEL §11.
 
-**Precedence.** Header checks are performed in table order, R01 first. Within one slot access,
-a record index is checked (R15) before a ref (R14), a tag (R17) before its payload, and the
-value's bytes (R18/R20) last. Where a verifying reader could report several codes for one defect,
+**Precedence.** Header checks are performed in table order, ↯/t.5.1 first. Within one slot access,
+a record index is checked (↯/t.5.15) before a ref (↯/t.5.14), a tag (↯/t.5.17) before its payload, and the
+value's bytes (↯/t.5.18/↯/t.5.20) last. Where a verifying reader could report several codes for one defect,
 it MUST report the first in this order.
 
 ## 15. Future Work (Informative)

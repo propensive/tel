@@ -65,7 +65,7 @@ TEL is defined over Unicode code points.
 
 When written to a file, a TEL document MUST be encoded as UTF-8. A byte sequence that is not
 well-formed UTF-8 — one containing an invalid byte, an overlong encoding, or an encoding of a
-surrogate code point or of a value above `U+10FFFF` — is invalid (**E123**).
+surrogate code point or of a value above `U+10FFFF` — is invalid (**↯/t.1.23**).
 
 Line endings in a TEL document are governed by the following rules (literal atom payloads, defined
 in §15, are exempt from all of them):
@@ -75,11 +75,11 @@ in §15, are exempt from all of them):
 2. The **line-ending mode** is determined by the first `LF` character in the document that is not
    within a literal atom payload: if that `LF` is immediately preceded by `CR`, the mode is
    **CRLF mode**; otherwise the mode is **LF mode**. A document containing no such `LF` is in LF
-   mode (a lone `CR` does not establish CRLF mode; it is **E120**). Characters within literal
+   mode (a lone `CR` does not establish CRLF mode; it is **↯/t.1.20**). Characters within literal
    atom payloads do not participate in mode determination.
 3. In CRLF mode, `CR` and `LF` may only appear as part of a `CR LF` line ending, except within
-   literal atoms (**E120**).
-4. In LF mode, `CR` may not appear anywhere in the document, except within literal atoms (**E120**).
+   literal atoms (**↯/t.1.20**).
+4. In LF mode, `CR` may not appear anywhere in the document, except within literal atoms (**↯/t.1.20**).
 
 LF mode is RECOMMENDED. Human authors SHOULD use LF endings but MAY use CRLF endings. Agents and
 processors MUST use LF endings when creating new documents, and SHOULD NOT change the line-ending
@@ -88,7 +88,7 @@ mode of an existing document.
 No Unicode normalization is required or implied. TEL is defined over the exact Unicode code points
 that appear in the serialized text.
 
-A UTF-8 byte order mark MUST NOT appear at the start of a TEL source (**E101**). `U+FEFF`
+A UTF-8 byte order mark MUST NOT appear at the start of a TEL source (**↯/t.1.1**). `U+FEFF`
 occurring anywhere else is ordinary content with no special meaning — though, being zero-width, it
 falls under the advice below. In a multi-document source (§6.1) the byte order mark is therefore
 significant only at the very start of the source, never after a document separator, and the
@@ -138,7 +138,7 @@ An **ordinary line** is any non-blank line that is not an interpreter directive 
 pragma line (§8), a document separator (below), a comment line (§11.1), a tabulation line
 (§16.1), or a line consumed by a source atom (§14) or a literal atom (§15). The lines consumed
 by a literal atom include its opening and closing delimiter lines, which are matched verbatim
-and are not subject to the ordinary-line rules (in particular E108: §15 removes trailing spaces
+and are not subject to the ordinary-line rules (in particular ↯/t.1.8: §15 removes trailing spaces
 from the opening delimiter instead).
 
 A **document separator** is a line whose content is exactly two sigil characters and nothing else:
@@ -273,17 +273,17 @@ content of the document, but MUST be preserved unchanged by reserialization.
 ## 8. Pragma
 
 If present, the pragma MUST be the first non-blank line after any interpreter directive line
-(**E102**). Its content is parsed as a sequence of phrases separated by runs of one or more
+(**↯/t.1.2**). Its content is parsed as a sequence of phrases separated by runs of one or more
 spaces; the phrase-separation rules of §10.3 do not apply on the pragma line (a hard-space run
 is an ordinary separator and does not change mode). The pragma line is identified by its `tel`
 keyword; it is exempt from the margin and indentation rules of §9 and does not set the margin.
 
 If present, the entire pragma line MUST be fully contained within the first 4096 bytes of the
-document (**E103**).
+document (**↯/t.1.3**).
 
 The first phrase on the pragma line (its keyword, as defined in §10) MUST be `tel`. The keyword
 `tel` is reserved: it MUST NOT appear as a `Field.keyword` in any `Struct`, or as a
-`Variant.keyword` in any `SelectDefinition`, within a schema (**E208**).
+`Variant.keyword` in any `SelectDefinition`, within a schema (**↯/t.2.8**).
 
 The keyword `tel` is followed by the following parameters, each OPTIONAL except the version,
 in this order:
@@ -301,14 +301,14 @@ tel 1.0 propensive.dev/build +publishing +maven ‹base256-signature› #
 ```
 
 A sequence of phrases that violates this order or multiplicity — for example, a signature
-before a layer selection, two schema references, or two signatures — is invalid (**E122**).
+before a layer selection, two schema references, or two signatures — is invalid (**↯/t.1.22**).
 Remarks (§11.2) are not recognised on the pragma line: a `<sigil> <text>` pattern there is
 simply a sequence of phrases — a non-final sigil character and words — matching no pragma
-form, and is invalid as such (**E121**).
+form, and is invalid as such (**↯/t.1.21**).
 
 The version parameter is REQUIRED: a pragma consisting of the keyword `tel` alone is invalid
-(**E104**). When present, it MUST have the form `x.y`, where `x` and `y` are non-negative
-integers (**E104**). `x` is the major version and `y` is the minor version.
+(**↯/t.1.4**). When present, it MUST have the form `x.y`, where `x` and `y` are non-negative
+integers (**↯/t.1.4**). `x` is the major version and `y` is the minor version.
 
 The following rules govern how the version number changes across revisions of this specification:
 
@@ -334,9 +334,9 @@ order above:
 - A phrase that is a valid BASE-256 string of length 33, or `37 + 2·(n − 2)` for some `n ≥ 2`,
   is a **schema signature** (§8.1).
 - A final phrase consisting of a single character matching none of the above forms is the
-  **sigil** parameter; it MUST be a sigil-valid character (§6) (**E105**).
+  **sigil** parameter; it MUST be a sigil-valid character (§6) (**↯/t.1.5**).
 
-Any other phrase matches no pragma form and is invalid (**E121**).
+Any other phrase matches no pragma form and is invalid (**↯/t.1.21**).
 
 The classification is unambiguous. The BASE-256 alphabet consists entirely of Unicode letters
 and ASCII digits (see the [BASE-256 Specification](base256.md) §4), so a signature can never
@@ -384,7 +384,7 @@ grammar contains no whitespace, so a reference always occupies a single phrase.
 A phrase classified as a schema reference — it contains `/` and is longer than one character — but
 which does not conform to the coordinate grammar above (a `domain` that is not a DNS domain name,
 an empty `module-name` segment, a selector that is neither a `semver` nor a `tag-name`) matches no
-pragma form after all, and is invalid (**E121**), with the recovery §19.5 prescribes: the phrase is
+pragma form after all, and is invalid (**↯/t.1.21**), with the recovery §19.5 prescribes: the phrase is
 ignored, and if no schema identification survives the document is treated as untyped. This check is
 purely syntactic and needs no resolution; it is distinct from the **runtime resolution error** of
 §8.2, which arises only for a well-formed coordinate that cannot be resolved.
@@ -415,17 +415,17 @@ tel 1.0 propensive.dev/build +publishing +maven ‹signature› #
 
 Each selected layer name MUST match a layer declared by the referenced schema; an unknown
 name is a runtime resolution error (§8.2). Composition follows the schema's **declaration
-order**, and the pragma MUST list the selected layers in declaration order (**E124**). Each
+order**, and the pragma MUST list the selected layers in declaration order (**↯/t.1.24**). Each
 selected layer set therefore has exactly one canonical pragma spelling and exactly one
 composed signature; two documents selecting the same layers can never disagree on order and
 spuriously fail the compatibility check of §8.2.
 
-E124 is a parsing error, because it is a defect in how the pragma is written, but it is the one
+↯/t.1.24 is a parsing error, because it is a defect in how the pragma is written, but it is the one
 parsing error that cannot be detected from the document alone: the declaration order belongs to
 the referenced schema. It is therefore raised at schema resolution (§8.2), once the referenced
 schema is known, and is reported against the pragma line like any other pragma error. A parse
 which resolves no schema — because the reference cannot be resolved, or because only the
-presentation model is wanted — raises no E124. E124 is raised only when every selected name is
+presentation model is wanted — raises no ↯/t.1.24. ↯/t.1.24 is raised only when every selected name is
 declared; an undeclared name is the runtime resolution error above, whatever the order.
 
 Layer selections without a schema reference are permitted only alongside a signature, where
@@ -564,7 +564,7 @@ order:
    mode (§6.2 of the BinTEL Specification), the parser MUST decode the embedded schema body
    under the built-in `tels` axiom (§20.5), construct the composed `Schema` from it per
    §20.3, and verify that the composed signature recomputed from the embedded body equals the
-   signature carried in the document (B11 of the BinTEL Specification on mismatch). On success
+   signature carried in the document (↯/t.4.11 of the BinTEL Specification on mismatch). On success
    the parser MUST use that composed `Schema` and skip the remaining steps. Step 0 applies only
    to BinTEL inputs in self-contained mode; for TEL-source inputs and external-mode BinTEL
    inputs, resolution begins at step 1.
@@ -663,8 +663,8 @@ two-byte regular cadence distinguishes.
 
 #### Runtime Resolution Error
 
-A resolution failure is a runtime error, not a parsing error: it is reported outside the E1xx /
-E2xx / E3xx taxonomy. Implementations SHOULD report it with sufficient detail for the user to
+A resolution failure is a runtime error, not a parsing error: it is reported outside the ↯/t.1,
+↯/t.2 and ↯/t.3 taxonomy. Implementations SHOULD report it with sufficient detail for the user to
 distinguish the failure modes (built-in mismatch, library miss, fetch failure, signature
 verification failure, malformed body).
 
@@ -713,9 +713,9 @@ The rules of this section apply to every non-blank line of the document except t
 all of them.
 
 Every such line MUST begin with the margin, optionally followed by additional
-spaces. A line which does not begin with the margin is invalid (**E106**).
+spaces. A line which does not begin with the margin is invalid (**↯/t.1.6**).
 
-For each such line, the number of spaces following the margin MUST be even (**E107**). The
+For each such line, the number of spaces following the margin MUST be even (**↯/t.1.7**). The
 **indent** is defined as one half of the number of spaces between the margin and the first non-space
 character.
 
@@ -723,10 +723,10 @@ Therefore, after removing the margin, indentation is measured in units of two sp
 margin is taken from a line of the document, that line necessarily has indent `0`; when the
 margin is zero because the document begins with an interpreter directive, the first non-blank
 line after the directive (and after any pragma) MUST itself have an even number of leading
-spaces (E107 otherwise) and its indent MUST be `0` (E111 otherwise, there being no shallower
+spaces (↯/t.1.7 otherwise) and its indent MUST be `0` (↯/t.1.11 otherwise, there being no shallower
 line for it to follow). Blank lines have no defined indent.
 
-Trailing spaces on a non-blank ordinary line are not permitted (**E108**).
+Trailing spaces on a non-blank ordinary line are not permitted (**↯/t.1.8**).
 
 Blank lines have no structural effect, except as explicitly noted in §14 (source atoms), §15
 (literal atoms), and §16 (tabulated blocks).
@@ -813,7 +813,7 @@ have children.
 A comment line MUST be immediately preceded by one of the following: a blank line, another
 comment line, the start of the document (i.e., a comment may be the very first non-blank line),
 or a non-blank line at a **strictly lesser indent** than the comment itself — that is, the
-comment opens a new (deeper) child block of that preceding compound (**E109**). In particular,
+comment opens a new (deeper) child block of that preceding compound (**↯/t.1.9**). In particular,
 a comment placed between two peer compounds without a preceding blank line is invalid: comments
 belong to the head of a `Block` (§17), so a comment always precedes the block it belongs to and
 never floats between siblings of an existing block — among peers, it must be preceded by a
@@ -895,23 +895,23 @@ line (i.e., excluding comment lines and tabulation lines):
   compound line
 - if its indent is less than that of the previous compound line, it closes one or more open
   compounds and becomes a peer of the nearest preceding compound line with the same indent; if no
-  preceding compound line has the same indent, the document is invalid (**E110** — a reserved
+  preceding compound line has the same indent, the document is invalid (**↯/t.1.10** — a reserved
   code that the canonical recursive parser never emits; see §19.5)
 
 A line may not have indent greater than one plus the indent of the previous compound line, except
-where the source-atom or literal-atom rules apply (**E111**).
+where the source-atom or literal-atom rules apply (**↯/t.1.11**).
 
 Comments and tabulations follow the same indentation and peer/child rules as compounds during
 parsing, except that they cannot have children. Because the relations above are computed against
 the *previous compound line* — which by definition excludes comment and tabulation lines — no line
 can become the child of a comment or of a tabulation line: a line indented below one of them is
-measured against the nearest preceding compound line instead, and is over-indentation (**E111**) if
+measured against the nearest preceding compound line instead, and is over-indentation (**↯/t.1.11**) if
 it exceeds that line's indent by more than one. A comment followed by a more deeply indented line
 is therefore not an error; the comment is simply free-standing (§11.1).
 
 The one case in which a line does become the child of something that cannot have children is a
 **tabulated row** (§16.2), which *is* a compound line: a line indented one level below a row is
-invalid (**E112**). E112 is reserved for that case.
+invalid (**↯/t.1.12**). ↯/t.1.12 is reserved for that case.
 
 In the resulting presentation model, comments and tabulations are absorbed into `Block` nodes
 (§17) and do not appear as standalone siblings of compounds.
@@ -921,13 +921,13 @@ In the resulting presentation model, comments and tabulations are absorbed into 
 If a line immediately follows a compound line with no intervening blank line, and its indent is
 exactly two greater than that compound line's indent, then it begins a source atom. (The line's
 indent is defined only when the spaces after the margin are even, §9; a line with an odd count is
-an ordinary line and raises E107 rather than opening a source atom.)
+an ordinary line and raises ↯/t.1.7 rather than opening a source atom.)
 
 A source atom is represented in the presentation model as `Atom.Source(text)` and is appended to
 the end of the atom sequence of the immediately preceding compound.
 
 A compound may have at most one source atom. Introducing a source atom when the preceding compound
-already has a source or literal atom is invalid (**E113**).
+already has a source or literal atom is invalid (**↯/t.1.13**).
 
 The source atom begins on the double-indented line and includes that line together with each
 subsequent line until either:
@@ -955,7 +955,7 @@ from the start of the line. Any surplus leading spaces are preserved.
 
 For each captured line, trailing whitespace — any trailing run of characters with the Unicode
 `White_Space` property, not only spaces — is stripped. (Source-atom lines are not ordinary
-lines, so E108 does not apply to them; trailing whitespace is silently removed rather than
+lines, so ↯/t.1.8 does not apply to them; trailing whitespace is silently removed rather than
 being an error.) This is the one place where TEL treats whitespace other than `U+0020` SPACE
 specially: invisible trailing characters on source-atom lines would otherwise survive as
 unintended content. A value whose lines must end in such characters is carried by a literal
@@ -991,7 +991,7 @@ A literal atom is represented in the presentation model as `Atom.Literal(text)` 
 the end of the atom sequence of the immediately preceding compound.
 
 A compound may have at most one literal atom. Introducing a literal atom when the preceding compound
-already has a source or literal atom is invalid (**E114**).
+already has a source or literal atom is invalid (**↯/t.1.14**).
 
 The opening literal-atom line is called the **delimiter line**. It is not part of the payload.
 
@@ -1050,7 +1050,7 @@ The literal payload preserves leading spaces, trailing spaces, internal spaces, 
 content exactly.
 
 If the end of file is reached before a closing delimiter line is encountered, the document is
-invalid (**E115**). A closing delimiter line MAY be the last line of the document, with or
+invalid (**↯/t.1.15**). A closing delimiter line MAY be the last line of the document, with or
 without a trailing line terminator.
 
 A document separator (§6.1) appearing within a literal-atom payload is ordinary payload content and
@@ -1059,13 +1059,13 @@ The two-sigil sequence is preserved verbatim, like any other payload content. (A
 has no leading spaces, so it can never match a closing delimiter line, which always begins with at
 least the opening indentation.) Consequently, a literal atom is never split across a document
 separator; only the true end of input (not a separator) can leave a literal atom unclosed, which
-is **E115**.
+is **↯/t.1.15**.
 
 The sigil has no special meaning inside a literal atom.
 
 The line-ending mode rules of §4 do not apply anywhere inside a literal atom payload: any `CR`,
 bare `LF`, or `CR LF` sequence between the delimiter line and the closing delimiter line is
-payload content and does not violate the mode (E120 is never raised against payload content).
+payload content and does not violate the mode (↯/t.1.20 is never raised against payload content).
 
 Literal atom payload content is raw: it is not subject to any TEL parsing rules. Indentation,
 trailing spaces, and all other content are preserved exactly. The only termination condition is
@@ -1113,13 +1113,13 @@ points. The final column (i = n) is unbounded.
 - If M_i is immediately followed by exactly one space (a soft space), the heading is the text
   beginning after that space and ending immediately before the first hard space encountered, or at
   end of line if no hard space follows. If the heading ends at a hard space, the character
-  immediately after that hard space MUST be the sigil (i.e., M\_{i+1}) (**E119**). The heading text
-  MUST NOT itself contain the sigil (**E119**).
+  immediately after that hard space MUST be the sigil (i.e., M\_{i+1}) (**↯/t.1.19**). The heading text
+  MUST NOT itself contain the sigil (**↯/t.1.19**).
 - If M_i is immediately followed by two or more spaces (a hard space), the character immediately
   after those spaces MUST be the sigil (i.e., M\_{i+1}), and the heading for M_i is the empty string
-  (**E119** if not).
+  (**↯/t.1.19** if not).
 - Any other character immediately following M_i (including a non-space character) is invalid
-  (**E119**).
+  (**↯/t.1.19**).
 
 The column heading for M_0 labels the keyword and pre-column area of rows. The column heading for
 M_i (i ≥ 1) labels column i and is positioned within column i's span on the tabulation line.
@@ -1132,8 +1132,8 @@ Examples:
 - `# ID  # Name  # Age` — three markers; headings `["ID", "Name", "Age"]`
 - `#  # Name  # Age` — M_0 followed by hard space then M_1; headings `["", "Name", "Age"]`
 - `# ID  #  # Age` — M_1 followed by hard space then M_2; headings `["ID", "", "Age"]`
-- `# foo  # # bar` — invalid (**E119**): heading for M_1 would contain the marker
-- `# foo  #  bar  # baz` — invalid (**E119**): M_1 followed by hard space not immediately preceding
+- `# foo  # # bar` — invalid (**↯/t.1.19**): heading for M_1 would contain the marker
+- `# foo  #  bar  # baz` — invalid (**↯/t.1.19**): M_1 followed by hard space not immediately preceding
   a marker
 
 ### 16.2 Tabulated Block
@@ -1157,8 +1157,8 @@ separate the two tabulated sub-blocks.
 
 Every non-blank row MUST be an ordinary compound line (comments cannot appear inside a tabulated
 block, since the blank line that would have to precede a comment per §11.1 would itself
-terminate the block). Every row MUST have the same indent as the tabulation line (**E116**).
-Rows MUST NOT have child lines (**E112**).
+terminate the block). Every row MUST have the same indent as the tabulation line (**↯/t.1.16**).
+Rows MUST NOT have child lines (**↯/t.1.12**).
 
 **Row structure.** Each row consists of a keyword and zero or more **pre-column atoms**, followed
 by zero or more **column values**. The whole row is parsed by the phrase-separation rules of
@@ -1169,7 +1169,7 @@ therefore column boundaries, must align with the marker offsets `M_i` declared o
 tabulation line — but does not alter how the row's phrases are determined.
 
 **Spacing constraint.** Every contiguous run of two or more space characters (a hard space) on
-a row MUST end at position M_i − 1 for some column i that is present on the row (**E117**).
+a row MUST end at position M_i − 1 for some column i that is present on the row (**↯/t.1.17**).
 Equivalently, no two consecutive space characters may appear at any other position on the row:
 not within the keyword, within pre-column atoms, or within a column value.
 
@@ -1188,7 +1188,7 @@ This rule implies:
   absent.
 - Otherwise the row has a non-space character at position M_i − 2 or at position M_i − 1. The
   preceding column's value — or, when i = 1, the row's keyword-and-pre-column-atom portion — has
-  **overflowed** into the separator positions, and the row is invalid (**E118**). This is the same
+  **overflowed** into the separator positions, and the row is invalid (**↯/t.1.18**). This is the same
   condition the width constraint below states from the value's side; stating it from the column
   boundary as well is what makes the three cases exhaustive, so that a row can never silently lose
   its column structure by running long.
@@ -1196,7 +1196,7 @@ This rule implies:
 A present column has an **empty value** if position M_i is itself a space character. An empty
 value requires that the subsequent column is also present, since otherwise the separator spaces
 at M_i − 2 and M_i − 1 would be trailing spaces, which are not permitted. A row MUST NOT have
-trailing spaces (**E108**); in particular, a row cannot end at position M_i − 1, and an empty
+trailing spaces (**↯/t.1.8**); in particular, a row cannot end at position M_i − 1, and an empty
 value in the final present column is therefore not representable.
 
 **Column values and typing.** For type assignment (§20.2), a row is an ordinary compound line:
@@ -1209,7 +1209,7 @@ supplied by its default, treated as absent, or an error is determined by the con
 of §20.2 (step 5).
 
 **Width constraint.** For each present non-final column i, its value MUST NOT exceed M\_{i+1} − M_i
-− 2 code points in width (**E118**). The same bound applies to the row's keyword-and-pre-column-atom
+− 2 code points in width (**↯/t.1.18**). The same bound applies to the row's keyword-and-pre-column-atom
 portion, which MUST NOT reach position M_1 − 2. The final column is unbounded.
 
 **Remarks.** Remarks are permitted on rows. A remark on a row is recognised exactly as on an
@@ -1218,10 +1218,10 @@ soft space. On a row, a phrase starts after a hard-space run, so a remark is int
 hard space, then the sigil, then one soft space; the remark extends to the end of the line. The
 hard space preceding the remark's sigil, and the remark payload itself, are exempt from the
 column spacing constraints (a hard space ending at a position other than some M_i − 1 is not
-E117 when what follows it is a remark introducer) and are not subject to column-width limits.
+↯/t.1.17 when what follows it is a remark introducer) and are not subject to column-width limits.
 
-If a row violates any of these constraints, the document is invalid (see **E116**, **E117**, and
-**E118**).
+If a row violates any of these constraints, the document is invalid (see **↯/t.1.16**, **↯/t.1.17**, and
+**↯/t.1.18**).
 
 ## 17. Presentation Nodes
 
@@ -1309,7 +1309,7 @@ TEL defines both a presentation model and a semantic model.
 The presentation model is constructed during parsing. When a schema is available, parsing and
 type assignment proceed together — the result is a presentation model and a semantic model
 produced in a single pass. (The schema also participates in indentation-error recovery; see the
-E107 recovery of §19.5.)
+↯/t.1.7 recovery of §19.5.)
 
 The presentation model records:
 
@@ -1425,7 +1425,7 @@ In addition to parsing errors, a TEL document may be structurally invalid with r
 When a schema is available, it is applied during parsing rather than as a separate
 post-processing stage: the result is a presentation model and a semantic model constructed
 together in a single pass, and the schema is consulted during indentation-error recovery (the
-schema-aware **E107 recovery** of §19.5).
+schema-aware **↯/t.1.7 recovery** of §19.5).
 
 ### 19.1 Atom and Compound Interchangeability
 
@@ -1452,7 +1452,7 @@ summarises its consequences.
   therefore usefully consume atoms only as the last atom-assignable member in member order.
 - Occurrences of a `repeatable` member may be split freely between inline atoms on the parent
   compound line and subsequent compound children of the parent with the same keyword. The
-  contiguity rule (**E309**, §20.2 step 4c) ranges over **compound children only**: it prohibits a
+  contiguity rule (**↯/t.3.9**, §20.2 step 4c) ranges over **compound children only**: it prohibits a
   compound child of one member from appearing between two compound children of another. Inline
   atoms never participate, because they all precede every compound child on the parent's own line,
   so nothing can be interleaved among them; and a member already filled by atoms is not thereby
@@ -1460,15 +1460,23 @@ summarises its consequences.
 
 ### 19.3 Error Taxonomy
 
-Errors are identified by a code of the form **E1xx** (parsing), **E2xx** (schema), or **E3xx**
-(validation). Parsing errors indicate violations of the presentation-model syntax. Schema errors
+Errors are identified by a **bolt code**: `↯/t.`, the number of the error's family, and the
+number of the error within it, as in **↯/t.1.7**. `t` is the letter by which bolt codes name
+TEL, and the families this specification defines are **↯/t.1** (parsing), **↯/t.2** (schema), and
+**↯/t.3** (validation); the BinTEL Specification defines **↯/t.4** and the RaTEL Specification
+**↯/t.5**. Parsing errors indicate violations of the presentation-model syntax. Schema errors
 indicate a malformed schema. Validation errors indicate that a document does not conform to its
 schema.
+
+A code is permanent: a number is never reused for another error, and an error which is withdrawn
+keeps its number, as reserved. The record of TEL's codes is `t.tel` in the
+[bolt](https://github.com/propensive/bolt) registry. An implementation which reports an error of
+its own on account of one of these MAY carry the code after its own, as in **↯/s.87.1/t.1.7**.
 
 Each error is referenced by code at the point in the specification where its trigger condition is
 defined.
 
-Every parsing error is detectable from the document alone, with one exception: **E124** depends
+Every parsing error is detectable from the document alone, with one exception: **↯/t.1.24** depends
 on the declaration order of the referenced schema, and is raised when that schema is resolved
 (§8.1, §8.2).
 
@@ -1477,39 +1485,39 @@ half-open span `[start, end)` of zero-based code-point offsets from the start of
 zero-width span (where `start = end`) denotes a point location. The span for each error code is
 specified in the tables below.
 
-#### Parsing Errors (E1xx)
+#### Parsing Errors (↯/t.1)
 
-| Code | Section  | Description                                                                                            | Span                                                                                                                             |
-| ---- | -------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| E101 | §4       | BOM present at start of source                                                                         | The BOM, `[0, 1)` — one code point (`U+FEFF`), whatever its byte length                                                          |
-| E102 | §8       | Pragma is not the first non-blank line after any interpreter directive                                 | The `tel` keyword on the misplaced line                                                                                          |
-| E103 | §8       | Pragma line extends beyond the first 4096 bytes                                                        | The entire pragma line                                                                                                           |
-| E104 | §8       | Pragma version parameter is absent or does not have the form `x.y` with non-negative integers          | The version atom (or the `tel` keyword when absent)                                                                              |
-| E105 | §8       | Pragma sigil parameter is not a single sigil-valid character (§6)                                       | The entire pragma line                                                                                                           |
-| E106 | §9       | Non-blank line does not begin with the margin (too few leading spaces, or a non-space within it)       | The leading spaces of the line (zero-width at line start if no spaces)                                                           |
-| E107 | §9       | Relative indentation after the margin is odd                                                           | The leading spaces of the line                                                                                                   |
-| E108 | §9, §16  | Trailing spaces on a non-blank ordinary line or tabulated row                                          | The trailing space characters                                                                                                    |
-| E109 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                                                 |
-| E110 | §13      | Line indent does not match any open compound's indent (reserved; see §19.5)                            | The leading spaces of the line |
-| E111 | §13      | Line indent exceeds the previous compound line's indent by more than one (comment and tabulation lines are not compound lines), except where the source-atom or literal-atom rules apply | The leading spaces of the line                                        |
-| E112 | §13, §16 | Line would become a child of a tabulated row. (A line indented below a comment or a tabulation line cannot become its child — §13 measures against the previous *compound* line — and is E111 if over-indented.) | Zero-width span at the start of the line              |
-| E113 | §14      | Source atom introduced when the preceding compound already has a source or literal atom                | The first line of the duplicate source atom                                                                                      |
-| E114 | §15      | Literal atom introduced when the preceding compound already has a source or literal atom               | The opening delimiter line of the duplicate literal atom                                                                         |
-| E115 | §15      | Literal atom reaches end of file before its closing delimiter line                                     | The opening delimiter line                                                                                                       |
-| E116 | §16      | Tabulated row has an indent different from the tabulation line                                         | The leading spaces of the row                                                                                                    |
-| E117 | §16      | Hard space on a tabulated row does not end at a column start boundary (including consecutive spaces within a keyword, pre-column atom, or column value) | The misaligned hard-space run                                                                                                    |
-| E118 | §16      | Column value exceeds the maximum width for that column                                                 | The overflowing column value                                                                                                     |
-| E119 | §16.1    | Malformed tabulation line heading                                                                      | The malformed heading region (from the marker to the next marker or end of line)                                                 |
-| E120 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                               | The `CR` character (or `CR LF` pair that violates the established mode)                                                          |
-| E121 | §8, §8.1 | Pragma phrase matches no pragma form (schema reference, layer selection, signature, or sigil)          | The entire pragma line                                                                                                           |
-| E122 | §8       | Pragma phrases violate the positional order or multiplicity (version, reference, layers, signature, sigil) | The entire pragma line                                                                                                       |
-| E123 | §4       | Document is not a well-formed UTF-8 byte sequence (one error per maximal ill-formed subsequence)       | The replacement `U+FFFD` code point in the decoded text                                                                          |
-| E124 | §8.1     | Layer selections are not listed in the schema's declaration order (raised at schema resolution, §8.2)  | The entire pragma line                                                                                                           |
+| Code     | Section  | Description                                                                                                                                                                                                          | Span                                                                             |
+| -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| ↯/t.1.1  | §4       | BOM present at start of source                                                                                                                                                                                       | The BOM, `[0, 1)` — one code point (`U+FEFF`), whatever its byte length          |
+| ↯/t.1.2  | §8       | Pragma is not the first non-blank line after any interpreter directive                                                                                                                                               | The `tel` keyword on the misplaced line                                          |
+| ↯/t.1.3  | §8       | Pragma line extends beyond the first 4096 bytes                                                                                                                                                                      | The entire pragma line                                                           |
+| ↯/t.1.4  | §8       | Pragma version parameter is absent or does not have the form `x.y` with non-negative integers                                                                                                                        | The version atom (or the `tel` keyword when absent)                              |
+| ↯/t.1.5  | §8       | Pragma sigil parameter is not a single sigil-valid character (§6)                                                                                                                                                    | The entire pragma line                                                           |
+| ↯/t.1.6  | §9       | Non-blank line does not begin with the margin (too few leading spaces, or a non-space within it)                                                                                                                     | The leading spaces of the line (zero-width at line start if no spaces)           |
+| ↯/t.1.7  | §9       | Relative indentation after the margin is odd                                                                                                                                                                         | The leading spaces of the line                                                   |
+| ↯/t.1.8  | §9, §16  | Trailing spaces on a non-blank ordinary line or tabulated row                                                                                                                                                        | The trailing space characters                                                    |
+| ↯/t.1.9  | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line                                                                                                               | Zero-width span at the start of the comment line                                 |
+| ↯/t.1.10 | §13      | Line indent does not match any open compound's indent (reserved; see §19.5)                                                                                                                                          | The leading spaces of the line                                                   |
+| ↯/t.1.11 | §13      | Line indent exceeds the previous compound line's indent by more than one (comment and tabulation lines are not compound lines), except where the source-atom or literal-atom rules apply                             | The leading spaces of the line                                                   |
+| ↯/t.1.12 | §13, §16 | Line would become a child of a tabulated row. (A line indented below a comment or a tabulation line cannot become its child — §13 measures against the previous *compound* line — and is ↯/t.1.11 if over-indented.) | Zero-width span at the start of the line                                         |
+| ↯/t.1.13 | §14      | Source atom introduced when the preceding compound already has a source or literal atom                                                                                                                              | The first line of the duplicate source atom                                      |
+| ↯/t.1.14 | §15      | Literal atom introduced when the preceding compound already has a source or literal atom                                                                                                                             | The opening delimiter line of the duplicate literal atom                         |
+| ↯/t.1.15 | §15      | Literal atom reaches end of file before its closing delimiter line                                                                                                                                                   | The opening delimiter line                                                       |
+| ↯/t.1.16 | §16      | Tabulated row has an indent different from the tabulation line                                                                                                                                                       | The leading spaces of the row                                                    |
+| ↯/t.1.17 | §16      | Hard space on a tabulated row does not end at a column start boundary (including consecutive spaces within a keyword, pre-column atom, or column value)                                                              | The misaligned hard-space run                                                    |
+| ↯/t.1.18 | §16      | Column value exceeds the maximum width for that column                                                                                                                                                               | The overflowing column value                                                     |
+| ↯/t.1.19 | §16.1    | Malformed tabulation line heading                                                                                                                                                                                    | The malformed heading region (from the marker to the next marker or end of line) |
+| ↯/t.1.20 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                                                                                                                                             | The `CR` character (or `CR LF` pair that violates the established mode)          |
+| ↯/t.1.21 | §8, §8.1 | Pragma phrase matches no pragma form (schema reference, layer selection, signature, or sigil)                                                                                                                        | The entire pragma line                                                           |
+| ↯/t.1.22 | §8       | Pragma phrases violate the positional order or multiplicity (version, reference, layers, signature, sigil)                                                                                                           | The entire pragma line                                                           |
+| ↯/t.1.23 | §4       | Document is not a well-formed UTF-8 byte sequence (one error per maximal ill-formed subsequence)                                                                                                                     | The replacement `U+FFFD` code point in the decoded text                          |
+| ↯/t.1.24 | §8.1     | Layer selections are not listed in the schema's declaration order (raised at schema resolution, §8.2)                                                                                                                | The entire pragma line                                                           |
 
 A document separator (§6.1) is always well-formed and carries no error code; it simply ends the
 current document and begins the next.
 
-Schema errors (E2xx) and validation errors (E3xx) arise from violations of the schema language
+Schema errors (↯/t.2) and validation errors (↯/t.3) arise from violations of the schema language
 rules (§20) and document conformance constraints (§21). Their trigger conditions and diagnostic
 spans are catalogued at the end of §20.1 (Schema Validity Constraints) and in §21.9
 (Validation Error Catalogue) respectively.
@@ -1541,52 +1549,52 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 
 #### Parsing Error Recovery
 
-| Code | Recovery strategy                                                                                                                                                                                                                                                                                                                   |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| E101 | Ignore the BOM and continue parsing from the next byte.                                                                                                                                                                                                                                                                             |
-| E102 | Report E102 once, then restart parsing the document from the beginning using the version, schema identification, and sigil extracted from the misplaced pragma. On that second pass the misplaced line is consumed as the pragma rather than parsed as an ordinary line, and E102 is not reported again; the restart therefore terminates. |
-| E103 | Allow the pragma line to exceed the 4096-byte limit and continue parsing its content normally.                                                                                                                                                                                                                                      |
-| E104 | Parse with the latest version known to the implementation. (A well-formed version naming an *unknown* version is not E104; see §8 for the version-selection rule that applies in that case.)                                                                                                                                       |
-| E105 | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                   |
-| E106 | Parse the line as if it consisted of the margin followed by its content at indent `0`. The margin itself is unchanged for subsequent lines.                                                                                                                                                                                        |
-| E107 | Parse the line's keyword; check which of the two candidate indent levels (±1 space) makes the keyword valid according to the schema; place the line at the chosen candidate depth. See indentation recovery algorithm below.                                                                                                        |
-| E108 | Ignore trailing spaces and parse the remainder of the line normally.                                                                                                                                                                                                                                                                |
-| E109 | Ignore the missing preceding blank line (or other required predecessor) and treat the comment as normally attached to the following node.                                                                                                                                                                                           |
-| E110 | Same indentation recovery as E107.                                                                                                                                                                                                                                                                                                  |
-| E111 | The over-indented line is skipped (omitted from the presentation model) and parsing continues with the following line at the original expected indent.                                                                                                                                                                              |
-| E112 | The offending line is skipped (omitted from the presentation model), as for E111; parsing continues with the following line.                                                                                                                                                                                                        |
-| E113 | Ignore the duplicate source atom; use the first one encountered.                                                                                                                                                                                                                                                                    |
-| E114 | Ignore the duplicate literal atom; use the first one encountered.                                                                                                                                                                                                                                                                   |
-| E115 | Treat the unclosed literal atom's payload as everything from the opening delimiter line to the end of file (excluding the final `LF`, if any).                                                                                                                                                                                      |
-| E116 | The wrong-indent row is skipped (omitted from the presentation model); parsing continues with the following line. Because the row is not parsed, no E117 or E118 errors arise from it.                                                                                                                                              |
-| E117 | Interpret the row according to its actual hard-space positions regardless of alignment with column markers; the row is retained in the presentation model.                                                                                                                                                                          |
-| E118 | Same as E117.                                                                                                                                                                                                                                                                                                                       |
-| E119 | Record the malformed heading as the empty string and continue parsing the tabulation line and its block normally; the column-alignment checks (E117, E118) still apply to the block's rows.                                                                                                                                         |
-| E120 | Record the error and continue: lines are delimited by `LF` alone, a `CR` immediately preceding an `LF` is part of that line's terminator, and any other `CR` remains in the line's content as an ordinary character.                                                                                                                |
-| E121 | Ignore the unclassifiable phrase and continue parsing the pragma from the next phrase. If no schema identification survives, the document is treated as untyped.                                                                                                                                                                     |
-| E122 | Ignore each phrase that violates the positional order or multiplicity; parse the pragma using the earliest well-ordered subsequence of phrases.                                                                                                                                                                                     |
-| E123 | Replace each maximal ill-formed byte subsequence with a single `U+FFFD` REPLACEMENT CHARACTER (per Unicode §3.9, "maximal subpart" practice) and continue parsing the resulting code-point sequence.                                                                                                                                 |
-| E124 | Reorder the layer selections into the schema's declaration order and continue; resolution proceeds with the reordered composition.                                                                                                                                                                                                  |
+| Code     | Recovery strategy                                                                                                                                                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ↯/t.1.1  | Ignore the BOM and continue parsing from the next byte.                                                                                                                                                                                                                                                                                          |
+| ↯/t.1.2  | Report ↯/t.1.2 once, then restart parsing the document from the beginning using the version, schema identification, and sigil extracted from the misplaced pragma. On that second pass the misplaced line is consumed as the pragma rather than parsed as an ordinary line, and ↯/t.1.2 is not reported again; the restart therefore terminates. |
+| ↯/t.1.3  | Allow the pragma line to exceed the 4096-byte limit and continue parsing its content normally.                                                                                                                                                                                                                                                   |
+| ↯/t.1.4  | Parse with the latest version known to the implementation. (A well-formed version naming an *unknown* version is not ↯/t.1.4; see §8 for the version-selection rule that applies in that case.)                                                                                                                                                  |
+| ↯/t.1.5  | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                                |
+| ↯/t.1.6  | Parse the line as if it consisted of the margin followed by its content at indent `0`. The margin itself is unchanged for subsequent lines.                                                                                                                                                                                                      |
+| ↯/t.1.7  | Parse the line's keyword; check which of the two candidate indent levels (±1 space) makes the keyword valid according to the schema; place the line at the chosen candidate depth. See indentation recovery algorithm below.                                                                                                                     |
+| ↯/t.1.8  | Ignore trailing spaces and parse the remainder of the line normally.                                                                                                                                                                                                                                                                             |
+| ↯/t.1.9  | Ignore the missing preceding blank line (or other required predecessor) and treat the comment as normally attached to the following node.                                                                                                                                                                                                        |
+| ↯/t.1.10 | Same indentation recovery as ↯/t.1.7.                                                                                                                                                                                                                                                                                                            |
+| ↯/t.1.11 | The over-indented line is skipped (omitted from the presentation model) and parsing continues with the following line at the original expected indent.                                                                                                                                                                                           |
+| ↯/t.1.12 | The offending line is skipped (omitted from the presentation model), as for ↯/t.1.11; parsing continues with the following line.                                                                                                                                                                                                                 |
+| ↯/t.1.13 | Ignore the duplicate source atom; use the first one encountered.                                                                                                                                                                                                                                                                                 |
+| ↯/t.1.14 | Ignore the duplicate literal atom; use the first one encountered.                                                                                                                                                                                                                                                                                |
+| ↯/t.1.15 | Treat the unclosed literal atom's payload as everything from the opening delimiter line to the end of file (excluding the final `LF`, if any).                                                                                                                                                                                                   |
+| ↯/t.1.16 | The wrong-indent row is skipped (omitted from the presentation model); parsing continues with the following line. Because the row is not parsed, no ↯/t.1.17 or ↯/t.1.18 errors arise from it.                                                                                                                                                   |
+| ↯/t.1.17 | Interpret the row according to its actual hard-space positions regardless of alignment with column markers; the row is retained in the presentation model.                                                                                                                                                                                       |
+| ↯/t.1.18 | Same as ↯/t.1.17.                                                                                                                                                                                                                                                                                                                                |
+| ↯/t.1.19 | Record the malformed heading as the empty string and continue parsing the tabulation line and its block normally; the column-alignment checks (↯/t.1.17, ↯/t.1.18) still apply to the block's rows.                                                                                                                                              |
+| ↯/t.1.20 | Record the error and continue: lines are delimited by `LF` alone, a `CR` immediately preceding an `LF` is part of that line's terminator, and any other `CR` remains in the line's content as an ordinary character.                                                                                                                             |
+| ↯/t.1.21 | Ignore the unclassifiable phrase and continue parsing the pragma from the next phrase. If no schema identification survives, the document is treated as untyped.                                                                                                                                                                                 |
+| ↯/t.1.22 | Ignore each phrase that violates the positional order or multiplicity; parse the pragma using the earliest well-ordered subsequence of phrases.                                                                                                                                                                                                  |
+| ↯/t.1.23 | Replace each maximal ill-formed byte subsequence with a single `U+FFFD` REPLACEMENT CHARACTER (per Unicode §3.9, "maximal subpart" practice) and continue parsing the resulting code-point sequence.                                                                                                                                             |
+| ↯/t.1.24 | Reorder the layer selections into the schema's declaration order and continue; resolution proceeds with the reordered composition.                                                                                                                                                                                                               |
 
 #### Schema Errors
 
-Schema errors (E2xx) have no per-error recovery strategy: they are properties of a schema, not
-of the document being parsed against it. A schema that triggers any E2xx condition is invalid
+Schema errors (↯/t.2) have no per-error recovery strategy: they are properties of a schema, not
+of the document being parsed against it. A schema that triggers any ↯/t.2 condition is invalid
 (§23), and the error is reported against the schema document itself.
 
 #### Validation Error Recovery
 
-All validation errors (E301 through E315) are self-contained: they do not have cascading effects on
+All validation errors (↯/t.3.1 through ↯/t.3.15) are self-contained: they do not have cascading effects on
 the remainder of the type assignment or validation process. An implementation MUST record the error
 and continue processing remaining nodes as if the erroneous node were absent or were assigned the
 most plausible available type. Specific recovery notes:
 
-- **E311** (`Flag` compound with atoms or children): ignore the atoms and children of the `Flag`
+- **↯/t.3.11** (`Flag` compound with atoms or children): ignore the atoms and children of the `Flag`
   compound; treat it as a bare keyword with no content.
 
-#### Indentation Recovery (E107, E111)
+#### Indentation Recovery (↯/t.1.7, ↯/t.1.11)
 
-When a line's relative indentation after the margin is odd (E107), the line sits between two
+When a line's relative indentation after the margin is odd (↯/t.1.7), the line sits between two
 valid indentation positions: one space shallower and one space deeper. This specification defines two
 recovery rules, selected by whether a schema is available at parse time.
 
@@ -1611,7 +1619,7 @@ For each candidate, the parser computes a **validity bit** for the line's keywor
 
 The recovery then proceeds:
 
-1. Record an E107 error whose span covers the line's leading whitespace.
+1. Record an ↯/t.1.7 error whose span covers the line's leading whitespace.
 2. Choose the placement:
    - if only `shallower` is valid: place the line at `shallower`;
    - if only `deeper` is valid: place the line at `deeper`;
@@ -1627,7 +1635,7 @@ always produces the same placement.
 schema-aware validity check cannot be performed. The parser falls back to the **shallower-wins
 rule**:
 
-1. Record an E107 error whose span covers the line's leading whitespace.
+1. Record an ↯/t.1.7 error whose span covers the line's leading whitespace.
 2. Treat the line as if its relative indentation were `⌊spaces / 2⌋` (integer division), i.e.
    the shallower of the two adjacent even levels.
 3. Parsing continues from the next line as if the recovery had not occurred.
@@ -1639,20 +1647,20 @@ schema-aware rule is then a strict refinement that picks `deeper` only when `sha
 necessarily mis-place the line (the keyword is not declared at `shallower`'s parent but IS
 declared at `deeper`'s parent).
 
-**E111 over-indentation.** When a line is indented more than one level deeper than the previous
-compound line, the over-indented line is recorded as an **E111** error and omitted from the
+**↯/t.1.11 over-indentation.** When a line is indented more than one level deeper than the previous
+compound line, the over-indented line is recorded as an **↯/t.1.11** error and omitted from the
 presentation model. Parsing continues with the next line at the originally expected indent. This
 keeps the parser deterministic without requiring schema-aware indent inference.
 
-**E110.** §13 also defines **E110** for the case of a dedent that cannot find a matching
+**↯/t.1.10.** §13 also defines **↯/t.1.10** for the case of a dedent that cannot find a matching
 ancestor indent. The recursive parsing algorithm used here cannot produce that case (every
 dedent encountered during the recursive descent terminates a `parse_blocks` invocation at the
-matching ancestor level). E110 is therefore retained in the error catalogue as a reserved code
+matching ancestor level). ↯/t.1.10 is therefore retained in the error catalogue as a reserved code
 for non-recursive implementations — for example, ones that track an explicit ancestor stack and
-match dedents against it. Such an implementation surfaces E110 in place of the recursive
-parser's silent terminations; the recovery is then the same as E107 (treat the line at the
+match dedents against it. Such an implementation surfaces ↯/t.1.10 in place of the recursive
+parser's silent terminations; the recovery is then the same as ↯/t.1.7 (treat the line at the
 shallower of the two candidate indent levels). Under the canonical recursive parser of this
-specification, E110 never fires.
+specification, ↯/t.1.10 never fires.
 
 ## 20. Schema Language
 
@@ -1711,7 +1719,7 @@ interface SelectDefinition {
   variants: Variant[];
   // Layer-only exclusion operations: each names a variant keyword to remove
   // during the merge of §20.3. MUST be empty in a base schema and in the
-  // composed schema (E216 otherwise); an `exclude` is consumed by the merge
+  // composed schema (↯/t.2.16 otherwise); an `exclude` is consumed by the merge
   // and never survives composition.
   excludes: string[];
   validators: string[];
@@ -1755,8 +1763,8 @@ interface Field {
   required: Polarity;
   repeatable: Polarity;
   // True when this field is the identifying key of its enclosing Struct.
-  // Monotone: a layer may set it, never clear it (§20.3). See E219–E221
-  // and E314.
+  // Monotone: a layer may set it, never clear it (§20.3). See ↯/t.2.19–↯/t.2.21
+  // and ↯/t.3.14.
   key: boolean;
   keyword: string;
   type: Type;
@@ -1815,13 +1823,13 @@ signature — although the LIRA module name a schema is published under MUST equ
 is `Struct`-typed directly (not `Type`-typed) by analogy with `Layer.overlay`: every schema must
 define a root struct, and no other `Type` variant is meaningful at the document root. A root
 `Struct` with an empty member list is valid; it types only the empty document (any content
-raises E306), which is occasionally useful as a base for layers to extend.
+raises ↯/t.3.6), which is occasionally useful as a base for layers to extend.
 
 `Schema.layers` is an ordered list of `Layer` values defining optional schema extensions. The empty
 list is the normal case for a schema with no layers. Layer composition is defined in §20.3.
 
 `Schema.sigil` is the default sigil for documents that use this schema, or `null` if the schema does
-not declare one. When non-null, it MUST be a sigil-valid character (§6) (**E207**). When a document's pragma omits a sigil but provides a schema
+not declare one. When non-null, it MUST be a sigil-valid character (§6) (**↯/t.2.7**). When a document's pragma omits a sigil but provides a schema
 identifier that resolves to a schema with a non-null `sigil`, the schema's sigil is used as if it
 had been specified in the pragma (§8.3).
 
@@ -1833,7 +1841,7 @@ populate the schema's **Definition namespace** — the union of `TypeName`s addr
 matching name; structurally, records produce `Struct`s with members, scalars produce `Scalar`s
 with validators, and selects produce sums with variants. The three lists are kept distinct in
 the data model because their bodies differ, but they share a **single namespace**: no two
-Definitions across the three lists may share a name within the composed schema (**E210**).
+Definitions across the three lists may share a name within the composed schema (**↯/t.2.10**).
 
 The Definition mechanism is what makes recursive schemas finitely expressible: the
 schema-of-schemas itself (TELS, §20.5) is necessarily recursive, and so
@@ -1841,7 +1849,7 @@ is any schema whose data has cyclical structure. The empty list is the normal ca
 non-recursive schemas.
 
 A `Layer`'s `name` is a kebab-case identifier (§20.7) labelling the layer. It MUST be unique
-across all layers of a schema (**E204**). `Layer.overlay` is a `Struct` whose members are merged
+across all layers of a schema (**↯/t.2.4**). `Layer.overlay` is a `Struct` whose members are merged
 into the composed schema's root struct by the algorithm in §20.3. `Layer.records`,
 `Layer.scalars`, and `Layer.selects` are ordered lists of Definitions introduced by the layer;
 together they merge with the base schema's `Schema.records ∪ Schema.scalars ∪ Schema.selects`
@@ -1854,8 +1862,8 @@ directly as well as whole layers (§8.1).
 A `RecordDefinition` has a `name`, a list of `members`, and a list of struct-level
 `validators`. The `name` MUST be a `TypeName` (§20.7), unique across the composed namespace
 `Schema.records ∪ Schema.scalars ∪ Schema.selects ∪ ⋃ Layer.{records,scalars,selects}`
-(**E210**, with same-name records, scalars, or selects in *layers* triggering Definition merge
-per §20.3 rather than E210). The `members` field is a list of `Member`s, structurally identical
+(**↯/t.2.10**, with same-name records, scalars, or selects in *layers* triggering Definition merge
+per §20.3 rather than ↯/t.2.10). The `members` field is a list of `Member`s, structurally identical
 to those of a `Struct`: a `RecordDefinition` is, in effect, a named `Struct`.
 `RecordDefinition.validators` mirrors `Struct.validators` (§21.6) and applies to every instance
 of the Definition.
@@ -1868,11 +1876,11 @@ distinct named type — for generated code, for diagnostics, and as a Definition
 layer may tighten (§20.3). A `ScalarDefinition` also carries an OPTIONAL `encoding` — the
 kebab-case name of a codec (§21.7) defining the binary representation of the scalar's values in
 BinTEL — or `null` when absent. A declared encoding additionally constrains validity: a value
-the codec's encoder rejects is invalid (**E312**), in AND-conjunction with the declared
+the codec's encoder rejects is invalid (**↯/t.3.12**), in AND-conjunction with the declared
 validators and patterns. Layer-merge of same-name `ScalarDefinition`s concatenates the
 `validators` lists in declaration order, deduplicated; replaces the `patterns` list under the
-containment check of §20.3 (**E223** on failure); and merges `encoding` per §20.3 (a layer MAY
-add an encoding where the base has none; a conflicting non-null encoding is **E218**).
+containment check of §20.3 (**↯/t.2.23** on failure); and merges `encoding` per §20.3 (a layer MAY
+add an encoding where the base has none; a conflicting non-null encoding is **↯/t.2.18**).
 
 A `SelectDefinition` has a `name` (subject to the same uniqueness rule), a non-empty list of
 `variants`, and a list of `validators`. It is a named sum type. Each variant has a kebab-case
@@ -1882,7 +1890,7 @@ mirrors `Struct.validators` for symmetry: each named validator inspects the chos
 instance and may reject it under cross-cutting rules. Layer-merge of same-name
 `SelectDefinition`s removes variants (via `exclude` operations declared in the layer's
 SelectDefinition body) and appends validators; a layer MUST NOT introduce a variant with a
-keyword absent from the base SelectDefinition (**E213**).
+keyword absent from the base SelectDefinition (**↯/t.2.13**).
 
 Each `RecordDefinition`, `ScalarDefinition`, `SelectDefinition`, `Field`, and `Variant` also
 carries an optional `description`: free-form human-readable text documenting the type, field, or
@@ -1904,14 +1912,14 @@ treated as if its type were the resolved Definition: a `RecordDefinition` resolv
 `Scalar` formed from its `validators` and `encoding`. A `SelectDefinition` is never the resolved type of a
 plain `Reference`: a sum at a member position is always introduced via `SelectRef` rather than
 `Field.type`, because a `Field` has a single keyword whereas a sum has none. A `Reference` whose
-`name` resolves to a `SelectDefinition` is invalid (**E217**); a `Reference` whose `name` does
-not match any Definition in the composed schema is also invalid (**E209**).
+`name` resolves to a `SelectDefinition` is invalid (**↯/t.2.17**); a `Reference` whose `name` does
+not match any Definition in the composed schema is also invalid (**↯/t.2.9**).
 
 A `SelectRef` is a `Member` kind that places a sum at a member position. Its `reference` is the
 `TypeName` of a `SelectDefinition`; the SelectRef's polarity (`required`, `repeatable`) lives at
 the use site. A `SelectRef` whose `reference` does not match any `SelectDefinition.name` in the
-composed schema is invalid (**E209**); one that resolves to a non-`SelectDefinition` (a record
-or scalar) is also invalid (**E217**).
+composed schema is invalid (**↯/t.2.9**); one that resolves to a non-`SelectDefinition` (a record
+or scalar) is also invalid (**↯/t.2.17**).
 
 Throughout this specification, **Select member** is shorthand for a `SelectRef` member (named
 for the `select` keyword that introduces one in schema source, §20.5), and an **all-`Flag`
@@ -1953,7 +1961,7 @@ errors.
 
 How the two axes merge when a layer refines a member is defined normatively by the
 `MergePolarity` rule of §20.3 (in short: tightening is always permitted, loosening an
-already-effective-tight axis is E214/E215, and an undeclared axis carries through unchanged).
+already-effective-tight axis is ↯/t.2.14 or ↯/t.2.15, and an undeclared axis carries through unchanged).
 The retention of the tristate, in preference to a simple boolean, is what lets that merge
 distinguish a layer redundantly restating the existing state from a layer attempting to flip
 it.
@@ -2001,9 +2009,9 @@ further validity constraint, applied after the declared validators (§21.7). The
 `Field.default` is either `null` (no default) or a string giving the value to be used when the
 member is absent. A non-null default MAY only be specified on a `Field` whose type resolves to a
 `Scalar` and whose effective `required` is `true`; specifying a non-null default on a
-non-required member is a schema error (**E203**). When a required `Field` member whose type is a
+non-required member is a schema error (**↯/t.2.3**). When a required `Field` member whose type is a
 `Scalar` with a non-null default is absent from the document, the default value is used as the
-semantic value and no E307 error is raised. A required member with a default is therefore one
+semantic value and no ↯/t.3.7 error is raised. A required member with a default is therefore one
 that may be elided from the source but is always present in the semantic model: `default` gives
 the value a required-but-elided member takes, whereas a non-required member without a default is
 simply absent.
@@ -2012,16 +2020,16 @@ simply absent.
 identifying field — of its enclosing `Struct`. The following constraints apply to a key-flagged
 field in the composed schema (§20.1):
 
-- its type MUST resolve to a `Scalar` (**E219**);
+- its type MUST resolve to a `Scalar` (**↯/t.2.19**);
 - its effective `required` MUST be `true` and its effective `repeatable` MUST be `false`
-  (**E220**), so that every instance of the enclosing Struct carries exactly one key value
+  (**↯/t.2.20**), so that every instance of the enclosing Struct carries exactly one key value
   (possibly supplied by a `default`);
-- at most one member of any Struct may be key-flagged (**E221**).
+- at most one member of any Struct may be key-flagged (**↯/t.2.21**).
 
 The **key value** of an element whose type is a key-carrying Struct is the semantic text of the
 `Value` filling its key field, including a value supplied by `default` (§18.3 step 5). Key
 values identify sibling elements: within one parent, the key values of keyed children filling
-effectively `repeatable` members MUST be pairwise distinct (**E314**, §21.6). The companion
+effectively `repeatable` members MUST be pairwise distinct (**↯/t.3.14**, §21.6). The companion
 [TELP Specification](telp.md) uses key values to select occurrences of repeatable members
 by identity rather than by position.
 
@@ -2029,7 +2037,7 @@ Key values SHOULD be inline-safe (§22.2), non-empty, and not composed solely of
 (an all-digit path component is always an occurrence index in TELP, so an all-digit key
 value cannot be selected by key); identifier-like key values are RECOMMENDED. Combining `key`
 with a non-null `default` SHOULD be avoided: when two or more sibling occurrences elide the key
-field, they share the default as their key value and are invalid (E314).
+field, they share the default as their key value and are invalid (↯/t.3.14).
 
 `key` cannot be declared on a `SelectRef` or a `Variant`: the TELS records for those
 constructs (§20.5) do not admit it. A sum instance is identified by its variant keyword; a
@@ -2043,26 +2051,26 @@ subtype relation (§24.3), and leave the BinTEL encoding and the value hash of e
 unchanged. They are nevertheless part of the schema — atoms like any other (§20.3), carried by
 signatures — so that a layer can tune the storage of a schema it does not own.
 
-- `ScalarDefinition.width` (`width w`, a positive decimal, **E225** otherwise) asserts that
+- `ScalarDefinition.width` (`width w`, a positive decimal, **↯/t.2.25** otherwise) asserts that
   every value of the scalar encodes, under its `encoding`, to exactly `w` bytes, so that RaTEL
-  may store values inline in a fixed slot. It is meaningful only with an `encoding` (**E227** on
+  may store values inline in a fixed slot. It is meaningful only with an `encoding` (**↯/t.2.27** on
   the composed schema otherwise). It is a statement about the codec, whose behaviour is fixed by
   its name (law C4, §21.7): a value whose bytes have another length is a configuration failure
   of the RaTEL writer, which MUST refuse to encode (RaTEL §6.1), never a document error — text
   validation does not consult `width`. The standard codecs ([Standard Codecs](codecs.md)) have
-  fixed widths of their own; restating one is a benign no-op and contradicting one is **E226**.
+  fixed widths of their own; restating one is a benign no-op and contradicting one is **↯/t.2.26**.
 - `ScalarDefinition.intern` (`intern`) asks that values be stored once in RaTEL's shared string
   table, so that equal values may be compared by reference. A scalar cannot be both `intern`
-  and of fixed `width` (**E231**).
+  and of fixed `width` (**↯/t.2.31**).
 - `Field.indexes` (`index ‹path› …`, one `Index` per `index` child) declares **secondary
-  indexes** over the occurrences of an effectively `repeatable` Field (**E228** otherwise): each
-  `Index` is an ordered tuple of paths, every path a [TELP](telp.md) (**E229** if not
+  indexes** over the occurrences of an effectively `repeatable` Field (**↯/t.2.28** otherwise): each
+  `Index` is an ordered tuple of paths, every path a [TELP](telp.md) (**↯/t.2.29** if not
   syntactically one) resolved *statically* against the Field's type. When the type is a
   `Struct`, each component MUST name a `Field` member of the current Struct — not a Select
   variant — whose effective `repeatable` is false; non-final components MUST resolve to a
-  `Struct` and the final one to a `Scalar`, any of which MAY be optional (**E230** otherwise).
+  `Struct` and the final one to a `Scalar`, any of which MAY be optional (**↯/t.2.30** otherwise).
   When the type is a `Scalar`, the only admissible path is the root path (`/`), denoting the
-  values themselves (**E228** otherwise). A secondary index implies **no** uniqueness; only
+  values themselves (**↯/t.2.28** otherwise). A secondary index implies **no** uniqueness; only
   `key` does, and a `key` field needs no `index` — RaTEL indexes it automatically. The term
   *secondary index* is used throughout for these declarations, to keep them distinct from the
   *keyword index* of §20.2.
@@ -2149,14 +2157,14 @@ A schema is itself a TEL document — specifically, a TEL document conforming to
 schema (§20.5). It is therefore subject to the same two layers of error reporting as any other
 TEL document:
 
-- **Parsing and validation against `tels`.** The E1xx (parsing) and E3xx (validation)
+- **Parsing and validation against `tels`.** The ↯/t.1 (parsing) and ↯/t.3 (validation)
   taxonomies of §19.3 apply to the schema document directly. Structural malformations — a
   `field` line appearing inside a `scalar`'s body, an atom in a position where the schema
   expects a compound child, a malformed identifier in a `keyword` slot, and similar — are
   caught here. The error against TELS is the only signal a schema author receives for
   this class of mistake. In particular, an unknown child keyword (such as `field` inside
-  `scalar-body`) raises **E306** and a non-Struct compound being given children raises
-  **E301**.
+  `scalar-body`) raises **↯/t.3.6** and a non-Struct compound being given children raises
+  **↯/t.3.1**.
 - **Semantic validity of the resulting `Schema` value.** Once `tels` has accepted the
   document and `construct_schema` (§20.6) has produced a `Schema` value, the constraints below
   apply. They catch errors that the type assignment against TELS cannot see — properties
@@ -2168,127 +2176,127 @@ A schema is invalid if any of the following holds:
 - within a single `Struct`, the same keyword appears more than once across all members
   (considering `Field.keyword` and every `Variant.keyword` of the `SelectDefinition`s referenced
   by `SelectRef`s); or, within a single `SelectDefinition`, two or more variants share the same
-  keyword (**E201**)
+  keyword (**↯/t.2.1**)
 - a `SelectDefinition` is **declared** with an empty `variants` list, in a base schema or in a
-  layer (**E202**). This is a check on the declaration, not on the composed schema: a
-  SelectDefinition emptied during composition by `exclude` operations is governed by E212 instead,
+  layer (**↯/t.2.2**). This is a check on the declaration, not on the composed schema: a
+  SelectDefinition emptied during composition by `exclude` operations is governed by ↯/t.2.12 instead,
   which permits the result when no effectively-`required` `SelectRef` references it (§20.3)
 - a `Field` has a non-null `default` but its type does not resolve to a `Scalar`, or its
-  effective `required` is `false` (i.e. `Field.required == "loose"`) (**E203**). Absence of a
+  effective `required` is `false` (i.e. `Field.required == "loose"`) (**↯/t.2.3**). Absence of a
   non-required member always means the member is absent; defaults are only meaningful for
   required members that may be elided in the source document.
-- two or more `Layer`s within a `Schema` share the same `name` (**E204**)
+- two or more `Layer`s within a `Schema` share the same `name` (**↯/t.2.4**)
 - a layer adds a `Field` or `SelectRef` to a `Struct` whose keyword — or, for a `SelectRef`, any
   variant keyword of the referenced `SelectDefinition` — collides with a keyword already present
-  in the merged `Struct` (**E205**; checked on the composed schema, §20.3)
+  in the merged `Struct` (**↯/t.2.5**; checked on the composed schema, §20.3)
 - a layer declares a `Field` whose keyword matches an existing `Field` in the same `Struct`, but
   the two types (after reference resolution) are neither structurally equal nor both `Struct`
-  (§20.3) (**E206**)
-- `Schema.sigil` is non-null and is not a sigil-valid character (§6) (**E207**)
+  (§20.3) (**↯/t.2.6**)
+- `Schema.sigil` is non-null and is not a sigil-valid character (§6) (**↯/t.2.7**)
 - the keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or
-  `SelectDefinition` (**E208**)
+  `SelectDefinition` (**↯/t.2.8**)
 - a `Reference`, or a `SelectRef.reference`, names a `TypeName` that is neither a predefined
-  built-in name (§20.5) nor a Definition of the composed schema (**E209**). E209 covers the
+  built-in name (§20.5) nor a Definition of the composed schema (**↯/t.2.9**). ↯/t.2.9 covers the
   *unresolved* case only: a name that does resolve, but to a Definition of the wrong kind for its
-  position, is **E217** below and not E209
+  position, is **↯/t.2.17** below and not ↯/t.2.9
 - two or more Definitions in the *base*
   `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name`, or a Definition's
-  `name` is one of the predefined built-in names (§20.5) (**E210**). Records,
+  `name` is one of the predefined built-in names (§20.5) (**↯/t.2.10**). Records,
   scalars, and selects share a single namespace; cross-kind name collisions in the base are also
-  E210. Same-name Definitions across layers trigger Definition merge per §20.3 rather than
-  E210.
+  ↯/t.2.10. Same-name Definitions across layers trigger Definition merge per §20.3 rather than
+  ↯/t.2.10.
 - an `Exclude(K)` operation in a layer SelectDefinition body names a keyword K that does not
   identify any variant of the base SelectDefinition, as declared before any layer is applied
-  (**E211**). An `Exclude(K)` naming a variant of the base which an earlier operation has
+  (**↯/t.2.11**). An `Exclude(K)` naming a variant of the base which an earlier operation has
   already excluded is not an error, and has no effect, so that layers excluding the same
   variant compose
 - a `SelectDefinition` of the composed schema has no variants while some `SelectRef` of the
   composed schema whose effective `required` is `true` references it — whether an `Exclude(K)`
-  emptied it or a required `SelectRef` was added to an already-emptied one (**E212**; checked on
+  emptied it or a required `SelectRef` was added to an already-emptied one (**↯/t.2.12**; checked on
   the composed schema, §20.3)
 - a layer's SelectDefinition contains a `variant` declaration whose keyword is absent from the
-  base SelectDefinition (variant addition is forbidden — would widen the sum) (**E213**)
+  base SelectDefinition (variant addition is forbidden — would widen the sum) (**↯/t.2.13**)
 - a layer declares `optional` on an axis whose merged-base polarity is `"default"` or `"tight"`
-  (a loosening attempt on the `required` axis; §20.3) (**E214**)
+  (a loosening attempt on the `required` axis; §20.3) (**↯/t.2.14**)
 - a layer declares `repeatable` on an axis whose merged-base polarity is `"default"` or
-  `"tight"` (a loosening attempt on the `repeatable` axis; §20.3) (**E215**)
+  `"tight"` (a loosening attempt on the `repeatable` axis; §20.3) (**↯/t.2.15**)
 - an `Exclude` appears outside a layer's SelectDefinition body — i.e. inside `Schema.document`,
-  a `RecordDefinition`, or a base-side `SelectDefinition` (**E216**)
+  a `RecordDefinition`, or a base-side `SelectDefinition` (**↯/t.2.16**)
 - a `Reference` resolves to a `SelectDefinition` (a sum at a position expecting a single typed
   value), or a `SelectRef.reference` resolves to a `RecordDefinition` or `ScalarDefinition`
-  (a non-sum at a position expecting a sum) (**E217**)
+  (a non-sum at a position expecting a sum) (**↯/t.2.17**)
 - during layer composition, a layer's `ScalarDefinition` declares a non-null `encoding` while
   the `ScalarDefinition` being merged already has a *different* non-null `encoding`
-  (**E218**). Restating the base's encoding is a benign no-op; declaring an encoding where the
+  (**↯/t.2.18**). Restating the base's encoding is a benign no-op; declaring an encoding where the
   base has none adds it (§20.3). Removal has no syntax and is structurally impossible.
 - a `Field` has `key = true` but its type, after reference resolution, is not a `Scalar`
-  (**E219**)
+  (**↯/t.2.19**)
 - a `Field` has `key = true` but, on the composed member after polarity merge (§20.3), its
-  effective `required` is `false` or its effective `repeatable` is `true` (**E220**)
-- within a single composed `Struct`, more than one member is key-flagged (**E221**)
+  effective `required` is `false` or its effective `repeatable` is `true` (**↯/t.2.20**)
+- within a single composed `Struct`, more than one member is key-flagged (**↯/t.2.21**)
 - a `ScalarDefinition`'s `patterns` list (base or layer) contains a string that is not a valid
-  RE2 pattern (§21.8) (**E222**). Like an unresolved encoding (E313), an unparseable pattern
+  RE2 pattern (§21.8) (**↯/t.2.22**). Like an unresolved encoding (↯/t.3.13), an unparseable pattern
   MUST NOT be treated as satisfied: the schema is invalid, never silently permissive.
 - during layer composition, a layer's same-name `ScalarDefinition` declares a non-empty
   `patterns` list that is not contained in the inherited list under the rule of §20.3
   (`L(⋂new) ⊆ L(⋂old)`), or the containment was not provable within the implementation's
-  documented resource budget (**E223**; fail closed)
-- a `ScalarDefinition`'s `width` is not a canonical positive decimal (`[1-9][0-9]*`) (**E225**)
+  documented resource budget (**↯/t.2.23**; fail closed)
+- a `ScalarDefinition`'s `width` is not a canonical positive decimal (`[1-9][0-9]*`) (**↯/t.2.25**)
 - during layer composition, a layer's same-name `ScalarDefinition` declares a `width` differing
   from the merged ScalarDefinition's non-null `width`, or a `ScalarDefinition` of the composed
   schema declares a `width` differing from the fixed width of the standard codec
-  ([Standard Codecs](codecs.md)) its `encoding` names (**E226**). Restating an equal width is a
+  ([Standard Codecs](codecs.md)) its `encoding` names (**↯/t.2.26**). Restating an equal width is a
   benign no-op; removal has no syntax.
 - a `ScalarDefinition` of the composed schema has a non-null `width` but a null `encoding`
-  (**E227**; checked on the composed schema, since a later component may supply the encoding)
+  (**↯/t.2.27**; checked on the composed schema, since a later component may supply the encoding)
 - a `Field` declares one or more `index` children but, on the composed member, its effective
   `repeatable` is `false`, or its type resolves to neither a `Struct` nor a `Scalar`, or it
-  resolves to a `Scalar` and some path is not the root path (**E228**)
+  resolves to a `Scalar` and some path is not the root path (**↯/t.2.28**)
 - an `index` path is not a syntactically valid TELP (§3 of the TELP Specification), or is the
-  root path on a Struct-typed `Field` (a Struct is not indexable; **E229**)
+  root path on a Struct-typed `Field` (a Struct is not indexable; **↯/t.2.29**)
 - an `index` path on a Struct-typed `Field` does not resolve statically within the composed
   type: a component matches no `Field` keyword of the current Struct, or matches a Select
   variant keyword, or matches a member whose effective `repeatable` is `true`, or a non-final
   component resolves to a non-`Struct`, or the final component does not resolve to a `Scalar`
-  (**E230**; checked on the composed schema)
+  (**↯/t.2.30**; checked on the composed schema)
 - a `ScalarDefinition` of the composed schema has both a non-null `width` and `intern`
-  (**E231**)
+  (**↯/t.2.31**)
 
-#### Schema Errors (E2xx)
+#### Schema Errors (↯/t.2)
 
-| Code | Description                                                                                                               | Span                                           |
-| ---- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| E201 | Duplicate keyword within a `Struct` (across `Field` keywords and the `Variant.keyword`s of `SelectRef`-referenced `SelectDefinition`s) or within a `SelectDefinition`'s variants | The second occurrence of the duplicate keyword |
-| E202 | A `SelectDefinition` is declared with an empty `variants` list (a declaration-time check; one emptied by layer `exclude` operations is E212 instead) | The `SelectDefinition`'s name compound |
-| E203 | A `Field` has a non-null `default` but its type is not a `Scalar` or the member is non-`required`                          | The `default` field of the `Field`             |
-| E204 | Two or more `Layer`s within a `Schema` share the same `name`                                                              | The second `Layer` with the duplicate `name`   |
-| E205 | A layer-added `Field` or `SelectRef` has a keyword (or referenced variant keyword) colliding with a keyword already in the merged `Struct` | The overlapping keyword in the layer           |
-| E206 | A layer `Field` (or variant restatement in a layer's SelectDefinition) matches an existing keyword but the base and layer types are neither structurally equal nor both `Struct` | The layer member definition                    |
-| E207 | `Schema.sigil` is non-null and is not a sigil-valid character (§6)                                                        | The `sigil` field value                        |
-| E208 | The keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or `SelectDefinition` (also §8)       | The keyword definition containing `tel`        |
-| E209 | A `Reference` or `SelectRef` names a `TypeName` that resolves neither to a built-in (§20.5) nor to a Definition in the composed schema | The `TypeName` atom                            |
-| E210 | Two or more Definitions in the *base* `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name`, or a Definition uses a predefined built-in name (§20.5) (any cross-kind name collision is also E210; same-name Definitions across layers merge instead) | The second Definition with the duplicate name |
-| E211 | `Exclude(K)` in a layer's SelectDefinition names a variant K absent from the base SelectDefinition, before any layer       | The `Exclude` operation's variant keyword      |
-| E212 | A `SelectDefinition` of the composed schema referenced by a `required` `SelectRef` has no variants                      | The `Exclude` that emptied it, or the `required` `SelectRef` declaration when that came later |
-| E213 | A layer's SelectDefinition introduces a variant whose keyword is absent from the base SelectDefinition (variant addition widens the sum) | The offending variant declaration |
-| E214 | A layer declares `optional` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `required`) | The offending field/select declaration         |
-| E215 | A layer declares `repeatable` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `repeatable`) | The offending field/select declaration         |
-| E216 | `Exclude` appears outside a layer's `SelectDefinition` body — i.e. inside `Schema.document`, a `RecordDefinition`, or a base-side `SelectDefinition` | The offending `exclude` compound |
-| E217 | A `Reference` resolves to a `SelectDefinition`, or a `SelectRef.reference` resolves to a `RecordDefinition` / `ScalarDefinition` (kind mismatch between member shape and resolved Definition) | The offending `TypeName` atom |
-| E218 | A layer's same-name `scalar` declares an `encoding` conflicting with the base ScalarDefinition's non-null `encoding` (an encoding, once declared, cannot be changed or removed by a layer) | The layer's `encoding` field |
-| E219 | A `Field` has `key = true` but its type does not resolve to a `Scalar` | The `key` flag of the field declaration |
-| E220 | A `Field` has `key = true` but its composed effective `required` is `false` or its composed effective `repeatable` is `true` | The `key` flag of the field declaration (the layer's, when layer-introduced) |
-| E221 | More than one member of a composed `Struct` is key-flagged | The `key` flag of the second key-flagged field in member order |
-| E222 | A `pattern` value is not a valid RE2 pattern (§21.8) | The offending `pattern` value |
-| E223 | A layer's replacing `patterns` set is not contained in the inherited set (`L(⋂new) ⊆ L(⋂old)` fails or is not provable within the implementation's documented budget; §20.3) | The layer's first `pattern` value |
-| E224 | Reserved. Formerly "a `ScalarDefinition` declares neither `validate` nor `pattern`", withdrawn: an unconstrained scalar is valid (§20) | — |
-| E225 | A `ScalarDefinition`'s `width` is not a canonical positive decimal `[1-9][0-9]*` | The `width` value |
-| E226 | A layer's same-name `scalar` declares a `width` differing from the merged non-null `width`, or a composed `ScalarDefinition`'s `width` differs from the fixed width of the standard codec its `encoding` names | The later `width` field (the layer's, when layer-introduced) |
-| E227 | A `ScalarDefinition` of the composed schema has a non-null `width` but a null `encoding` | The `width` field of the declaration that introduced it |
-| E228 | A `Field` declares `index` children but its composed effective `repeatable` is `false`, or its type resolves to neither a `Struct` nor a `Scalar`, or it is a `Scalar` and a path is not the root path | The `index` keyword of the field's first `index` child (the layer's, when layer-introduced) |
-| E229 | An `index` path is not a syntactically valid TELP, or is the root path on a Struct-typed field | The offending `path` value |
-| E230 | An `index` path does not resolve statically within the field's composed Struct type (unknown or variant keyword, repeatable member, non-Struct intermediate, or non-Scalar final component) | The offending `path` value |
-| E231 | A `ScalarDefinition` of the composed schema has both a non-null `width` and `intern` | The `intern` flag (or the `width` field, whichever was composed later) |
+| Code     | Description                                                                                                                                                                                                                                                                 | Span                                                                                          |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| ↯/t.2.1  | Duplicate keyword within a `Struct` (across `Field` keywords and the `Variant.keyword`s of `SelectRef`-referenced `SelectDefinition`s) or within a `SelectDefinition`'s variants                                                                                            | The second occurrence of the duplicate keyword                                                |
+| ↯/t.2.2  | A `SelectDefinition` is declared with an empty `variants` list (a declaration-time check; one emptied by layer `exclude` operations is ↯/t.2.12 instead)                                                                                                                    | The `SelectDefinition`'s name compound                                                        |
+| ↯/t.2.3  | A `Field` has a non-null `default` but its type is not a `Scalar` or the member is non-`required`                                                                                                                                                                           | The `default` field of the `Field`                                                            |
+| ↯/t.2.4  | Two or more `Layer`s within a `Schema` share the same `name`                                                                                                                                                                                                                | The second `Layer` with the duplicate `name`                                                  |
+| ↯/t.2.5  | A layer-added `Field` or `SelectRef` has a keyword (or referenced variant keyword) colliding with a keyword already in the merged `Struct`                                                                                                                                  | The overlapping keyword in the layer                                                          |
+| ↯/t.2.6  | A layer `Field` (or variant restatement in a layer's SelectDefinition) matches an existing keyword but the base and layer types are neither structurally equal nor both `Struct`                                                                                            | The layer member definition                                                                   |
+| ↯/t.2.7  | `Schema.sigil` is non-null and is not a sigil-valid character (§6)                                                                                                                                                                                                          | The `sigil` field value                                                                       |
+| ↯/t.2.8  | The keyword `tel` appears as a `Field.keyword` or `Variant.keyword` in any `Struct` or `SelectDefinition` (also §8)                                                                                                                                                         | The keyword definition containing `tel`                                                       |
+| ↯/t.2.9  | A `Reference` or `SelectRef` names a `TypeName` that resolves neither to a built-in (§20.5) nor to a Definition in the composed schema                                                                                                                                      | The `TypeName` atom                                                                           |
+| ↯/t.2.10 | Two or more Definitions in the *base* `Schema.records ∪ Schema.scalars ∪ Schema.selects` share the same `name`, or a Definition uses a predefined built-in name (§20.5) (any cross-kind name collision is also ↯/t.2.10; same-name Definitions across layers merge instead) | The second Definition with the duplicate name                                                 |
+| ↯/t.2.11 | `Exclude(K)` in a layer's SelectDefinition names a variant K absent from the base SelectDefinition, before any layer                                                                                                                                                        | The `Exclude` operation's variant keyword                                                     |
+| ↯/t.2.12 | A `SelectDefinition` of the composed schema referenced by a `required` `SelectRef` has no variants                                                                                                                                                                          | The `Exclude` that emptied it, or the `required` `SelectRef` declaration when that came later |
+| ↯/t.2.13 | A layer's SelectDefinition introduces a variant whose keyword is absent from the base SelectDefinition (variant addition widens the sum)                                                                                                                                    | The offending variant declaration                                                             |
+| ↯/t.2.14 | A layer declares `optional` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `required`)                                                                                                                                        | The offending field/select declaration                                                        |
+| ↯/t.2.15 | A layer declares `repeatable` against an axis whose merged-base polarity is `"default"` or `"tight"` (loosening attempt on `repeatable`)                                                                                                                                    | The offending field/select declaration                                                        |
+| ↯/t.2.16 | `Exclude` appears outside a layer's `SelectDefinition` body — i.e. inside `Schema.document`, a `RecordDefinition`, or a base-side `SelectDefinition`                                                                                                                        | The offending `exclude` compound                                                              |
+| ↯/t.2.17 | A `Reference` resolves to a `SelectDefinition`, or a `SelectRef.reference` resolves to a `RecordDefinition` / `ScalarDefinition` (kind mismatch between member shape and resolved Definition)                                                                               | The offending `TypeName` atom                                                                 |
+| ↯/t.2.18 | A layer's same-name `scalar` declares an `encoding` conflicting with the base ScalarDefinition's non-null `encoding` (an encoding, once declared, cannot be changed or removed by a layer)                                                                                  | The layer's `encoding` field                                                                  |
+| ↯/t.2.19 | A `Field` has `key = true` but its type does not resolve to a `Scalar`                                                                                                                                                                                                      | The `key` flag of the field declaration                                                       |
+| ↯/t.2.20 | A `Field` has `key = true` but its composed effective `required` is `false` or its composed effective `repeatable` is `true`                                                                                                                                                | The `key` flag of the field declaration (the layer's, when layer-introduced)                  |
+| ↯/t.2.21 | More than one member of a composed `Struct` is key-flagged                                                                                                                                                                                                                  | The `key` flag of the second key-flagged field in member order                                |
+| ↯/t.2.22 | A `pattern` value is not a valid RE2 pattern (§21.8)                                                                                                                                                                                                                        | The offending `pattern` value                                                                 |
+| ↯/t.2.23 | A layer's replacing `patterns` set is not contained in the inherited set (`L(⋂new) ⊆ L(⋂old)` fails or is not provable within the implementation's documented budget; §20.3)                                                                                                | The layer's first `pattern` value                                                             |
+| ↯/t.2.24 | Reserved. Formerly "a `ScalarDefinition` declares neither `validate` nor `pattern`", withdrawn: an unconstrained scalar is valid (§20)                                                                                                                                      | —                                                                                             |
+| ↯/t.2.25 | A `ScalarDefinition`'s `width` is not a canonical positive decimal `[1-9][0-9]*`                                                                                                                                                                                            | The `width` value                                                                             |
+| ↯/t.2.26 | A layer's same-name `scalar` declares a `width` differing from the merged non-null `width`, or a composed `ScalarDefinition`'s `width` differs from the fixed width of the standard codec its `encoding` names                                                              | The later `width` field (the layer's, when layer-introduced)                                  |
+| ↯/t.2.27 | A `ScalarDefinition` of the composed schema has a non-null `width` but a null `encoding`                                                                                                                                                                                    | The `width` field of the declaration that introduced it                                       |
+| ↯/t.2.28 | A `Field` declares `index` children but its composed effective `repeatable` is `false`, or its type resolves to neither a `Struct` nor a `Scalar`, or it is a `Scalar` and a path is not the root path                                                                      | The `index` keyword of the field's first `index` child (the layer's, when layer-introduced)   |
+| ↯/t.2.29 | An `index` path is not a syntactically valid TELP, or is the root path on a Struct-typed field                                                                                                                                                                              | The offending `path` value                                                                    |
+| ↯/t.2.30 | An `index` path does not resolve statically within the field's composed Struct type (unknown or variant keyword, repeatable member, non-Struct intermediate, or non-Scalar final component)                                                                                 | The offending `path` value                                                                    |
+| ↯/t.2.31 | A `ScalarDefinition` of the composed schema has both a non-null `width` and `intern`                                                                                                                                                                                        | The `intern` flag (or the `width` field, whichever was composed later)                        |
 
 ### 20.2 Type Assignment Algorithm
 
@@ -2306,12 +2314,12 @@ the predefined built-in type names (§20.5), the Reference resolves directly to 
 `Flag` resolves to the `Flag` type, and `String`, `Identifier`, `Sigil`, and `TypeName` each
 resolve to a `Scalar` whose single validator is the corresponding built-in validator (§21.5)
 and whose `encoding` is null, `width` null and `intern` false.
-A `Reference(N)` resolving to a `SelectDefinition` is **E217** (a sum cannot inhabit a
+A `Reference(N)` resolving to a `SelectDefinition` is **↯/t.2.17** (a sum cannot inhabit a
 single-typed position).
 
 `SelectRef` resolution is parallel: a `SelectRef(N)` resolves to the `variants` of the matching
 `SelectDefinition`; a `SelectRef` resolving to a `RecordDefinition` or `ScalarDefinition` is
-**E217**. The polarity of the SelectRef remains attached to the use site; only the variants are
+**↯/t.2.17**. The polarity of the SelectRef remains attached to the use site; only the variants are
 drawn from the named SelectDefinition.
 
 Reference and SelectRef resolution are single-step (Definitions never name another
@@ -2328,7 +2336,7 @@ Nevertheless, a conforming implementation MUST defend against pathological input
 a recursion-depth limit during type assignment. The RECOMMENDED limit is **256** levels of
 compound nesting. Exceeding this limit is a parser-internal resource error: the implementation
 reports it with a clear diagnostic (e.g., "document nesting exceeds the configured limit of
-256") and stops type assignment. This is not assigned a TEL error code (E1xx/E2xx/E3xx) because
+256") and stops type assignment. This is not assigned a TEL error code (↯/t.1, ↯/t.2 or ↯/t.3) because
 it is not a property of the document itself — a deeper limit would accept the same input.
 Implementations MAY expose the limit as a configurable parameter.
 
@@ -2345,11 +2353,11 @@ compound children (§19.1).
 1. Dispatch on T (after reference resolution):
 
    - If T is a `Flag`, N MUST have no atoms and no compound children; otherwise the document is
-     invalid (**E311**). Type assignment of N is complete.
+     invalid (**↯/t.3.11**). Type assignment of N is complete.
    - If T is a `Scalar`, N is a leaf: its semantic value is the text of its single atom (of any
      presentation form — inline, source, or literal), or the empty string if it has none
-     (§18.3). If N has more than one atom, the document is invalid (**E302**); if N has any
-     compound children, the document is invalid (**E301**: only a `Struct`-typed compound may
+     (§18.3). If N has more than one atom, the document is invalid (**↯/t.3.2**); if N has any
+     compound children, the document is invalid (**↯/t.3.1**: only a `Struct`-typed compound may
      have children). Type assignment of N is complete; validation of the value follows per §21.
    - If T is a `Struct`, proceed with steps 2–5.
 
@@ -2391,20 +2399,20 @@ compound children (§19.1).
      atom text doesn't match `b`. Skip M; `pos = 2`. Now M is Field(Scalar c); Scalar consumes
      any text. Assign `xyz` to `c`.
 
-   b. If `pos` ≥ len(T.members), the document is invalid (**E302**: more atoms than assignable
+   b. If `pos` ≥ len(T.members), the document is invalid (**↯/t.3.2**: more atoms than assignable
    member positions).
 
    c. Let M = T.members[pos]. M MUST be atom-assignable; if it is not, the document is invalid
-   (**E303**: atom in non-atom-assignable member position).
+   (**↯/t.3.3**: atom in non-atom-assignable member position).
 
    d. Assign A to M. In every case the element created for A carries the `keywordIndex` of the
    keyword-order entry it fills — M's own entry for a `Field`, the matched variant's entry for a
    `SelectRef`:
    - If M is a `SelectRef`, the matched variant is the one (from the referenced
      SelectDefinition) whose keyword equals A's text; if no variant's keyword matches, the
-     document is invalid (**E304**).
+     document is invalid (**↯/t.3.4**).
    - If M is a `Field` with `Flag` type, A's text MUST equal M.keyword; if it does not, the
-     document is invalid (**E305**).
+     document is invalid (**↯/t.3.5**).
    - If M is a `Field` with `Scalar` type, the type of A is M.type regardless of A's text
      (validation against the named helper method is a separate step, described in §21).
 
@@ -2414,13 +2422,13 @@ compound children (§19.1).
 4. **Compound child phase.** Let `current_member` = −1 and `seen_members` = {} (empty set). For each
    compound child C in N.children (iterating across all blocks in order):
 
-   a. Look up C.keyword in K. If not found, the document is invalid (**E306**: unrecognized keyword
+   a. Look up C.keyword in K. If not found, the document is invalid (**↯/t.3.6**: unrecognized keyword
    for this parent type).
 
    b. Let (i, k, childType) = K[C.keyword]. The type of C is childType, and the element created
    for C carries `keywordIndex = k`.
 
-   c. If i ≠ `current_member`: if i is in `seen_members`, the document is invalid (**E309**: member
+   c. If i ≠ `current_member`: if i is in `seen_members`, the document is invalid (**↯/t.3.9**: member
    children not contiguous); otherwise add `current_member` to `seen_members` (if ≥ 0) and set
    `current_member` = i.
 
@@ -2435,10 +2443,10 @@ compound children (§19.1).
 
    b. If M.`required` and fill_count = 0: if M is a `Field` whose type resolves to a `Scalar` and
    whose `default` is non-null, the default value is used as the semantic value and no error is
-   raised; otherwise, the document is invalid (**E307**: required member absent and no default
+   raised; otherwise, the document is invalid (**↯/t.3.7**: required member absent and no default
    available).
 
-   c. If not M.`repeatable` and fill_count > 1, the document is invalid (**E308**: non-repeatable
+   c. If not M.`repeatable` and fill_count > 1, the document is invalid (**↯/t.3.8**: non-repeatable
    member filled more than once).
 
 ### 20.3 Schema Layering
@@ -2461,24 +2469,24 @@ list is organised by the structural duality between records and selects.
 **Record-side (product) operations:**
 
 - **Add a Field** to a Struct (root Struct or RecordDefinition body). The new keyword MUST NOT
-  collide with any keyword already present in the merged Struct (**E205**).
+  collide with any keyword already present in the merged Struct (**↯/t.2.5**).
 - **Add a SelectRef** to a Struct. The referenced SelectDefinition's variant keywords MUST NOT
-  collide with any keyword already present in the merged Struct (**E205**).
+  collide with any keyword already present in the merged Struct (**↯/t.2.5**).
 - **Refine a Struct in place** (Field merge). When a layer declares a `Field` whose keyword
   matches an existing `Field` and the types are structurally equal (or both `Struct`, which
   are merged recursively), the layer's declaration MAY tighten the polarity on either axis by
   declaring `required` (tightens the `required` axis from `"loose"` to `"tight"`) and/or
   `irrepeatable` (tightens the `repeatable` axis from `"loose"` to `"tight"`). The merge also
   re-runs at any nested Struct level (additional Fields on the layer side are appended). A
-  type mismatch is **E206**.
+  type mismatch is **↯/t.2.6**.
 - **Refine a SelectRef in place.** When a layer declares a SelectRef whose `reference` matches
   an existing SelectRef in the same Struct, polarity is merged per `MergePolarity`; the
   `reference` itself does not change.
 - **Mark a field as key.** A layer's same-keyword `field` declaration MAY declare `key` where
-  the merged base does not; this adds the uniqueness constraints (E221 at schema level, E314
+  the merged base does not; this adds the uniqueness constraints (↯/t.2.21 at schema level, ↯/t.3.14
   at instance level) and is subtype-producing (§24.4). Once set, `key` cannot be removed by a
-  later layer (the merge below is a monotone OR). The composed member MUST satisfy E219 and
-  E220 — in particular, a layer keying a base-`optional` field must also (itself, or via an
+  later layer (the merge below is a monotone OR). The composed member MUST satisfy ↯/t.2.19 and
+  ↯/t.2.20 — in particular, a layer keying a base-`optional` field must also (itself, or via an
   earlier layer) declare `required`.
 - **Refine a RecordDefinition in place** (RecordDefinition merge). When a layer declares a
   `record` whose name matches an existing `RecordDefinition`, the layer's members are merged
@@ -2488,14 +2496,14 @@ list is organised by the structural duality between records and selects.
 
 - **Exclude a variant** from a SelectDefinition. Inside a layer's `select N` body, an
   `Exclude(K)` operation removes the variant with keyword K from the merged SelectDefinition.
-  K MUST identify a variant of the base SelectDefinition (**E211**); if an earlier operation has
+  K MUST identify a variant of the base SelectDefinition (**↯/t.2.11**); if an earlier operation has
   already excluded it, the operation has no effect. The exclusion MUST leave
   at least one variant present if any composed-schema `SelectRef` whose effective `required` is
-  `true` references the SelectDefinition (**E212**).
+  `true` references the SelectDefinition (**↯/t.2.12**).
 - **Refine a SelectDefinition in place** (SelectDefinition merge). When a layer declares a
   `select` whose name matches an existing `SelectDefinition`, the layer's `Exclude(K)`
   operations and `validate` lines apply against the base. Variant additions in this position
-  are forbidden (**E213** — would widen the sum).
+  are forbidden (**↯/t.2.13** — would widen the sum).
 
 **Common-to-both operations:**
 
@@ -2503,12 +2511,12 @@ list is organised by the structural duality between records and selects.
   does not already exist in the merged namespace.
 - **Refine a ScalarDefinition in place.** A same-name `scalar` in a layer appends validators to
   the base's `validators` list (in source order, deduplicated), and MAY declare an `encoding`
-  when the base has none, or restate the base's existing one (**E218** on conflict). Adding an
+  when the base has none, or restate the base's existing one (**↯/t.2.18** on conflict). Adding an
   encoding is tightening (§24.4): it can only shrink the set of accepted values.
 - **Replace a ScalarDefinition's patterns, checked.** A same-name `scalar` in a layer with one
   or more `pattern` lines replaces the inherited `patterns` list with its own, subject to the
   containment premise `L(⋂new) ⊆ L(⋂old)` — decided as `L(⋂new) ⊆ L(Pᵢ)` for each inherited
-  pattern `Pᵢ` per §21.8 (**E223** on any failure; the implementation MUST fail closed,
+  pattern `Pᵢ` per §21.8 (**↯/t.2.23** on any failure; the implementation MUST fail closed,
   retaining the inherited list). A layer scalar with no `pattern` lines inherits the base's
   list unchanged; restating a textually identical list is a benign no-op requiring no
   containment decision; an inherited *empty* list denotes Σ* (no pattern constraint), so a
@@ -2521,7 +2529,7 @@ list is organised by the structural duality between records and selects.
   base's `validators` list; validators apply in declaration order and AND-conjuncted (§21.1),
   so any layer-added validator runs *after* the base's validators.
 - **Add layout annotations** (§20, *Layout annotations*). A same-name `scalar` in a layer MAY
-  declare `width` when the base has none, or restate the base's (**E226** on conflict), and MAY
+  declare `width` when the base has none, or restate the base's (**↯/t.2.26** on conflict), and MAY
   declare `intern`; a same-keyword `field` MAY add `index` children, which are appended to the
   merged Field's `indexes` (an index whose path tuple is already present, by TELP path identity,
   is a benign no-op). These operations change no type: the composed schema is the same type as
@@ -2537,25 +2545,25 @@ The following operations break subtyping and are NOT permitted in a layer; an im
 detecting any of them MUST report the corresponding error:
 
 - Remove a Field from a Struct (no syntax — structurally prevented).
-- Add a variant to an existing SelectDefinition (**E213** — would widen the sum). Introducing a
+- Add a variant to an existing SelectDefinition (**↯/t.2.13** — would widen the sum). Introducing a
   *fresh* SelectDefinition with a fresh name is permitted; what is forbidden is a `variant K`
   appearing inside a layer's `select N` body when K is not already a base variant of N.
 - **Loosen `required`** — declaring `optional` for an axis whose merged polarity is `"default"`
-  or `"tight"` (**E214**).
+  or `"tight"` (**↯/t.2.14**).
 - **Loosen `repeatable`** — declaring `repeatable` for an axis whose merged polarity is
-  `"default"` or `"tight"` (**E215**).
+  `"default"` or `"tight"` (**↯/t.2.15**).
 - Remove a validator from a Struct, Scalar, RecordDefinition, or SelectDefinition (validators
   are append-only across layers; a layer's `validate K` adds K, never removes an existing K).
 - **Widen a ScalarDefinition's patterns** — replace the `patterns` list with one whose
-  intersection language is not contained in the inherited intersection (**E223**). Narrowing
+  intersection language is not contained in the inherited intersection (**↯/t.2.23**). Narrowing
   replacement is permitted (see above); widening is what the containment premise excludes.
 - Remove `key` from a field (no syntax — structurally prevented; the `key` merge is a
   monotone OR).
-- Change a `ScalarDefinition`'s non-null `encoding` to a different name (**E218**). (Removal
+- Change a `ScalarDefinition`'s non-null `encoding` to a different name (**↯/t.2.18**). (Removal
   has no syntax; addition where the base has none is permitted.)
 - Change a `Field`'s `default`, or a `Field`'s declared `Type` to a structurally different
   type that is not a Struct-to-Struct refinement.
-- Change a `ScalarDefinition`'s non-null `width` (**E226**), or remove `width`, `intern` or an
+- Change a `ScalarDefinition`'s non-null `width` (**↯/t.2.26**), or remove `width`, `intern` or an
   `index` (no syntax — structurally prevented; `intern` merges as a monotone OR and `indexes`
   append).
 
@@ -2579,7 +2587,7 @@ The composed schema's Definition namespace is built by walking, in order, the ba
 its `Layer.records`, `Layer.scalars`, and `Layer.selects`. Definition merge (above) applies
 whenever a later declaration shares a name with an earlier one. Records, scalars, and selects
 share the namespace: a layer-introduced Definition whose name collides with an existing
-Definition of a *different kind* is **E210** in the composed schema. After composition,
+Definition of a *different kind* is **↯/t.2.10** in the composed schema. After composition,
 `Reference`s and `SelectRef`s in the base, in any layer, or in any merged member may resolve to
 any Definition (of the appropriate kind) in the composed namespace.
 
@@ -2611,11 +2619,11 @@ sequence of atoms:
   `record N`. A `record N` with no children is itself one atom, so that a fresh, empty
   RecordDefinition is not lost.
 - **`scalar N`.** Each `validate` line is one atom; all `pattern` lines together are **one** atom
-  (a replacement is decided by a single containment check, E223); the `encoding` line is one
+  (a replacement is decided by a single containment check, ↯/t.2.23); the `encoding` line is one
   atom; `description` is one atom; `width` is one atom; `intern` is one atom. A `scalar N` with
   no children is itself one atom, so that a fresh, unconstrained ScalarDefinition is not lost.
 - **`select N`.** All `variant` lines together are **one** atom (a variant set can only be
-  introduced whole, E213; against an existing SelectDefinition it is a restatement, a no-op);
+  introduced whole, ↯/t.2.13; against an existing SelectDefinition it is a restatement, a no-op);
   each `exclude` and `validate` line is one atom; `description` is one atom.
 
 The **canonical order** of a group's atoms is the order in which composition applies them,
@@ -2639,8 +2647,8 @@ canonical order and leaves atoms as they are. Two component sequences denote the
 schema** iff their expansions are equal. **Composition of a component sequence** applies `A(S)`
 from left to right, treating each atom as a layer containing exactly that atom under the merge
 algorithm below. The validity constraints of §20.1 that concern the composed schema as a whole
-(E205, E209, E210, E212, E217, E219–E221, E227, E228, E230, E231) are checked once on the final
-result, never after an individual component (*Layer Validity Constraints* below). E204 does not apply to
+(↯/t.2.5, ↯/t.2.9, ↯/t.2.10, ↯/t.2.12, ↯/t.2.17, ↯/t.2.19–↯/t.2.21, ↯/t.2.27, ↯/t.2.28, ↯/t.2.30, ↯/t.2.31) are checked once on the final
+result, never after an individual component (*Layer Validity Constraints* below). ↯/t.2.4 does not apply to
 atoms, which carry no name; an atom listed twice in a sequence applies once.
 
 **Equivalence.** For any valid group `G` with atoms `a₁ … aₖ` and any prefix `P`, composing
@@ -2662,7 +2670,7 @@ incorporates the layer's members into the base:
    entry `(keyword, type)` at member index i, map keyword → (i, members[i]). A SelectRef whose
    `reference` does not yet resolve (its Definition may be introduced by a later component)
    contributes no variant keywords to K; the collision check is completed on the composed
-   schema (**E205**, *Layer Validity Constraints*).
+   schema (**↯/t.2.5**, *Layer Validity Constraints*).
 3. For each member L declared by the layer at this Struct position, in source order:
 
    a. **Field members.** If L is a `Field` with keyword W:
@@ -2670,9 +2678,9 @@ incorporates the layer's members into the base:
       - **Found:** Let `(i, M) = K[W]`. If M is **not** a `Field` — that is, W matches a variant
         keyword contributed by an existing `SelectRef` — then the layer's Field collides with a
         keyword already occupying the merged Struct's keyword space, and the layer is invalid
-        (**E205**); this is a collision, not a type mismatch. Otherwise M is a `Field`, and M.type
+        (**↯/t.2.5**); this is a collision, not a type mismatch. Otherwise M is a `Field`, and M.type
         and L.type (after Reference resolution) MUST either be structurally equal or both be
-        `Struct`; if they are neither, the layer is invalid (**E206**). The merged Field at index i
+        `Struct`; if they are neither, the layer is invalid (**↯/t.2.6**). The merged Field at index i
         has:
         - `keyword` = W (unchanged);
         - `type` = `MergeStruct(M.type, L.type)` when both are `Struct`, or the (structurally
@@ -2695,14 +2703,14 @@ incorporates the layer's members into the base:
       - Otherwise, append L as a new member at the end of the member list. If `N` already
         resolves, add each variant keyword V.keyword → (new index, L) to K.
       - `N` MUST resolve, in the composed Definition namespace, to a SelectDefinition
-        (**E209**/**E217**), and no variant keyword of `N` may collide with any other keyword
-        of the composed Struct (**E205**). Both are checked on the composed schema (*Layer
+        (**↯/t.2.9**/**↯/t.2.17**), and no variant keyword of `N` may collide with any other keyword
+        of the composed Struct (**↯/t.2.5**). Both are checked on the composed schema (*Layer
         Validity Constraints*), so a SelectRef may reference a Definition that a later
         component introduces.
 
    c. **Exclude in a Struct position.** An `exclude` operation MUST NOT appear inside a Struct
       body (root or RecordDefinition body) — only inside a layer's SelectDefinition body
-      (**E216**).
+      (**↯/t.2.16**).
 
 4. Return the resulting member list as the merged Struct's `members`. The merged Struct's
    `validators` is the concatenation of the base's `validators` with any new validator names
@@ -2713,11 +2721,11 @@ incorporates the layer's members into the base:
 
 | base \ layer  | `"default"` | `"loose"`            | `"tight"`   |
 | ------------- | ----------- | -------------------- | ----------- |
-| `"default"`   | `"default"` | **E214 / E215**      | `"tight"`   |
+| `"default"`   | `"default"` | **↯/t.2.14 / ↯/t.2.15**      | `"tight"`   |
 | `"loose"`     | `"loose"`   | `"loose"` (redundant) | `"tight"`   |
-| `"tight"`     | `"tight"`   | **E214 / E215**      | `"tight"`   |
+| `"tight"`     | `"tight"`   | **↯/t.2.14 / ↯/t.2.15**      | `"tight"`   |
 
-The error code is E214 when the axis is `required`, E215 when it is `repeatable`. The rule
+The error code is ↯/t.2.14 when the axis is `required`, ↯/t.2.15 when it is `repeatable`. The rule
 captures the subtyping direction: tightening (or restating) the cardinality is always allowed;
 loosening an already-tight or default cardinality is rejected.
 
@@ -2727,16 +2735,16 @@ member lists and merges `validators` by the append-and-deduplicate rule.
 **`MergeScalar(base, layer): ScalarDefinition`** merges the `validators` lists by the
 append-and-deduplicate rule; merges `patterns` by the checked-replacement rule (Permitted
 Operations above: an empty layer list inherits, a textually identical list is a no-op, and any
-other non-empty layer list replaces the inherited list subject to `L(⋂new) ⊆ L(⋂old)`, **E223**
+other non-empty layer list replaces the inherited list subject to `L(⋂new) ⊆ L(⋂old)`, **↯/t.2.23**
 on failure with the inherited list retained); and merges `encoding` as follows: if the layer's
 `encoding` is null, the base's is retained; if the base's is null, the layer's is adopted; if
 both are non-null and equal, the restatement is a benign no-op; if both are non-null and
-different, the schema is invalid (**E218**). A layer-added `encoding` changes the BinTEL representation of the
+different, the schema is invalid (**↯/t.2.18**). A layer-added `encoding` changes the BinTEL representation of the
 affected scalar's values; this is sound because a BinTEL document is always encoded and decoded
 under its full composed schema (identified by its signature, BinTEL §8), never under a prefix
 of the composition. `width` merges as `encoding` does: null and null give null, one null adopts
-the other, equal values are a benign no-op, and different values are **E226**; `intern` merges
-as `base.intern ∨ layer.intern`. E227 and E231 are checked on the composed schema (*Layer
+the other, equal values are a benign no-op, and different values are **↯/t.2.26**; `intern` merges
+as `base.intern ∨ layer.intern`. ↯/t.2.27 and ↯/t.2.31 are checked on the composed schema (*Layer
 Validity Constraints*), since the `encoding` a `width` needs may arrive from a later component.
 
 **`MergeSelect(base, layer): SelectDefinition`** merges a layer's SelectDefinition body into the
@@ -2745,26 +2753,26 @@ base SelectDefinition:
 1. Begin with a copy of `base.variants` in declaration order.
 2. For each declaration L in the layer's SelectDefinition body, in source order:
    - If L is a `variant` declaration with keyword W: W MUST identify an existing variant in the
-     current variant list; if not, the layer is invalid (**E213** — variant addition is
+     current variant list; if not, the layer is invalid (**↯/t.2.13** — variant addition is
      forbidden). If W is present and the layer's `Variant.type` is structurally equal to the
      base variant's type, the operation is a no-op restatement (permitted); a type mismatch is
-     **E206**.
+     **↯/t.2.6**.
    - If L is an exclusion `Exclude(W)` (an entry W in the layer SelectDefinition's `excludes`):
      W MUST identify a variant of the base SelectDefinition as declared before any layer was
-     applied; if not, the layer is invalid (**E211**). Remove the variant from the current
+     applied; if not, the layer is invalid (**↯/t.2.11**). Remove the variant from the current
      variant list if it is present; if an earlier exclusion already removed it, do nothing.
 3. In the **composed** schema, the variant list MUST be non-empty *if* any SelectRef whose
-   effective `required` is `true` references this SelectDefinition; otherwise **E212**. This is
+   effective `required` is `true` references this SelectDefinition; otherwise **↯/t.2.12**. This is
    a constraint on the composed schema, not on the individual merge: a later component that
    adds a required SelectRef to a SelectDefinition an earlier component emptied is equally
-   E212. (A SelectDefinition referenced only by non-required SelectRefs MAY be emptied; the
+   ↯/t.2.12. (A SelectDefinition referenced only by non-required SelectRefs MAY be emptied; the
    referencing SelectRefs are then effectively unreachable in composed documents.)
 4. The merged SelectDefinition's `validators` is the concatenation of the base's `validators`
    with any new validator names contributed by the layer's `validate` lines (in source order,
    deduplicated).
 
 A layer attempting to merge a Definition of one kind onto a Definition of another kind (e.g. a
-layer's `select N` onto a base `record N`) is **E210**.
+layer's `select N` onto a base `record N`) is **↯/t.2.10**.
 
 #### Composing Layers
 
@@ -2776,15 +2784,15 @@ list T (for `records`), scalar list S, and select list U:
    - For each `record def` in `Lₖ.records`, in source order:
      - If `def.name` matches a name in `Tₖ₋₁`, replace that RecordDefinition with
        `MergeRecord(existing, def)`. If it matches a name in `Sₖ₋₁` or `Uₖ₋₁`, the schema is
-       invalid (**E210**). Otherwise append `def` to `Tₖ`.
+       invalid (**↯/t.2.10**). Otherwise append `def` to `Tₖ`.
    - For each `scalar def` in `Lₖ.scalars`, in source order:
      - If `def.name` matches a name in `Sₖ₋₁`, replace that ScalarDefinition with
        `MergeScalar(existing, def)`. If it matches a name in `Tₖ₋₁` or `Uₖ₋₁`, the schema is
-       invalid (**E210**). Otherwise append `def` to `Sₖ`.
+       invalid (**↯/t.2.10**). Otherwise append `def` to `Sₖ`.
    - For each `select def` in `Lₖ.selects`, in source order:
      - If `def.name` matches a name in `Uₖ₋₁`, replace that SelectDefinition with
        `MergeSelect(existing, def)`. If it matches a name in `Tₖ₋₁` or `Sₖ₋₁`, the schema is
-       invalid (**E210**). Otherwise append `def` to `Uₖ`.
+       invalid (**↯/t.2.10**). Otherwise append `def` to `Uₖ`.
    - Set `Rₖ = MergeStruct(Rₖ₋₁, Lₖ.overlay)`.
 3. The final `Rₙ` is the root Struct of the composed schema; `Tₙ`, `Sₙ`, `Uₙ` are its
    Definition lists.
@@ -2795,12 +2803,12 @@ atom standing as a layer containing exactly that atom (*Atoms and Canonical Deco
 #### Layer Validity Constraints
 
 The schema validity constraints, including those detected while a component is merged
-(**E204**, **E206**, **E211**, **E213**–**E216**, **E218**, **E223**), are catalogued in §20.1;
+(**↯/t.2.4**, **↯/t.2.6**, **↯/t.2.11**, **↯/t.2.13**–**↯/t.2.16**, **↯/t.2.18**, **↯/t.2.23**), are catalogued in §20.1;
 the algorithms above define where in composition each is detected. The constraints that concern
-the composed schema as a whole — keyword collisions (**E205**), reference resolution (**E209**,
-**E217**), the Definition namespace (**E210**), non-empty required Selects (**E212**), and the
-key-field constraints (**E219**–**E221**), and the layout-annotation constraints that depend on
-the composed member or namespace (**E227**, **E228**, **E230**, **E231**) — are checked once
+the composed schema as a whole — keyword collisions (**↯/t.2.5**), reference resolution (**↯/t.2.9**,
+**↯/t.2.17**), the Definition namespace (**↯/t.2.10**), non-empty required Selects (**↯/t.2.12**), and the
+key-field constraints (**↯/t.2.19**–**↯/t.2.21**), and the layout-annotation constraints that depend on
+the composed member or namespace (**↯/t.2.27**, **↯/t.2.28**, **↯/t.2.30**, **↯/t.2.31**) — are checked once
 after all components have been applied, never after an individual component: a
 component may both key a field and tighten its polarity, may reference a Definition that a later
 component introduces, or may add a required SelectRef to a Select that an earlier component
@@ -2868,29 +2876,29 @@ accepted; both forms produce the same `name` value in the `Schema`/`Layer`/Defin
 | `required`      | Tightens to `required: "tight"` (Flag, layer-side override of `optional`). Permitted but redundant in a base, since the default is already tight. |
 | `repeatable`    | Loosens to `repeatable: "loose"` (Flag, base-side). |
 | `irrepeatable`  | Tightens to `repeatable: "tight"` (Flag, layer-side override of `repeatable`). Permitted but redundant in a base, since the default is already tight. |
-| `key`           | `Field.key` — marks the field as the identifying key of its enclosing Struct (Flag; may be declared in a base or added by a layer, never removed). Subject to E219–E221; instance-level uniqueness is E314 (§21.6); used as an occurrence selector by the [TELP Specification](telp.md). |
+| `key`           | `Field.key` — marks the field as the identifying key of its enclosing Struct (Flag; may be declared in a base or added by a layer, never removed). Subject to ↯/t.2.19–↯/t.2.21; instance-level uniqueness is ↯/t.3.14 (§21.6); used as an occurrence selector by the [TELP Specification](telp.md). |
 | `keyword`       | `Field.keyword`, `Variant.keyword`. Carried as the first inline atom of a `field` or `variant` compound (or, less commonly, as an explicit `keyword <text>` child compound). Kebab-case. |
 | `variant`       | A `Variant` of a `SelectDefinition`. First inline atom is the variant's kebab-case `keyword`; second inline atom is the `TypeName` of its `type`. |
 | `type`          | The type-name field of a `Field` or a `Variant`. The value is a `TypeName` resolving (via §20.2 reference resolution) to either a user-declared Definition or a built-in type (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`). |
 | `reference`     | `SelectRef.reference` — the `TypeName` of the referenced `SelectDefinition`. Carried as the first inline atom of a member-position `select` compound (or, less commonly, as an explicit `reference <TypeName>` child compound). |
 | `validate`      | Inside a `scalar` body, names a scalar validator. Inside a `record` body, a `select` body, the `document` block, or an `overlay`, names a struct-level (or select-level) validator (§21.6). The shared-namespace rule of §21.1 means the same name MAY be used in different contexts. |
-| `pattern`       | One entry of `ScalarDefinition.patterns` — an RE2 pattern constraint (§21.8) matched against the entire value text. A `String`-typed repeatable member, permitted only inside a `scalar` body; multiple `pattern` lines AND-conjoin (intersection). Written as a compound child line (`pattern [A-Z]{2}-[0-9]{4}`, or with a source atom, §14, for patterns containing doubled spaces); because it follows the repeatable `validate` member it can never be filled by an inline atom. Invalid patterns are E222; layer replacement is containment-checked (E223, §20.3). |
-| `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is E308 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` and `pattern` members it can never be filled by an inline atom. |
-| `width`         | `ScalarDefinition.width` — a positive decimal byte count asserting that every value of the scalar encodes, under its `encoding`, to exactly that many bytes (§20, *Layout annotations*; E225–E227, E231). Read only by RaTEL. Permitted only inside a `scalar` body; written as a compound child line (`width 16`) — it follows the repeatable `validate` member, which the atom phase never skips, so it can never be filled by an inline atom. |
-| `intern`        | `ScalarDefinition.intern` — asks RaTEL to store the scalar's values once in its shared string table (§20; E231). A Flag, permitted only inside a `scalar` body, and for the same reason as `width` written only as a child line (`intern`): written inline, `scalar Name intern` declares a *validator* named `intern`, which fails at document validation as any unknown validator does (§21.4). |
-| `index`         | One `Field.indexes` entry — a secondary index for RaTEL over the occurrences of a repeatable field (§20, *Layout annotations*; E228–E230). Permitted only inside a `field` body, as a compound child whose inline atoms are the index's `path`s (`index /country /city`). It follows `default`, an optional Scalar, so it can never be filled inline; conversely `field foo String index` declares a default of `index` (see the corollary below). |
+| `pattern`       | One entry of `ScalarDefinition.patterns` — an RE2 pattern constraint (§21.8) matched against the entire value text. A `String`-typed repeatable member, permitted only inside a `scalar` body; multiple `pattern` lines AND-conjoin (intersection). Written as a compound child line (`pattern [A-Z]{2}-[0-9]{4}`, or with a source atom, §14, for patterns containing doubled spaces); because it follows the repeatable `validate` member it can never be filled by an inline atom. Invalid patterns are ↯/t.2.22; layer replacement is containment-checked (↯/t.2.23, §20.3). |
+| `encoding`      | `ScalarDefinition.encoding` — names the codec (§21.7) that defines the BinTEL byte representation of the scalar's values. A kebab-case identifier in the shared helper namespace of §21.1. Permitted only inside a `scalar` body; at most one per scalar (the field is `optional` and non-repeatable, so a second occurrence is ↯/t.3.8 structurally). Written as a compound child line (`encoding uuid`); because it follows the repeatable `validate` and `pattern` members it can never be filled by an inline atom. |
+| `width`         | `ScalarDefinition.width` — a positive decimal byte count asserting that every value of the scalar encodes, under its `encoding`, to exactly that many bytes (§20, *Layout annotations*; ↯/t.2.25–↯/t.2.27, ↯/t.2.31). Read only by RaTEL. Permitted only inside a `scalar` body; written as a compound child line (`width 16`) — it follows the repeatable `validate` member, which the atom phase never skips, so it can never be filled by an inline atom. |
+| `intern`        | `ScalarDefinition.intern` — asks RaTEL to store the scalar's values once in its shared string table (§20; ↯/t.2.31). A Flag, permitted only inside a `scalar` body, and for the same reason as `width` written only as a child line (`intern`): written inline, `scalar Name intern` declares a *validator* named `intern`, which fails at document validation as any unknown validator does (§21.4). |
+| `index`         | One `Field.indexes` entry — a secondary index for RaTEL over the occurrences of a repeatable field (§20, *Layout annotations*; ↯/t.2.28–↯/t.2.30). Permitted only inside a `field` body, as a compound child whose inline atoms are the index's `path`s (`index /country /city`). It follows `default`, an optional Scalar, so it can never be filled inline; conversely `field foo String index` declares a default of `index` (see the corollary below). |
 | `path`          | `Index.paths[i]` — one TELP (§3 of the TELP Specification) of a secondary index, relative to an element of the enclosing field. Carried as the inline atoms of the `index` compound, or as explicit `path ‹telp›` child compounds. `/` is RECOMMENDED as the delimiter. |
-| `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (E203 otherwise). |
+| `default`       | `Field.default` — the value used when a required Scalar-typed field is absent from the document. Valid only on required Scalar-typed fields (↯/t.2.3 otherwise). |
 | `description`    | The optional free-form `description` of the enclosing `Field`, `Variant`, `RecordDefinition`, `ScalarDefinition`, or `SelectDefinition`. A `String`-typed child compound (typically carrying a source atom, §14, for prose with spaces or multiple lines). Never validated; not permitted on a validator. |
-| `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (E216 otherwise). |
+| `exclude`       | A layer-only operation (§20.3) that excludes a variant from the merged SelectDefinition. Its inline atom is the kebab-case keyword K of the variant to exclude. Permitted only inside a `select` body within a `layer` compound (↯/t.2.16 otherwise). |
 
 **Predefined type names.** The names `Flag`, `String`, `Identifier`, `Sigil`, and `TypeName`
 are predefined (in `TypeName` form, i.e. PascalCase): `Flag` resolves to the built-in `Flag`
 type, and the other four resolve to built-in `Scalar`s carrying the corresponding built-in
 validators (§21.5). User schemas MAY NOT declare a Definition with any of these names
-(collision is **E210**).
+(collision is **↯/t.2.10**).
 
-**Reserved keywords.** Only `tel` is universally reserved across all TEL documents (**E208**, §8).
+**Reserved keywords.** Only `tel` is universally reserved across all TEL documents (**↯/t.2.8**, §8).
 The other keywords listed above are part of the TELS vocabulary and have meaning only when
 a TEL document is being parsed as a *schema document* — i.e. when its schema is TELS.
 They do not constrain user-defined schemas: a user schema may freely define `Field.keyword` or
@@ -2914,7 +2922,7 @@ field country String unknown
 
 declares a `country` field of type `String` (the built-in scalar) with default value `unknown`.
 The field remains required on both axes — it may be elided from a document, in which case the
-default supplies its value (a default is only permitted on a required member, per **E203**).
+default supplies its value (a default is only permitted on a required member, per **↯/t.2.3**).
 The convention is **flags before default**: `default` is the last optional Scalar and
 so consumes the first non-flag atom after the type-name. For `key`, this placement is
 load-bearing rather than stylistic: the atom phase (§20.2 step 3a) skips a non-matching
@@ -2969,7 +2977,7 @@ of `tels` itself moves. Any future addition to TELS MUST follow the same discipl
 composed namespace described above. If the name is `Flag`, `String`, `Identifier`, `Sigil`, or
 `TypeName` it short-circuits to the built-in. Otherwise it must match a `record`, `scalar`, or `select`
 declared somewhere in the composed schema (base or any layer); failing that, the schema is
-invalid with **E209**, or with **E217** if the kind doesn't match the position (a `Field.type`
+invalid with **↯/t.2.9**, or with **↯/t.2.17** if the kind doesn't match the position (a `Field.type`
 resolving to a `SelectDefinition`, or a `SelectRef.reference` resolving to a `RecordDefinition`
 or `ScalarDefinition`). References may form cycles via `record` or `select` definitions in
 their resolved bodies — the natural case for recursive data.
@@ -3050,13 +3058,13 @@ fields of the `Schema` model:
    order (§21.8); set `ScalarDefinition.encoding` from the optional `encoding` child's text, or
    `null` if absent; set `ScalarDefinition.description` from the optional `description` child's
    text, or `null` if absent; set `ScalarDefinition.width` from the optional `width` child's
-   text parsed as a canonical positive decimal (**E225** otherwise), or `null` if absent; set
+   text parsed as a canonical positive decimal (**↯/t.2.25** otherwise), or `null` if absent; set
    `ScalarDefinition.intern` to `true` iff an `intern` child is present.
 4. **`SelectDefinition` construction.** From a top-level `select` element: take the `name` child
    (or first inline atom, a `TypeName`) as `SelectDefinition.name`; for each `variant` child,
    append a `Variant` to `SelectDefinition.variants` per step 5; for each `validate` child,
    append the child's inline-atom text to `SelectDefinition.validators`; for each `exclude`
-   child (permitted only inside a layer's `select` body — otherwise **E216**), append its
+   child (permitted only inside a layer's `select` body — otherwise **↯/t.2.16**), append its
    inline-atom text (a variant keyword) to `SelectDefinition.excludes`, to be consumed by
    `MergeSelect` during layer composition; set `SelectDefinition.description` from the optional
    `description` child's text, or `null` if absent.
@@ -3089,7 +3097,7 @@ fields of the `Schema` model:
      absent.
    - Each `index` child → one `Index` appended to `Field.indexes`, its `paths` being the
      child's inline atoms (or explicit `path` children) in order, each checked to be a
-     syntactically valid TELP (**E229**).
+     syntactically valid TELP (**↯/t.2.29**).
 
    Within a `SelectRef`:
    - The four loosen/tighten Flag children compute `SelectRef.required` and
@@ -3113,7 +3121,7 @@ fields of the `Schema` model:
    happens at type assignment time (§20.2) and selects either a `RecordDefinition`'s `Struct`,
    a `ScalarDefinition`'s `Scalar`, or one of the five built-in types (`Flag`, `String`,
    `Identifier`, `Sigil`, `TypeName`). A `Reference` resolving to a `SelectDefinition` is
-   **E217**.
+   **↯/t.2.17**.
 8. **`Struct` construction.** Given the children of a Struct-shaped compound (the `document`
    element, a `layer` element's `overlay`, or a `record` element's body), produce a `Struct`
    (or, for `record`, a `RecordDefinition` whose members and validators are taken from this
@@ -3123,13 +3131,13 @@ fields of the `Schema` model:
      step 5.
    - Each `validate` child contributes its inline-atom text to the resulting `validators` list,
      in source order.
-   - An `exclude` child is **not** permitted in this position (**E216**); `exclude` lives only
+   - An `exclude` child is **not** permitted in this position (**↯/t.2.16**); `exclude` lives only
      inside a layer's `select` body, where it is consumed by `MergeSelect` (§20.3).
 
 Schema construction MUST be deterministic: two implementations applied to the same input MUST
 produce identical `Schema` values. After construction, the resulting schema is checked against
 the validity constraints of §20.1 and §20.3; any failure is reported as the corresponding
-**E2xx** error.
+**↯/t.2** error.
 
 ### 20.7 Identifier Grammars
 
@@ -3287,7 +3295,7 @@ diagnostics).
 
 ### 21.3 Reporting and Span Resolution
 
-When a helper method returns `Invalid`, the implementation reports **E310** with the returned
+When a helper method returns `Invalid`, the implementation reports **↯/t.3.10** with the returned
 `Diagnostic` translated to document-level offsets:
 
 - For a `Diagnostic::Scalar` with a `span`, the implementation MUST translate the value-relative
@@ -3323,7 +3331,7 @@ MUST treat the response as a **contract violation**:
    malformed diagnostic", span: None }` (for Scalar requests) or a synthetic
    `Diagnostic::Struct { message: "validator <method> returned a malformed diagnostic",
    fields: {} }` (for Struct requests).
-3. Report E310 against the value or struct as if the validator had returned the synthetic
+3. Report ↯/t.3.10 against the value or struct as if the validator had returned the synthetic
    diagnostic.
 
 This rule lets a parser cope with buggy validator callbacks without aborting validation of
@@ -3348,12 +3356,12 @@ serialization format for helper method invocation:
   (REST, RPC, subprocess), but the mechanism by which the editor discovers and configures
   such a service is outside the scope of this specification.
 
-If no callback is provided, the parser MUST skip validation entirely (no E310 errors are
+If no callback is provided, the parser MUST skip validation entirely (no ↯/t.3.10 errors are
 raised). All other parsing and validation proceeds normally.
 
 If the callback does not recognise a validator name, it MUST return `Invalid` with a
 diagnostic identifying the unknown name; the affected value or struct then fails validation
-(**E310**). An unknown validator MUST NOT be silently treated as `Valid`: a schema that names
+(**↯/t.3.10**). An unknown validator MUST NOT be silently treated as `Valid`: a schema that names
 a validator expresses a constraint, and a consumer that cannot check the constraint cannot
 claim the document satisfies it.
 
@@ -3439,7 +3447,7 @@ A `Diagnostic::Struct` returned by a struct or select validator MUST satisfy the
 rules of §21.2: spans are forbidden at the struct level; per-field detail is conveyed via the
 recursive `fields` map. The implementation translates the diagnostic per §21.3.
 
-The error code raised for a failing struct or select validator is the same **E310** used for
+The error code raised for a failing struct or select validator is the same **↯/t.3.10** used for
 scalar validators (one code, three shapes of diagnostic) — the `kind` of the diagnostic and
 the parent type distinguish the cases.
 
@@ -3453,14 +3461,14 @@ a compound: a `Struct`-typed element is never atom-realized (§20).
 
 Within one parent element, among all keyed children that fill effectively `repeatable`
 members — across all such members and keywords, in semantic order — the key values MUST be
-pairwise distinct under exact code-point equality of their semantic text (**E314**). Keyed
+pairwise distinct under exact code-point equality of their semantic text (**↯/t.3.14**). Keyed
 children filling non-`repeatable` members do not participate: two distinct members of the same
 parent (say `owner` and `admin`, both typed by a keyed record) MAY share a key value. A
 declared `encoding` (§21.7) plays no part in the comparison, which is over semantic text
 alone.
 
-If a keyed child's key field is absent and has no default (already **E307**), that child is
-excluded from the comparison. E314 is self-contained (§19.5): the implementation records the
+If a keyed child's key field is absent and has no default (already **↯/t.3.7**), that child is
+excluded from the comparison. ↯/t.3.14 is self-contained (§19.5): the implementation records the
 error and continues, treating the duplicate as present.
 
 Key uniqueness is what makes a key value a per-parent identifier, usable as an occurrence
@@ -3477,7 +3485,7 @@ exactly two effects:
   than as UTF-8 text (BinTEL §7.1). Types conventionally written as text — UUIDs, timestamps,
   IP addresses, large integers, hashes — are thereby stored and hashed compactly.
 - **Validity.** The codec's encoder acts as a validator: a value the encoder rejects is
-  invalid (**E312**). A valid value is therefore *valid by construction of its binary
+  invalid (**↯/t.3.12**). A valid value is therefore *valid by construction of its binary
   representation*: the encoder is total on valid values, while the decoder is partial.
 
 Codec names are kebab-case identifiers in the shared helper namespace of §21.1. This
@@ -3506,7 +3514,7 @@ of a BinTEL encoder (below).
 type CodecBinding = (encoding: string) => Codec | null;
 
 interface Codec {
-  // Total on the codec's accepted texts; rejection is invalidity (E312).
+  // Total on the codec's accepted texts; rejection is invalidity (↯/t.3.12).
   encode(text: string): Encoded | Invalid;            // Invalid per §21.2
   // Partial: succeeds exactly on the image of encode (law C3).
   decode(bytes: Uint8Array): Decoded | CodecFailure;
@@ -3544,7 +3552,7 @@ Every codec bound to an encoding name MUST satisfy:
 
 C1–C3 are contract obligations, not mandated runtime checks: an implementation MAY trust a
 bound codec, and MAY instead verify C3 at decode time by re-encoding (BinTEL §7.8; a mismatch
-is B15) — a hardening measure with a per-value cost. A codec violating the laws is
+is ↯/t.4.15) — a hardening measure with a per-value cost. A codec violating the laws is
 non-conforming; documents produced with it have no defined interchange semantics.
 
 #### Validation with an Encoding
@@ -3555,11 +3563,11 @@ configured:
 1. The declared `validators` apply first, in declaration order, per §21.1, followed by the
    declared `patterns` in declaration order (§21.8).
 2. The encoding check applies last, in the same AND-conjunction: the implementation invokes
-   the bound codec's `encode` on the value text. `Invalid` is reported as **E312**, its
+   the bound codec's `encode` on the value text. `Invalid` is reported as **↯/t.3.12**, its
    diagnostic translated per §21.3; the malformed-diagnostic rule of §21.3 applies with the
    encoding name as the method. Codec diagnostics are always scalar-kind; a struct-kind
    diagnostic from a codec is a contract violation.
-3. If the binding returns null for the name, the implementation MUST report **E313** against
+3. If the binding returns null for the name, the implementation MUST report **↯/t.3.13** against
    the value: an unknown encoding MUST NOT be silently treated as satisfied (the §21.4
    unknown-validator principle).
 4. Short-circuiting follows §21.1.
@@ -3568,18 +3576,18 @@ Bytes produced by a validation-time `encode` MAY be discarded or retained for a 
 encoding; by C1 the behaviours are indistinguishable.
 
 If no `CodecBinding` is configured at all, encoding checks are skipped during validation
-(mirroring §21.4's no-callback rule; no E312/E313 arises). Such a configuration can parse and
+(mirroring §21.4's no-callback rule; no ↯/t.3.12 or ↯/t.3.13 arises). Such a configuration can parse and
 validate text but cannot produce or consume BinTEL for schemas that name encodings: a BinTEL
 encoder or decoder MUST be configured with a binding resolving every encoding named by the
 composed schema (BinTEL §7.1, §7.8). An unresolved encoding at BinTEL-encode time is a
 configuration failure of the encoder, not an error of the document: the encoder MUST refuse
-and MUST NOT emit a partial document. At decode time it is **B13**.
+and MUST NOT emit a partial document. At decode time it is **↯/t.4.13**.
 
 #### Defaults and Empty Values
 
 A defaulted required scalar (§20) takes its default text as its semantic value; that value is
 validated — and, in BinTEL, encoded — exactly like an explicitly written value. A default
-rejected by the scalar's codec therefore renders invalid (E312) every document that elides the
+rejected by the scalar's codec therefore renders invalid (↯/t.3.12) every document that elides the
 member; schema authors SHOULD ensure defaults are codec-accepted. Empty text has no special
 status: `encode("")` may succeed (with empty or non-empty bytes) or fail, per the codec
 (BinTEL §7.5).
@@ -3593,12 +3601,12 @@ backreferences and lookaround, so every pattern denotes a true regular language 
 the containment relation between patterns *decidable*, the property underlying layer-merge's
 checked replacement (§20.3) and the pattern premise of the subtype relation (§24.3). A pattern
 using any construct outside the RE2 repertoire, or that is syntactically malformed, renders
-the schema invalid (**E222**); by the fail-closed principle of §21.4/§21.6, an unparseable
+the schema invalid (**↯/t.2.22**); by the fail-closed principle of §21.4/§21.6, an unparseable
 pattern MUST NOT be treated as satisfied.
 
 **Matching.** A pattern matches against the **entire** value text — as if written
 `\A(?:pattern)\z` — over Unicode code points, with no implicit flags (RE2 inline flags such as
-`(?i)` are permitted). A value that fails any declared pattern is invalid (**E315**). Multiple
+`(?i)` are permitted). A value that fails any declared pattern is invalid (**↯/t.3.15**). Multiple
 patterns on one scalar apply in declaration order, AND-conjoined: the accepted language is the
 intersection of the patterns' languages. (RE2 has no intersection operator, which is why the
 repeated-member form exists.) An empty intersection is not itself an error — it is
@@ -3608,8 +3616,8 @@ the encoding check (§21.7); short-circuiting follows §21.1. Unlike validators 
 patterns are self-contained: no helper binding is involved, and two conforming implementations
 MUST accept exactly the same values for a given pattern.
 
-**Ordering with validators.** Validation reports E310 (validator), E315 (pattern), and
-E312/E313 (encoding) independently; a value may accumulate several. Matching is linear in the
+**Ordering with validators.** Validation reports ↯/t.3.10 (validator), ↯/t.3.15 (pattern), and
+↯/t.3.12 or ↯/t.3.13 (encoding) independently; a value may accumulate several. Matching is linear in the
 value's length (the defining property of RE2's construction), so pattern checks add no
 asymptotic cost to document validation.
 
@@ -3628,33 +3636,33 @@ reachable from the anchored start. Deciding containment for arbitrary regular ex
 PSPACE-complete in the worst case (determinization may blow up exponentially), though
 schema-sized patterns are far from the pathological cases. An implementation MAY impose a
 documented resource budget (for example, a maximum product-state count) on the decision; a
-budget exhaustion MUST be treated as *not proven* — the schema is rejected (**E223**), never
+budget exhaustion MUST be treated as *not proven* — the schema is rejected (**↯/t.2.23**), never
 accepted. Failing closed preserves soundness at the cost of portability for extreme patterns,
 which is the acknowledged trade-off.
 
 ### 21.9 Validation Error Catalogue
 
-Validation errors (**E3xx**) report that a document does not conform to its schema. Their trigger
+Validation errors (**↯/t.3**) report that a document does not conform to its schema. Their trigger
 conditions are defined where they arise — most in the type assignment algorithm of §20.2, the
 remainder in §21.3, §21.6, §21.7 and §21.8 — and are catalogued here in full.
 
-| Code | Description                                                                                           | Span                                                                                                     |
-| ---- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| E301 | A compound has compound children but its type is not a `Struct`                                       | The compound's keyword                                                                                   |
-| E302 | More atoms on a compound than there are assignable member positions (for a `Scalar`-typed compound: more than one atom) | The first excess atom                                                                                    |
-| E303 | Atom appears at a member position that is not atom-assignable                                         | The atom                                                                                                 |
-| E304 | Atom text matches no variant keyword of the SelectDefinition referenced by a `SelectRef` member        | The atom                                                                                                 |
-| E305 | Atom text does not match a `Field` member's `Flag` keyword                                            | The atom                                                                                                 |
-| E306 | Compound keyword is not recognized for its parent type                                                | The compound's keyword                                                                                   |
-| E307 | Required member absent, and member is not a `Field` with a `Scalar` type with non-null `default`      | Zero-width span at the end of the parent compound's last child (or at the parent keyword if no children) |
-| E308 | Non-repeatable member is filled more than once                                                        | The keyword of the second occurrence                                                                     |
-| E309 | Compound children of the same member are not contiguous                                               | The keyword of the non-contiguous child (the second group's first child)                                 |
-| E310 | A scalar value or struct element failed validation by a named validator                               | As resolved by §21.3 from the returned `Diagnostic`                                                       |
-| E311 | `Flag`-typed compound has atoms or compound children                                                  | The first atom or child of the `Flag` compound                                                           |
-| E312 | A scalar value was rejected by the encoder of its declared `encoding` (§21.7; the value has no binary representation) | As resolved by §21.3 from the returned `Diagnostic`                                              |
-| E313 | A scalar's declared `encoding` was not resolved by the configured codec binding (§21.7; the constraint cannot be checked) | The scalar value's text span                                                                 |
-| E314 | Two keyed children of the same parent filling effectively `repeatable` members have equal key values (§21.6, Key Uniqueness) | The key value of the later duplicate in semantic order (or that child's keyword, when its key value is default-supplied) |
-| E315 | A scalar value does not match a declared pattern constraint (§21.8); the diagnostic names the failing pattern | The value text |
+| Code     | Description                                                                                                                  | Span                                                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| ↯/t.3.1  | A compound has compound children but its type is not a `Struct`                                                              | The compound's keyword                                                                                                   |
+| ↯/t.3.2  | More atoms on a compound than there are assignable member positions (for a `Scalar`-typed compound: more than one atom)      | The first excess atom                                                                                                    |
+| ↯/t.3.3  | Atom appears at a member position that is not atom-assignable                                                                | The atom                                                                                                                 |
+| ↯/t.3.4  | Atom text matches no variant keyword of the SelectDefinition referenced by a `SelectRef` member                              | The atom                                                                                                                 |
+| ↯/t.3.5  | Atom text does not match a `Field` member's `Flag` keyword                                                                   | The atom                                                                                                                 |
+| ↯/t.3.6  | Compound keyword is not recognized for its parent type                                                                       | The compound's keyword                                                                                                   |
+| ↯/t.3.7  | Required member absent, and member is not a `Field` with a `Scalar` type with non-null `default`                             | Zero-width span at the end of the parent compound's last child (or at the parent keyword if no children)                 |
+| ↯/t.3.8  | Non-repeatable member is filled more than once                                                                               | The keyword of the second occurrence                                                                                     |
+| ↯/t.3.9  | Compound children of the same member are not contiguous                                                                      | The keyword of the non-contiguous child (the second group's first child)                                                 |
+| ↯/t.3.10 | A scalar value or struct element failed validation by a named validator                                                      | As resolved by §21.3 from the returned `Diagnostic`                                                                      |
+| ↯/t.3.11 | `Flag`-typed compound has atoms or compound children                                                                         | The first atom or child of the `Flag` compound                                                                           |
+| ↯/t.3.12 | A scalar value was rejected by the encoder of its declared `encoding` (§21.7; the value has no binary representation)        | As resolved by §21.3 from the returned `Diagnostic`                                                                      |
+| ↯/t.3.13 | A scalar's declared `encoding` was not resolved by the configured codec binding (§21.7; the constraint cannot be checked)    | The scalar value's text span                                                                                             |
+| ↯/t.3.14 | Two keyed children of the same parent filling effectively `repeatable` members have equal key values (§21.6, Key Uniqueness) | The key value of the later duplicate in semantic order (or that child's keyword, when its key value is default-supplied) |
+| ↯/t.3.15 | A scalar value does not match a declared pattern constraint (§21.8); the diagnostic names the failing pattern                | The value text                                                                                                           |
 
 ## 22. Reserialization and Editing
 
@@ -3730,7 +3738,7 @@ leave a required member unfilled, an `update-value`'s new string must validate, 
 must satisfy its validity conditions, and `set-flag`/`unset-flag` must respect the member's
 `repeatable`/`required` constraints. An operation whose precondition does not hold is
 **rejected**: it MUST NOT be applied, both models are left unchanged, and the implementation
-reports the diagnostic (E3xx, or a structural error such as E306/E309) that the resulting
+reports the diagnostic (↯/t.3, or a structural error such as ↯/t.3.6 or ↯/t.3.9) that the resulting
 document would have exhibited. An operation that would produce a state identical to the
 current one — an `update-value` writing the identical string, an `attach-remark` with the
 identical remark, a `reorder-*` to the current position — is applied as the identity: it
@@ -3803,7 +3811,7 @@ The choice is an application concern; only canonical serialization (§22.3) is n
 to the dash-extension algorithm.
 
 **`delete`** — Remove a compound, provided the removal leaves the document schema-valid: the
-deletion MUST NOT raise **E307** for the member the compound was filling. A member that is not
+deletion MUST NOT raise **↯/t.3.7** for the member the compound was filling. A member that is not
 effectively `required` may always be deleted; so may the sole occurrence of a required `Field` of
 `Scalar` type carrying a non-null `default`, since eliding it simply returns the member to that
 default (§18.3 step 5). Deleting the last occurrence of a required member that has no default is
@@ -3897,7 +3905,7 @@ replaced.
 **`update-value`** — For a compound or atom whose schema type is `Scalar`, update the atom text
 to a new string. The new string MUST satisfy every constraint the `Scalar` declares: its validators
 (§21.1), its pattern constraints (§21.8), and its encoding, if any (§21.7). A string that would
-raise E310, E312, E313 or E315 is rejected under the failure rule above. All other
+raise ↯/t.3.10, ↯/t.3.12, ↯/t.3.13 or ↯/t.3.15 is rejected under the failure rule above. All other
 presentation details of the compound are retained — except that the atom **form** is subject to the
 *Atom-form safety invariant*: the existing form is kept only while the new value remains safe for
 it. If the new value is not safe for the current form, the operation MUST re-select a form by
@@ -3923,12 +3931,12 @@ child, it is removed using the `delete` rules.
 
 **`reorder-within-group`** — Change the position of a compound among its siblings within the same
 member group (i.e., other compounds filling the same schema member). This operation never violates
-E309. The reordered compound retains its remark; attached comments on the affected blocks are
+↯/t.3.9. The reordered compound retains its remark; attached comments on the affected blocks are
 preserved.
 
 **`reorder-groups`** — Change the relative order of two distinct member groups within a parent's
 child structure, by moving all blocks belonging to one group before or after all blocks belonging to
-another. This is valid as long as neither group is interleaved with the other (E309 is satisfied
+another. This is valid as long as neither group is interleaved with the other (↯/t.3.9 is satisfied
 before and after). Attached comments on all affected blocks are preserved.
 
 **`resize-tabulation`** — Adjust the `markerOffsets` of a block's `Tabulation` to accommodate all
@@ -4126,7 +4134,7 @@ each derived from `B₀`, the merge produces `(D, R)`:
 2. Starting from `B₀`, process each operation `op` in `S`:
    a. Determine whether `op` can be applied to the current document: its target (path or
       keyword) must still resolve, and applying it must leave the document schema-valid
-      (no E2xx or E3xx errors against the schema in effect for the document).
+      (no ↯/t.2 or ↯/t.3 errors against the schema in effect for the document).
    b. If yes, apply `op` normally.
    c. If no, **demote** `op`: do not apply it; instead, attach a **conflict remark** to the
       affected compound (or, if the target was removed, a **conflict comment** to the
@@ -4165,7 +4173,7 @@ to the nearest surviving block:
 In both formats, `<sigil>` is the document's effective sigil as determined by §8.3 — not a
 hard-coded `#`. Merge engines MUST use the document's sigil when writing conflict markers; using
 `#` against a document whose sigil is (say) `;` would emit a compound keyword `#` and trigger
-**E306** at parse time rather than producing a valid remark. For example, if a document's sigil
+**↯/t.3.6** at parse time rather than producing a valid remark. For example, if a document's sigil
 is `;`, a conflict remark attached to a compound at indent 1 is written as:
 
 ```
@@ -4215,14 +4223,14 @@ the case where coordination fails or is absent.
 
 ## 23. Invalidity Conditions
 
-A TEL document is **invalid** if any condition identified by an **E1xx** (parsing) or **E3xx**
-(validation) error code in this specification is triggered. A schema is invalid if any **E2xx**
-condition is triggered. The diagnostic tables are §19.3 (E1xx), §20.1 (E2xx), and §21.9 (E3xx);
+A TEL document is **invalid** if any condition identified by an **↯/t.1** (parsing) or **↯/t.3**
+(validation) error code in this specification is triggered. A schema is invalid if any **↯/t.2**
+condition is triggered. The diagnostic tables are §19.3 (↯/t.1), §20.1 (↯/t.2), and §21.9 (↯/t.3);
 recovery strategies for parsing errors are given in §19.5. Every error code referenced anywhere
 in this specification appears in exactly one of these three tables.
 
 A document is **schema-valid** with respect to a schema when parsing and type assignment
-against that schema trigger no E2xx or E3xx condition. This is the predicate used by the
+against that schema trigger no ↯/t.2 or ↯/t.3 condition. This is the predicate used by the
 machine operations (§22.2) and the concurrent-edit merge (§22.5) to decide whether an edit may
 be applied.
 
@@ -4424,7 +4432,7 @@ assumption set of Definition-name pairs and terminates.
   true` to `repeatable: false` is the subtype direction: a non-repeatable cardinality
   (0 or 1) is a special case of a repeatable cardinality (0 or more).
 - **`key` is tightenable.** Going from un-keyed to keyed is the subtype direction: marking
-  a field as key only adds constraints (E221 at schema level, E314 at instance level), so
+  a field as key only adds constraints (↯/t.2.21 at schema level, ↯/t.3.14 at instance level), so
   every element valid under the keyed type is valid under the un-keyed one.
 - **Layout annotations are not premises.** `width`, `intern` and `indexes` (§20, *Layout
   annotations*), like `description` and `default`, constrain no document and appear in no rule:
@@ -4482,12 +4490,12 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
 8. **Add encoding to a ScalarDefinition** — `Scalar(V, P, ∅) → Scalar(V, P, e)`. By
    [Sub-Scalar] (premise `e₂ absent`), subtype-producing.
 9. **Mark a field as key** — `D_1` has the same Field with `key: false → true`. Like
-   adding a validator, keying only shrinks the set of valid documents (the E314
+   adding a validator, keying only shrinks the set of valid documents (the ↯/t.3.14
    uniqueness constraint of §21.6); by [Sub-Field] (premise `k₂ ⟹ k₁`), the change is
    subtype-producing.
 10. **Replace a ScalarDefinition's patterns, checked** — `Scalar(V, P_0, e?) →
     Scalar(V, P_1, e?)` under §20.3's containment premise `L(⋂P_1) ⊆ L(⋂P_0)` (which the
-    merge *decided*, E223 otherwise — including the append-style replacement that restates
+    merge *decided*, ↯/t.2.23 otherwise — including the append-style replacement that restates
     `P_0` and adds patterns, where containment is trivial). By [Sub-Scalar] (pattern
     premise), the type is a subtype. This is the one layer operation whose
     subtype-productivity rests on a semantic decision rather than a syntactic discipline;
@@ -4496,9 +4504,9 @@ members, so [Sub-Struct]'s order-preservation premise always holds.) The categor
     them, so `D_1` and `D_0` are the same type and `D_1 <: D_0` by [Sub-Refl].
 
 §20.3 forbids the supertype-producing operations: removing a Field, adding a variant to
-an existing Select, loosening `required` from true to false (E214), loosening
-`repeatable` from false to true (E215), clearing a Field's `key` flag, dropping a
-validator, widening a pattern set (E223), changing a non-null encoding (E218). By
+an existing Select, loosening `required` from true to false (↯/t.2.14), loosening
+`repeatable` from false to true (↯/t.2.15), clearing a Field's `key` flag, dropping a
+validator, widening a pattern set (↯/t.2.23), changing a non-null encoding (↯/t.2.18). By
 construction, no permitted layer operation moves in the supertype direction.
 
 By transitivity ([Sub-Trans]), the iterative application of layers yields a chain of
@@ -4644,9 +4652,9 @@ LSP gives the schema ecosystem a useful guarantee:
 ## 25. Completeness of this Specification
 
 This v1.0 specification is complete for single-document and single-agent use. The error
-taxonomy comprises **E101–E124** (parsing; E110 is reserved, §19.5), **E201–E231** (schema;
-E224 is reserved, §20.1),
-and **E301–E315** (validation); every code is referenced at the point
+taxonomy comprises **↯/t.1.1–↯/t.1.24** (parsing; ↯/t.1.10 is reserved, §19.5), **↯/t.2.1–↯/t.2.31** (schema;
+↯/t.2.24 is reserved, §20.1),
+and **↯/t.3.1–↯/t.3.15** (validation); every code is referenced at the point
 in the body where its trigger condition is defined and appears exactly once in the diagnostic
 tables of §19.3, §20.1, and §21.9. Worked examples —
 including TEL documents shown with their presentation model, semantic model, and BinTEL byte
