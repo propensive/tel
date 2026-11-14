@@ -2216,7 +2216,6 @@ object TelServer:
   // PUBLISHED coordinate — so `externalize` records the released jar's hash and the repackager turns
   // it into an on-demand `Burdock-Require` download instead of inlining it.
   def run(): Unit = cli:
-    import environments.daemonClientEnvironment
 
     // What the launcher did with an upgrade staged earlier, and the daily check for a newer
     // release: for a real invocation only, never for a tab-completion.
