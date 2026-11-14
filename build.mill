@@ -19,7 +19,7 @@ object settings:
   // `org.scala-lang` artifact to it, since the pinned libraries name the release each was built
   // with. The fork stays TASTy-compatible across its patch releases, which is what every such
   // pin assumes.
-  val scalaVersion = "3.10.0-pro-1.1.0"
+  val scalaVersion = "3.10.0-pro-1.1.2"
 
   // This build's version. A release's version is declared once, by its tag: the release
   // (release.sh in propensive/.github) and a snapshot (snapshot.sh) both name it in
@@ -92,13 +92,10 @@ object settings:
     "-Ycheck-all-patmat",
     "-language:experimental.modularity",
     "-language:experimental.dependent",
-    "-language:experimental.relaxedLambdaSyntax",
     "-language:experimental.genericNumberLiterals",
-    "-language:experimental.into",
     "-language:experimental.erasedDefinitions",
     "-language:implicitConversions",
     "-language:experimental.saferExceptions",
-    "-language:experimental.strictEqualityPatternMatching",
     "-language:experimental.subCases",
     "-language:experimental.multiSpreads",
     // NOT capture-checked, unlike fume and flame. Those projects' sources are written for it;
