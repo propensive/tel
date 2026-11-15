@@ -233,15 +233,18 @@ word, and the writer replies with the richest composition the reader can read.
 
 ## Random-access form (RaTEL)
 
-Where BinTEL is read front to back, **RaTEL** (see [`spec/ratel.md`](spec/ratel.md)) is read in
-place: a file memory-mapped by several processes, in which looking up one record touches that
-record and nothing else. Every struct type gets a fixed-width row with one slot per member at a
-schema-determined offset, instances of a type form a contiguous table, variable-width values live in
-a string table and a variable region addressed by offset, and every keyed repeatable member — plus
-any member a schema declares an `index` on — has a sorted index searched with a single bytewise
-comparison per probe. A RaTEL file begins with the four bytes `B1 C4 B5 BB` (`ᾱτελ` in BASE-256),
-always carries its composed schema, and shares BinTEL's value hash as its identity, so the three
-encodings convert losslessly.
+Where BinTEL is read front to back, **RaTEL** (see [`spec/ratel.md`](spec/ratel.md)) is read and
+changed in place: a memory-mapped file in which looking up one record touches that record and
+nothing else, and in which records can be added, changed, reordered and removed without loading the
+document onto the heap. Every struct type gets a fixed-width row with one slot per member at a
+schema-determined offset, instances of a type form a table, variable-width values and growable
+child lists live in regions addressed by offset, and every keyed repeatable member — plus any member
+a schema declares an `index` on — has a B+tree index searched with one bytewise comparison per
+probe. Every structure is allocated with slack and grows by doubling, so insertion is cheap
+amortised; an explicit repack reclaims space. One owner changes a file at a time, and **seals** it to
+publish a compact, read-only copy for any number of readers. A RaTEL file begins with the four bytes
+`B1 C4 B5 BB` (`ᾱτελ` in BASE-256), always carries its composed schema, and shares BinTEL's value
+hash as its identity, so the three encodings convert losslessly.
 
 Schemas tune the layout with three annotations — `width` and `intern` on a scalar, `index` on a
 field — which are ordinary schema atoms (a layer can add them) but constrain no document. The
@@ -261,7 +264,7 @@ whitespace or punctuation, and decodes losslessly via a single modulo operation.
   taxonomy, machine operations, round-trip properties).
 - [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format, schema signatures, and acceptances.
 - [`spec/ratel.md`](spec/ratel.md) — RaTEL, the random-access encoding for memory-mapped files:
-  rows, tables, regions and sorted indexes.
+  rows, tables, regions, B+tree indexes, in-place changes and sealing.
 - [`spec/codecs.md`](spec/codecs.md) — the standard fixed-width, order-preserving codecs.
 - [`spec/telp.md`](spec/telp.md) — TELP, the path language for addressing elements of a document's
   semantic model by keyword and key value.
