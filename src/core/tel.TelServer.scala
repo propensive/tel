@@ -584,7 +584,7 @@ object TelServer:
       // A declared `encoding` (§21.7) and the `pattern` constraints (§21.8) are part of what the
       // scalar accepts — the codec's encoder and each pattern are further validity constraints —
       // so they belong in the label beside the validators.
-      case Tels.Scalar(validators, encoding, patterns) =>
+      case Tels.Scalar(validators, encoding, patterns, _, _) =>
         val base = if validators.length == 0 then t"scalar" else validators.to[List].join(t"+")
         val constrained =
           if patterns.length == 0 then base
@@ -706,7 +706,7 @@ object TelServer:
 
         selected.or(defined).or(builtin).or(record)
 
-      case Tels.Scalar(validators, encoding, patterns) =>
+      case Tels.Scalar(validators, encoding, patterns, _, _) =>
         scalarValueMarkup
           ( keyword, Unset, validators.to[List], default, Unset, encoding, patterns.to[List] )
 
@@ -731,8 +731,8 @@ object TelServer:
   // separating space; a flag or struct keyword stands alone.
   private def keywordInsertText(keyword: Text, fieldType: Tels.Type): Optional[Text] =
     fieldType match
-      case Tels.Reference(_) | Tels.Scalar(_, _, _) => t"$keyword "
-      case _                                     => Unset
+      case Tels.Reference(_) | _: Tels.Scalar => t"$keyword "
+      case _                                  => Unset
 
   private def keywordCompletions(struct: Tels.Struct, schema: Tels): List[Lsp.CompletionItem] =
     struct.members.to[List].flatMap:
@@ -1219,8 +1219,7 @@ object TelServer:
         def record: Optional[Tels.Type] = schema.records.seek(_.name == name).let: record =>
           Tels.Struct(record.members, record.validators)
 
-        def scalar: Optional[Tels.Type] = schema.scalars.seek(_.name == name).let: definition =>
-          Tels.Scalar(definition.validators, definition.encoding, definition.patterns)
+        def scalar: Optional[Tels.Type] = schema.scalars.seek(_.name == name).let(_.scalar)
 
         record.or(scalar)
 
@@ -1656,7 +1655,7 @@ object TelServer:
       if isVariant then Lsp.SymbolKind.EnumMember
       else memberType(struct, keyword, schema) match
         case Tels.Flag            => Lsp.SymbolKind.Boolean
-        case Tels.Scalar(_, _, _) => Lsp.SymbolKind.String
+        case _: Tels.Scalar       => Lsp.SymbolKind.String
         case Tels.Struct(_, _)    => Lsp.SymbolKind.Object
         case Tels.Reference(name) =>
           if schema.records.exists(_.name == name) then Lsp.SymbolKind.Object
