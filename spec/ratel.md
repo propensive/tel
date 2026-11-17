@@ -174,11 +174,12 @@ Directory constraints, each **↯/t.5.5** when violated: every `offset` is a mul
 `≥ 200`; every `capacity` is a multiple of 8; `length ≤ capacity`; `offset + capacity ≤ committed
 length` (computed without overflow). The schema, tables, indexes and digests sections have a fixed
 size, and their `length` MUST equal their `capacity`. The `length` of a region (strings, variable)
-is its allocation mark: a multiple of 4, beyond which the region holds no items. A section MAY have
+is its allocation mark: a multiple of 4, beyond which the region holds no items; a region length
+that is not a multiple of 4 is a misaligned entry, and likewise **↯/t.5.5**. A section MAY have
 `capacity = 0`; a zero-capacity extent does not overlap anything, whatever its offset.
 
 Non-empty extents — the six sections, the rows of every table (§5.5) and the pages of every
-index (§5.6) — MUST NOT overlap (**↯/t.5.6**). Bytes below the committed length that belong to no
+index (§5.6) — MUST NOT overlap one another, nor the header (**↯/t.5.6**). Bytes below the committed length that belong to no
 extent are garbage (in an unsealed file) or forbidden (in a sealed file, §5.8).
 
 ### 5.2 Schema Section
@@ -759,7 +760,7 @@ of `child₀` is `< sep₁`, and every entry in the subtree of `childᵢ` (`i �
 The tree as a whole satisfies:
 
 - the root is page `root`; every page reachable from it is reached exactly once; branches are at
-  depths `0 .. height − 1` and leaves at depth `height − 1` exactly;
+  depths `0 .. height − 2` and leaves at depth `height − 1` exactly;
 - following the leaves' links from the leftmost leaf visits every leaf once, in key order, and
   the last leaf's link is NONE;
 - within a page, cells are in strictly increasing order of their entries or separators;
@@ -875,8 +876,9 @@ exclude each other. Then:
 
 1. The owner refuses a file that is already dirty (it was not closed cleanly, and its contents
    are unspecified), and a sealed file unless it first **unseals** it — clearing flag bits 0, 1
-   and 2 and the value hash, and setting the digests section's length and capacity to `0` — which
-   it MUST NOT do to a file that other processes may have mapped. A publisher changes a published
+   and 2 and the value hash, setting the digests section's length and capacity to `0`, and adding
+   the capacity it had to the garbage count — which it MUST NOT do to a file that other processes
+   may have mapped. A publisher changes a published
    file by opening a copy.
 2. Before its first change, the owner sets the dirty bit and makes the header durable (for
    instance with `msync` of the header page).
@@ -967,9 +969,16 @@ changed, so an interruption leaves it intact. The procedure, with a **slack fact
    `cursor[R] .. cursor[R] + n` and advance the cursor *before* descending, so that siblings are
    contiguous whatever the children allocate, and append their child list. An empty repeatable
    member gets the empty ref. For each `RECORD(R)` slot and Struct-variant payload, allocate one
-   row. Then recurse into every allocated child row in slot order.
+   row. Then recurse into every allocated child row in slot order. What a slot refers to is
+   appended before the item that refers to it: for a ref array, the value item of each element,
+   in order, and then the array; for a select list, the value item or the row of each filling,
+   in order, and then the list.
 3. Build each index by computing its entries from the finished rows, sorting them, and bulk
-   loading them (§9.7).
+   loading them (§9.7), the indexes in index order. The pages of an index are numbered from `0`
+   in the order they are filled: its leaves from left to right, then each level of branches
+   over the level below, likewise, so that the root is the last page. An entry or separator
+   too long for its page (§9.4) is spilled as its page is filled, so the spilled items follow
+   every item of step 2 in the variable region, in the order of the cells that refer to them.
 4. Lay out the extents in this order: schema, strings, variable, the tables directory, the rows
    of each table in table order, the indexes directory, the pages of each index in index order,
    digests. Each begins at the next multiple of 8, and each growable extent, and each growable
@@ -1185,11 +1194,12 @@ is at `A + 136 + 1·24`, where `name`'s ref `0x2C` finds `beta` and the clear pr
 `info` is absent.
 
 **A history of changes (informative).** An owner might reach the same document like this, from a
-file created (§10.4) with an empty `entry` collection, whose root slot holds the empty ref:
+file created (§10.4) with the one entry it must have, `entry beta` — `entry` is required, so a
+document with none is invalid (TEL ↯/t.3.7), and is never held:
 
-1. `insert` `entry beta`: Entry row 0 is allocated with parent 0, link 0; `"beta"` is appended; a
-   child list of capacity 1 holding `[0]` is appended and the root's slot pointed at it; the
-   primary index gets its first page, a leaf, with the entry `host 0 | "beta" | child 0`.
+1. The file is created with `entry beta`: Entry row 0, with parent 0 and link 0; the item
+   `"beta"`; a child list of capacity 1 holding `[0]`, which the root's slot refers to; and a
+   primary index of one page, a leaf, with the entry `host 0 | "beta" | child 0`.
 2. `insert-before` beta, `entry alpha`: row 1; `"alpha"` appended; the full child list is copied
    to one of capacity 2 holding `[1, 0]`, and the old list (12 bytes) becomes garbage; the entry
    `host 0 | "alpha" | child 1` is inserted *before* beta's in the leaf, by key.
@@ -1215,8 +1225,8 @@ RaTEL's codes are the family **↯/t.5** of TEL's bolt codes (TEL §19.3), besid
 | ↯/t.5.2  | Unsupported version byte                                                                                                                                                                                                        | open                       |
 | ↯/t.5.3  | Reserved header byte or reserved flag bit non-zero                                                                                                                                                                              | open                       |
 | ↯/t.5.4  | File shorter than 200 bytes; committed length `< 200`, greater than the file, or not a multiple of 8                                                                                                                            | open                       |
-| ↯/t.5.5  | A section directory entry is misaligned, has `length > capacity`, has an offset `< 200`, extends beyond the committed length, or (for a fixed-size section) has `length ≠ capacity`                                            | open                       |
-| ↯/t.5.6  | Two non-empty extents overlap                                                                                                                                                                                                   | open                       |
+| ↯/t.5.5  | A section directory entry is misaligned, has `length > capacity` or a region `length` that is not a multiple of 4, has an offset `< 200`, extends beyond the committed length, or (for a fixed-size section) has `length ≠ capacity`                                            | open                       |
+| ↯/t.5.6  | Two non-empty extents overlap, or one overlaps the header                                                                                                                                                                                                   | open                       |
 | ↯/t.5.7  | A digest does not match; the digests section's length is not `64`, or it is not the last extent (flag bit 0 set); or flag bit 0 is clear and the digests section's capacity is not `0`                                          | open / verify              |
 | ↯/t.5.8  | Schema signature structurally invalid — the ↯/t.4.3 conditions                                                                                                                                                                  | open                       |
 | ↯/t.5.9  | Embedded schema body does not decode under `tels` — the ↯/t.4.12 condition                                                                                                                                                      | open                       |
