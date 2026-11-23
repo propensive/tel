@@ -1469,9 +1469,10 @@ indicate a malformed schema. Validation errors indicate that a document does not
 schema.
 
 A code is permanent: a number is never reused for another error, and an error which is withdrawn
-keeps its number, as reserved. The record of TEL's codes is `t.tel` in the
-[bolt](https://github.com/propensive/bolt) registry. An implementation which reports an error of
-its own on account of one of these MAY carry the code after its own, as in **↯/s.87.1/t.1.7**.
+keeps its number, as reserved. The record of TEL's codes is [`bolt.tel`](bolt.tel), beside
+this specification, which the index of [bolt](https://github.com/propensive/bolt) codes names.
+An implementation which reports an error of its own on account of one of these MAY carry the
+code after its own, as in **↯/s.87.1/t.1.7**.
 
 Each error is referenced by code at the point in the specification where its trigger condition is
 defined.
